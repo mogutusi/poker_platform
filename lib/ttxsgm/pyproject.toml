@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "ttxsgm"
+version = "0.1.0"
+description = ""
+authors = ["wzx9126@gmail.com"]
+
+packages = [{include = "ttxsgm"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11.11"
+numpy = ">=1.25.0"
+numba = ">=0.58.0"
