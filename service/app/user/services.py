@@ -30,3 +30,7 @@ async def user_change_password(user: UserChangePassword, db: DBsession):
     await db.commit()
     token = jwt.encode({"sub": str(db_user.id)}, settings.JWT_SECRET, algorithm="HS256")
     return token
+
+async def user_read(db: DBsession):
+    db_users = await db.exec(select(User).order_by(User.points.desc()))
+    return db_users.all()

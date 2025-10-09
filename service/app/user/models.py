@@ -26,4 +26,7 @@ class UserChangePasswordResponse(SQLModel):
 class UserRead(UserBase):
     points: int
 
+class UserReadPagination(SQLModel):
+    users: list[UserRead]
+    total: int
 
