@@ -2,8 +2,8 @@ from fastapi import APIRouter
 
 
 from app.database.core import DBsession
-from app.user.models import UserLogin, UserLoginResponse, UserChangePassword,  UserChangePasswordResponse, UserReadPagination
-from app.user.services import user_login, user_change_password, user_read
+from app.user.models import UserLogin, UserLoginResponse, UserChangePassword,  UserChangePasswordResponse, UserReadPagination, UserChangeNickname, UserChangeNicknameResponse 
+from app.user.services import user_login, user_change_password, user_read, user_change_nickname
 
 user_route = APIRouter(prefix="/user",tags=["user"])
 
@@ -21,3 +21,8 @@ async def change_password(user: UserChangePassword, db: DBsession) -> UserLoginR
 async def read(db: DBsession) -> UserReadPagination:
     users = await user_read(db)
     return UserReadPagination(users=users, total=len(users))
+
+@user_route.post("/change_nickname")
+async def change_nickname(user: UserChangeNickname, db: DBsession) -> UserChangeNicknameResponse:
+    nickname = await user_change_nickname(user, db)
+    return UserChangeNicknameResponse(nickname=nickname)

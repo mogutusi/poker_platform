@@ -5,7 +5,7 @@ from sqlmodel import select
 from ttxsgm import sm3_hash
 
 from app.database.core import DBsession
-from app.user.models import User, UserLogin, UserChangePassword
+from app.user.models import User, UserLogin, UserChangePassword, UserChangeNickname
 from app.config import settings
 
 
@@ -34,3 +34,13 @@ async def user_change_password(user: UserChangePassword, db: DBsession):
 async def user_read(db: DBsession):
     db_users = await db.exec(select(User).order_by(User.points.desc()))
     return db_users.all()
+
+async def user_change_nickname(user: UserChangeNickname, db: DBsession):
+    db_user = await db.exec(select(User).where(User.name == user.name))
+    db_user = db_user.first()
+    if not db_user:
+        raise HTTPException(status_code=401, detail="User not found")
+    db_user.nickname = user.nickname
+    await db.commit()
+    db.refresh(db_user)
+    return db_user.nickname
