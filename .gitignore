@@ -15,3 +15,5 @@ __pycache__/
 .venv/
 
 node_modules/
+
+original_password.txt

@@ -42,5 +42,5 @@ async def user_change_nickname(user: UserChangeNickname, db: DBsession):
         raise HTTPException(status_code=401, detail="User not found")
     db_user.nickname = user.nickname
     await db.commit()
-    db.refresh(db_user)
+    await db.refresh(db_user)
     return db_user.nickname
