@@ -40,6 +40,10 @@ async def user_change_nickname(user: UserChangeNickname, db: DBsession):
     db_user = db_user.first()
     if not db_user:
         raise HTTPException(status_code=401, detail="User not found")
+    nick_exist = await db.exec(select(User).where(User.nickname == user.nickname))
+    nick_exist = nick_exist.first()
+    if nick_exist:
+        raise HTTPException(status_code=401, detail="Nickname already exists")
     db_user.nickname = user.nickname
     await db.commit()
     await db.refresh(db_user)
