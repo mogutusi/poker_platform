@@ -8,8 +8,6 @@ load_dotenv(dotenv_path=env_path)
 
 class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL").strip()
-
-
-    
+    JWT_SECRET: str = os.getenv("JWT_SECRET").strip()
 
 settings = Settings()

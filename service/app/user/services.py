@@ -24,6 +24,8 @@ async def user_change_password(user: UserChangePassword, db: DBsession):
     db_user = db_user.first()
     if not db_user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not db_user.hash_password == sm3_hash(user.old_password):
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
     db_user.hash_password = sm3_hash(user.password)
     await db.commit()
     token = jwt.encode({"sub": str(db_user.id)}, settings.JWT_SECRET, algorithm="HS256")
