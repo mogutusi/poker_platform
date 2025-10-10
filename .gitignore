@@ -17,3 +17,4 @@ __pycache__/
 node_modules/
 
 original_password.txt
+test.py
