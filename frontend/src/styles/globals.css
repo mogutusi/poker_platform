@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
+  body {
+    @apply bg-poker-green text-white;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-poker-gold text-poker-black font-semibold py-2 px-4 rounded-lg hover:bg-yellow-400 transition-colors duration-200;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors duration-200;
+  }
+  
+  .card {
+    @apply bg-card-bg border border-card-border rounded-lg shadow-lg;
+  }
+  
+  .poker-card {
+    @apply w-16 h-24 bg-white border-2 border-gray-300 rounded-lg flex items-center justify-center text-black font-bold text-lg shadow-md;
+  }
+  
+  .chip {
+    @apply w-12 h-12 rounded-full border-2 border-white flex items-center justify-center text-white font-bold text-sm shadow-lg;
+  }
+}
