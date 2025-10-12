@@ -1,5 +1,6 @@
 from sqlmodel import Field, SQLModel
 from typing import Optional
+from pydantic import BaseModel
 
 class UserBase(SQLModel):
     name: str = Field(max_length=15,unique=True,nullable=False)
@@ -13,25 +14,25 @@ class User(UserBase, table=True):
 class UserLogin(UserBase):
     password: str
 
-class UserLoginResponse(SQLModel):
+class UserLoginResponse(BaseModel):
     token: str
 
 class UserChangePassword(UserBase):
     old_password: str
     password: str
 
-class UserChangePasswordResponse(SQLModel):
+class UserChangePasswordResponse(BaseModel):
     token: str
 
 class UserRead(UserBase):
     points: int
 
-class UserReadPagination(SQLModel):
+class UserReadPagination(BaseModel):
     users: list[UserRead]
     total: int
 
 class UserChangeNickname(UserBase):
     nickname: str
 
-class UserChangeNicknameResponse(SQLModel):
+class UserChangeNicknameResponse(BaseModel):
     nickname: str
