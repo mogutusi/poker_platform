@@ -1,7 +1,6 @@
 from typing import Optional, Dict, Any, AsyncGenerator
 from sqlmodel import select
 from datetime import datetime
-from sqlalchemy.orm import load_only
 
 from app.database.core import DBsession
 from app.pokertable.gamelogic import only_room_name, get_blind, deal_cards, do_action

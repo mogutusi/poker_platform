@@ -4,6 +4,7 @@ from fastapi import WebSocket
 from pydantic import BaseModel, Field, field_serializer
 
 from app.pokertable.enums import HandStatus, CardSuit, CardRank, UserStatus, PlayerStatus, RoomStatus, PlayerActionType
+from app.pokertable.gameconfig import gameconfig
 
 class Card(BaseModel):
     suit: CardSuit
@@ -35,24 +36,23 @@ class Hand(BaseModel):
     flop_cards: Optional[Tuple[Card, Card, Card]]
     turn_card: Optional[Card]
     river_card: Optional[Card]
-    
+
+
+class Seat(BaseModel):
+    nickname: str
+    points: int
+    reload_points: int = Field(default=0)
 
 class Room(BaseModel):
     # user_nickname -> users_in_room
     users_in_room: Dict[str, UserInRoom]
-    seats: List[Optional[Seat]] = Field(default=[])
+    seats: List[Optional[Seat]] = Field(default_factory=lambda: [None] * gameconfig.MAX_SEATS)
     hand: Optional[Hand] = Field(default=None)
     status: RoomStatus = Field(default=RoomStatus.PENDING_START)
     buy_in: int = Field(default=64,ge=32,le=128)
-    last_blind: List[str] = Field(default=[])
+    last_small_blind_position: int = Field(default=0)
     small_blind: int = Field(default=1,ge=1,le=3)
 
-class Seat(BaseModel):
-    nickname: str
-    user_status: UserStatus = Field(default=UserStatus.ONLINE)
-    points: int
-    hole_cards: Optional[Tuple[Card, Card]] = Field(default=None)
-    bet_amount: Optional[int] = Field(default=0,ge=0)
 
 class PlayerAction(BaseModel):
     user_nickname: str
