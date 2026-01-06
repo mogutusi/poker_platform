@@ -13,7 +13,6 @@ def print_tree(start_path='.', prefix=''):
             extension = '    ' if index == len(entries) - 1 else '│   '
             print_tree(path, prefix + extension)
 
-# 用法：指定项目根目录，或者默认当前目录
 if __name__ == '__main__':
 
-    print_tree(start_path='../')  # 或者替换为 'your/project/path'
+    print_tree(start_path='.')  

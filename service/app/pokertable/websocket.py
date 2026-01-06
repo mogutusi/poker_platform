@@ -1,100 +1,100 @@
-from fastapi import WebSocket
-from typing import Dict
-import json
-from sqlmodel import select
-from datetime import datetime
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import Dict, Optional
 
-from app.pokertable.models import Round, UserInRoom, Player, RoomRecord
-from app.pokertable.services import only_room_name, get_blind
-from app.pokertable.enum import RoundStatus, UserStatus
+
+from app.pokertable.models import UserInRoom, Player, Room, Hand, PlayerAction
+from app.pokertable.services import process_action, only_room_name
+from app.pokertable.enums import UserStatus, HandStatus, RoomStatus
 from app.user.models import User
 from app.database.core import DBsession
-from app.gamerecord.models import record_players, GameRecord
+from app.pokertable.wsm_schemas import parse_client_message, BroadcastTarget, PersonalTarget, serialize_server_message, UserOnlineMessage, UserOfflineMessage, RoomStateMessage
 
 class GameRoom:
     def __init__(self):
-        # room_name -> round
-        self.round_status: Dict[str, Round] = {}
-        # room_name -> user_nickname -> users_in_room
-        self.user_in_room: Dict[str, Dict[str, UserInRoom]] = {}
-        # room_name -> room_record
-        self.room_record: Dict[str, RoomRecord] = {}
+        # room_name -> room
+        self.rooms: Dict[str, Room] = {}
+        # room_name -> user_nickname -> websocket
+        self.connections: Dict[str, Dict[str, WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, user_name: str,room_name: str):
+    async def connect(self, websocket: WebSocket, user_nickname: str,room_name: str):
+        # validation
         only_room_name(room_name)
         await websocket.accept()
-        if room_name not in self.user_in_room:
-            self.user_in_room[room_name] = {}
-            self.room_record[room_name] = RoomRecord()
-            self.round_status[room_name] = Round(status=RoundStatus.PENDING_START, last_blind=[])
-        self.user_in_room[room_name][user_name] = UserInRoom(websocket=websocket)
+        if room_name not in self.rooms.keys():
+            self.rooms[room_name] = Room(
+                users_in_room={}, 
+            )
+            self.connections[room_name] = {}
+        # if user_nickname in self.rooms[room_name].users_in_room.keys():
+        #     if self.rooms[room_name].users_in_room[user_nickname].user_status != UserStatus.OFFLINE:
+        #         raise GameLogicError(message="User is already in the room")
+        #     if self.rooms[room_name].hand is not None:
+        #         for player in self.rooms[room_name].hand.players:
+        #             if player.nickname == user_nickname:
+        #                 self.rooms[room_name].users_in_room[user_nickname].user_status = UserStatus.WATCHING
+        #                 break
+        self.connections[room_name][user_nickname] = websocket
+        self.rooms[room_name].users_in_room[user_nickname] = UserInRoom()
+        message = UserOnlineMessage(nickname=user_nickname, user_status=UserStatus.ONLINE)
+        await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+        message = RoomStateMessage(room=self.rooms[room_name])
+        await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
 
-    async def disconnect(self, room_name: str, user_name: str,db: DBsession):
-        if room_name in self.user_in_room:
-            for nickname, user in self.user_in_room[room_name].items():
-                if nickname == user_name:
-                    if user.user_status == UserStatus.PLAYING:
-                        user.user_status = UserStatus.OFFLINE
-                    elif user.user_status == UserStatus.WATCHING:
-                        user.user_status = UserStatus.OFFLINE
-                    else:
-                        del self.user_in_room[room_name][nickname]
-                    break
-            if len(self.user_in_room[room_name]) == 0:
-                if self.room_record[room_name].game_start_time is not None:
-                    self.room_record[room_name].game_end_time = datetime.now()
-                game_record = GameRecord.model_validate(self.room_record[room_name])
-                db.add(game_record)
-                await db.commit()
-                users_db = db.exec(select(User).where(User.nickname.in_(list(self.room_record[room_name].players_set)))).all()
-                for user in users_db:
-                    for player in self.room_record[room_name].game_players:
-                        if player.nickname == user.nickname:
-                            user.points = player.final_points
-                            break
-                await db.commit()
-                del self.user_in_room[room_name]
-                del self.room_record[room_name]
+    async def disconnect(self, room_name: str, user_nickname: str,db: DBsession):
+        if room_name in self.room.keys():
+            if user_nickname in self.rooms[room_name].users_in_room.keys():
+                player = self.rooms[room_name].users_in_room[user_nickname]
+                if player.user_status == UserStatus.PLAYING or player.user_status == UserStatus.WATCHING:
+                    player.user_status = UserStatus.OFFLINE
+                    message = UserOfflineMessage(nickname=user_nickname)
+                    await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+                else:
+                    del self.rooms[room_name].users_in_room[user_nickname]
+                    del self.connections[room_name][user_nickname]
+                    message = UserOfflineMessage(nickname=user_nickname)
+                    await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
 
-    async def start_round(self, room_name: str,db: DBsession):
-        if not self.round_status[room_name].status == RoundStatus.PENDING_START:
-            raise ValueError("Invalid status change")
-        ready_players = []
-        for nickname, user in self.user_in_room[room_name].items():
-            if user.user_status == UserStatus.READY_TO_PLAY :
-                user.user_status = UserStatus.PLAYING
-                ready_players.append(nickname)
-            elif user.user_status == UserStatus.READY_TO_WATCH:
-                user.user_status = UserStatus.WATCHING
-        if len(ready_players) < 2:
-            raise ValueError("Not enough players to start the round")
-        if len(ready_players) > 9:
-            raise ValueError("Who is u????不是群友就滚!!!!")
-        players = []
-        result = await db.exec(select(User).where(User.nickname.in_(ready_players)))
-        for user in result:
-            players.append(Player(nickname=user.nickname, points=user.points))
-        if not len(self.round_status[room_name].last_blind) == 0:
-            players, last_blind = get_blind(players=players,last_blind=self.round_status[room_name].last_blind)
-        
-        self.round_status[room_name].status = RoundStatus.ROUND_STARTED
-        self.round_status[room_name].players = players
-        self.round_status[room_name].round_start_time = datetime.now()
-        self.round_status[room_name].last_blind = last_blind
-        if self.room_record[room_name].rounds_number == 0:
-            self.room_record[room_name].game_start_time = datetime.now()
-        self.room_record[room_name].rounds_number += 1
-        for player in players:
-            if player.nickname not in self.room_record[room_name].players_set:
-                self.room_record[room_name].players_set.add(player.nickname)
-                self.room_record[room_name].game_players.append(record_players(nickname=player.nickname, initial_points=player.points))
-        return
-        
+            if len(self.rooms[room_name].users_in_room) == 0:
+                # settle up
+                
+                del self.rooms[room_name]
+                del self.connections[room_name]
 
-    async def room_broadcast(self, message: dict, room_name: str):
-        if room_name in self.user_in_room:
-            for user in self.user_in_room[room_name].values():
-                await user.websocket.send_text(json.dumps(message))
+    async def room_broadcast(self, message: str, room_name: str):
+        # Args: 
+        # message: JSON string
+        if room_name in self.connections:
+            for user_nickname, websocket in self.connections[room_name].items():
+                await websocket.send_text(message)
 
-# room_name -> GameRoom
+    async def send_personal_message(self, message: str, user_nickname: str, room_name: str):
+        # Args: 
+        # message: JSON string
+        if room_name in self.connections and user_nickname in self.connections[room_name]:
+            await self.connections[room_name][user_nickname].send_text(message)
+
+
 game_room = GameRoom()
+
+
+async def handle_websocket(websocket: WebSocket, user_nickname: str, room_name: str, db: DBsession):
+    await game_room.connect(websocket=websocket, user_nickname=user_nickname, room_name=room_name)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            client_message = parse_client_message(data)
+            async for message in process_action(
+                room = game_room.rooms[room_name],
+                message = client_message, 
+                user_nickname=user_nickname, 
+                room_name=room_name, 
+                db=db
+            ):
+                match message:
+                    case BroadcastTarget(message=message):
+                        await game_room.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+                    case PersonalTarget(nickname=nickname, message=message):
+                        await game_room.send_personal_message(message=serialize_server_message(message), user_nickname=nickname, room_name=room_name)
+    except WebSocketDisconnect:
+        await game_room.disconnect(room_name=room_name, user_nickname=user_nickname)
