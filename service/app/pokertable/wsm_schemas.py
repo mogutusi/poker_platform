@@ -9,6 +9,19 @@ from app.pokertable.models import Card, Player, Hand, Room
 # client -> server （ClientMessage）
 # ============================================
 
+class SitdownMessage(BaseModel):
+    type: Literal["sit_down"] = "sit_down"
+    seat_number: int
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "sit_down",
+                "seat_number": 0
+            }
+        }
+    }
+
 class SetUserStatusMessage(BaseModel):
     type: Literal["set_user_status"] = "set_user_status"
     user_status: UserStatus
@@ -62,7 +75,6 @@ class StartHandMessage(BaseModel):
 
 
 class PlayerActionMessage(BaseModel):
-    """玩家操作"""
     type: Literal["player_action"] = "player_action"
     action: PlayerActionType
     bet_amount: Optional[int] = Field(default=None, ge=0)
@@ -106,6 +118,7 @@ class ChatMessage(BaseModel):
 # 客户端消息联合类型（使用 Discriminated Union）
 ClientMessage = Annotated[
     Union[
+        SitdownMessage,
         SetUserStatusMessage,
         SetSmallBlindMessage,
         SetBuyInMessage,
@@ -120,6 +133,24 @@ ClientMessage = Annotated[
 # ============================================
 # server -> client （ServerMessage）
 # ============================================
+
+class UserSitdownMessage(BaseModel):
+    type: Literal["user_sitdown"] = "user_sitdown"
+    seat_number: int
+    user_nickname: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "user_sitdown",
+                "seat_number": 0,
+                "user_nickname": "John",
+                "timestamp": "2025-12-07T12:00:00"
+            }
+        }
+    }
+
 
 class UserOnlineMessage(BaseModel):
     

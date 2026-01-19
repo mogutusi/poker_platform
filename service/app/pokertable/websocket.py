@@ -2,7 +2,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from typing import Dict, Optional
 
 
-from app.pokertable.models import UserInRoom, Player, Room, Hand, PlayerAction
+from app.pokertable.models import Player, Room, Hand, PlayerAction
 from app.pokertable.services import process_action, only_room_name
 from app.pokertable.enums import UserStatus, HandStatus, RoomStatus
 from app.user.models import User
@@ -34,8 +34,8 @@ class GameRoom:
         #                 self.rooms[room_name].users_in_room[user_nickname].user_status = UserStatus.WATCHING
         #                 break
         self.connections[room_name][user_nickname] = websocket
-        self.rooms[room_name].users_in_room[user_nickname] = UserInRoom()
-        message = UserOnlineMessage(nickname=user_nickname, user_status=UserStatus.ONLINE)
+        self.rooms[room_name].users_in_room[user_nickname] = UserStatus.READY_TO_WATCH
+        message = UserOnlineMessage(nickname=user_nickname, user_status=UserStatus.READY_TO_WATCH)
         await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
         message = RoomStateMessage(room=self.rooms[room_name])
         await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
@@ -96,5 +96,7 @@ async def handle_websocket(websocket: WebSocket, user_nickname: str, room_name: 
                         await game_room.room_broadcast(message=serialize_server_message(message), room_name=room_name)
                     case PersonalTarget(nickname=nickname, message=message):
                         await game_room.send_personal_message(message=serialize_server_message(message), user_nickname=nickname, room_name=room_name)
+    except GameLogicError as e:
+        await websocket.send_text(serialize_server_message(ErrorMessage(error_code="GAME_LOGIC_ERROR", message=str(e))))
     except WebSocketDisconnect:
         await game_room.disconnect(room_name=room_name, user_nickname=user_nickname)

@@ -5,14 +5,14 @@ from datetime import datetime
 from app.database.core import DBsession
 from app.pokertable.gamelogic import only_room_name, get_blind, deal_cards, do_action
 from app.pokertable.exceptions import GameLogicError
-from app.pokertable.models import Room, Hand, Player, PlayerAction
+from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat
 from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType
 from app.user.models import User
 from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
-    BroadcastTarget, PersonalTarget, ServerResponse
+    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage
 )
 
 def only_room_name(room_name: str):
@@ -22,10 +22,13 @@ def only_room_name(room_name: str):
 
 async def process_action(room: Room, message: ClientMessage, user_nickname: str, room_name: str, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     match message:
+        case SitdownMessage(seat_number=seat_number):
+            message = await sit_down(room=room, user_nickname=user_nickname, seat_number=seat_number, db=db)
+            yield message
         case StartHandMessage():
             async for message in start_hand(room=room, user_nickname=user_nickname, db=db):
                 yield message
-        case SetSmallBlindMessage(small_blind=blind) :
+        case SetSmallBlindMessage(small_blind=blind):
             message = await set_small_blind(room=room, user_nickname=user_nickname, small_blind=blind)
             yield message
         case SetBuyInMessage(buy_in = buy_in):
@@ -40,7 +43,20 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
         case _:
             raise GameLogicError(message="Invalid action")
 
-async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
+async def sit_down(room: Room, user_nickname: str, seat_number: int) -> ServerResponse:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can sit down")
+    if not room.status == RoomStatus.PENDING_START:
+        raise GameLogicError(message="Invalid status change")
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number] is not None:
+        raise GameLogicError(message="Seat already taken")
+    room.seats[seat_number] = Seat(nickname=user_nickname, points=0)
+    message = UserSitdownMessage(seat_number=seat_number, user_nickname=user_nickname)
+    return BroadcastTarget(message=message)
+
+async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     # Validation
     if room.hand is not None:
         raise GameLogicError(message="Hand already exists")
@@ -114,7 +130,7 @@ async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGener
     message = BettingRoundStartedMessage(hand_status=room.hand.status, acting_player=room.hand.players[room.hand.acting_player_position].nickname, pot=room.hand.pot, last_bet=room.hand.last_bet)
     yield BroadcastTarget(message=message)
         
-async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> Dict[str, Any]:
+async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> ServerResponse:
     if user_nickname not in room.users_in_room.keys():
         raise GameLogicError(message="Only players in the room can set small blind")
     if not room.status == RoomStatus.PENDING_START:
@@ -123,7 +139,7 @@ async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> D
     message = SmallBlindSetMessage(small_blind=room.small_blind, set_by=user_nickname)    
     return BroadcastTarget(message=message)
 
-async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> Dict[str, Any]:
+async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> ServerResponse:
     if user_nickname not in room.users_in_room.keys():
         raise GameLogicError(message="Only players in the room can set buy in")
     if not room.status == RoomStatus.PENDING_START:
@@ -132,7 +148,7 @@ async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> Dict[str, A
     message = BuyInSetMessage(buy_in=room.buy_in, set_by=user_nickname)
     return BroadcastTarget(message=message)
 
-async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus) -> Dict[str, Any]:
+async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus) -> ServerResponse:
     if user_nickname not in room.users_in_room.keys():
         raise GameLogicError(message="Only players in the room can set user status")
     if room.status != RoomStatus.PENDING_START:
@@ -143,5 +159,5 @@ async def set_user_status(room: Room, user_nickname: str, user_status: UserStatu
     message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname)
     return BroadcastTarget(message=message)
 
-async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
+async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     pass

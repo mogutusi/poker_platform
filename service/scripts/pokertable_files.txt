@@ -1,0 +1,898 @@
+enums.py:
+from enum import StrEnum, IntEnum
+from typing import Tuple, Optional, Set
+
+class RoomStatus(StrEnum):
+    PENDING_START = "pending_start"
+    HAND_STARTED = "hand_started"
+    HAND_ENDED = "hand_ended"
+
+class HandStatus(StrEnum):
+    READY_TO_START = "ready_to_start"
+    PRE_FLOP = "pre_flop"
+    FLOP = "flop"
+    TURN = "turn"
+    RIVER = "river"
+    SHOWDOWN = "showdown"
+    ENDING = "ending"
+
+    # _HAND_STATUS_SEQUENCE: Tuple["HandStatus"] = ( PRE_FLOP, FLOP, TURN, RIVER, SHOWDOWN)
+
+    @property
+    def next_status(self) -> Optional["HandStatus"]:
+        if self not in self._HAND_STATUS_SEQUENCE:
+            return None
+        if self == self._HAND_STATUS_SEQUENCE[-1]:
+            return HandStatus.ENDING
+        return self._HAND_STATUS_SEQUENCE[self._HAND_STATUS_SEQUENCE.index(self) + 1]
+
+class PlayerActionType(StrEnum):
+    FOLD = "fold"
+    BET = "bet"
+    CHECK = "check"
+
+class CardSuit(StrEnum):
+    HEARTS = "hearts"
+    DIAMONDS = "diamonds"
+    CLUBS = "clubs"
+    SPADES = "spades"
+
+class CardRank(IntEnum):
+    TWO = 2
+    THREE = 3
+    FOUR = 4
+    FIVE = 5
+    SIX = 6
+    SEVEN = 7
+    EIGHT = 8
+    NINE = 9
+    TEN = 10
+    JACK = 11
+    QUEEN = 12
+    KING = 13
+    ACE = 14
+
+class UserStatus(StrEnum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    READY_TO_PLAY = "ready_to_play"
+    PLAYING = "playing"
+    READY_TO_WATCH = "ready_to_watch"
+    WATCHING = "watching"
+
+    def can_change_to(self, new_status: "UserStatus") -> bool:
+        return (self, new_status) in USER_STATUS_TRANSITIONS
+    
+
+USER_STATUS_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
+    (UserStatus.ONLINE, UserStatus.OFFLINE),
+    (UserStatus.ONLINE, UserStatus.READY_TO_PLAY),
+    (UserStatus.ONLINE, UserStatus.READY_TO_WATCH),
+    (UserStatus.OFFLINE, UserStatus.ONLINE),
+    (UserStatus.READY_TO_PLAY, UserStatus.PLAYING),
+    (UserStatus.READY_TO_PLAY, UserStatus.READY_TO_WATCH),
+    (UserStatus.READY_TO_WATCH, UserStatus.WATCHING),
+    (UserStatus.READY_TO_WATCH, UserStatus.READY_TO_PLAY),
+    (UserStatus.PLAYING, UserStatus.READY_TO_PLAY),
+    (UserStatus.PLAYING, UserStatus.WATCHING),
+    (UserStatus.WATCHING, UserStatus.READY_TO_PLAY),
+    (UserStatus.WATCHING, UserStatus.PLAYING),
+}
+
+class PlayerStatus(StrEnum):
+    ACTIVE = "active"
+    FOLDED = "folded"
+    ALLIN = "allin"
+
+
+
+exceptions.py:
+class GameLogicError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+
+
+gameconfig.py:
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent / "poker.env"
+
+class GameConfig(BaseSettings):
+    MAX_SEATS: int
+    DEFAULT_SMALL_BLIND: int
+    MIN_SMALL_BLIND: int
+    MAX_SMALL_BLIND: int
+    MIN_BUY_IN: int
+    MAX_BUY_IN: int
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_PATH, 
+        env_file_encoding='utf-8',
+        case_sensitive=True,
+        extra='ignore' 
+    )
+
+gameconfig = GameConfig()
+
+gamelogic.py:
+from typing import List, Tuple, Optional
+import random
+
+from app.pokertable.models import Player, Card, Room, PlayerAction
+from app.pokertable.enums import CardSuit, CardRank, PlayerStatus, PlayerActionType, HandStatus
+from app.pokertable.exceptions import GameLogicError
+
+
+def get_blind(players: List[Player], last_blind: List[str]) -> Tuple[List[Player], List[str]]:
+    if len(last_blind) == 0:
+        return players, [player.nickname for player in players]
+    last_small_blind = last_blind[0]
+    temp_players = []
+    for player in players:
+        temp_players.append(player.nickname)
+    now_players = [x for x in last_blind if x in temp_players]
+    now_players.extend([x for x in temp_players if x not in last_blind])
+    if last_small_blind in now_players:
+        temp_player = now_players[0]
+        now_players = now_players[1:]
+        now_players.append(temp_player)
+    sorted_players = sorted(
+        players,
+        key=lambda p: now_players.index(p.nickname) if p.nickname in now_players else len(now_players)
+    )
+    return sorted_players, now_players
+
+
+def deal_cards(players: List[Player]) -> List[Card]:
+    cards = [Card(suit=suit, rank=rank) for suit in CardSuit for rank in CardRank]
+    rng = random.SystemRandom()
+    rng.shuffle(cards)
+    for player in players:
+        player.hole_cards = (cards.pop(),)
+    for player in players:
+        player.hole_cards = player.hole_cards + (cards.pop(),)
+    players[0].player_status = PlayerStatus.ACTIVE
+    return cards
+
+def get_next_player(players: List[Player], position: int, last_bet: Optional[int],handstatus: HandStatus,small_blind:int) -> Tuple[bool, int]:
+    next_position = (position + 1) % len(players)
+    while players[next_position].player_status != PlayerStatus.ACTIVE:
+        next_position = (next_position + 1) % len(players)
+    if last_bet is None:
+        first_player = -1
+        for player in players:
+            first_player+=1
+            if player.player_status == PlayerStatus.ACTIVE:
+                break
+        if first_player == next_position:
+            return True,first_player
+        return False,next_position
+    if players[next_position].bet_amount == last_bet:
+        if handstatus == HandStatus.PRE_FLOP and next_position==1:
+            if 2 * small_blind == last_bet:
+                return False,next_position
+        first_player = -1
+        for player in players:
+            first_player+=1
+            if player.player_status == PlayerStatus.ACTIVE:
+                break
+        return True,first_player
+    return False,next_position
+
+def end_hand(room: Room) -> bool:
+    active_players = 0
+    allin_players = 0
+    for player in room.hand.players:
+        if player.player_status == PlayerStatus.ACTIVE:
+            active_players += 1
+        if player.player_status == PlayerStatus.ALLIN:
+            allin_players += 1
+    if active_players == 1 and allin_players == 0:
+        return True
+    if active_players == 0:
+        return True
+    return False
+
+async def do_action(player_action: PlayerAction, room: Room):
+    message_list = []
+    position = room.hand.acting_player_position
+    if player_action.user_nickname != room.hand.players[position].nickname:
+        raise GameLogicError(message="Not your turn")
+    now_player = room.hand.players[position]
+    match player_action.action:
+        case PlayerActionType.FOLD:
+            room.hand.players[position].player_status = PlayerStatus.FOLDED
+            go_next,room.hand.acting_player_position = get_next_player(
+                players=room.hand.players, 
+                position=position, 
+                last_bet=room.hand.last_bet,
+                handstatus=room.hand.status,
+                small_blind=room.small_blind
+            )
+            message_list.append({"type": "player_action", "next_player": f"{room.hand.players[room.hand.acting_player_position].nickname}", "action": player_action})
+            if go_next:
+                room.hand.status = room.hand.status.next_status
+                message_list.append({"type": "hand_status_changed", "status": room.hand.status})
+                # Update hand status
+                room.hand.last_bet = None
+            return message_list
+        case PlayerActionType.BET:
+            if now_player.player_status != PlayerStatus.ACTIVE:
+                raise GameLogicError(message="Player is not active")
+            if player_action.bet_amount > now_player.points:
+                raise GameLogicError(message="Player has not enough points to cover bet")
+            if player_action.bet_amount < room.hand.last_bet:
+                raise GameLogicError(message="Bet amount is less than last bet")
+            now_player.points -= player_action.bet_amount
+            if now_player.points == 0:
+                now_player.player_status = PlayerStatus.ALLIN
+            room.hand.last_bet = player_action.bet_amount
+            now_player.bet_amount = player_action.bet_amount
+            room.hand.pot += now_player.bet_amount
+            go_next, room.hand.acting_player_position = get_next_player(
+                players=room.hand.players, 
+                position=position, 
+                last_bet=room.hand.last_bet,
+                handstatus=room.hand.status,
+                small_blind=room.small_blind
+            )
+            message_list.append({"type": "player_action", "next_player": f"{room.hand.players[room.hand.acting_player_position].nickname}", "action": player_action})
+            if go_next:
+                room.hand.status = room.hand.status.next_status
+                message_list.append({"type": "hand_status_changed", "status": room.hand.status})
+                room.hand.last_bet = None
+            return message_list
+        case PlayerActionType.CHECK:
+            pass
+            
+
+models.py:
+from typing import List, Tuple, Optional, Dict
+from datetime import datetime
+from fastapi import WebSocket
+from pydantic import BaseModel, Field, field_serializer
+
+from app.pokertable.enums import HandStatus, CardSuit, CardRank, PlayerStatus, RoomStatus, PlayerActionType, UserStatus
+from app.pokertable.gameconfig import gameconfig
+
+class Card(BaseModel):
+    suit: CardSuit
+    rank: CardRank
+    
+class Player(BaseModel):
+    nickname: str
+    player_status: PlayerStatus = Field(default=PlayerStatus.ACTIVE)
+    points: int
+    hole_cards: Optional[Tuple[Card, Card]] = Field(default=None)
+    bet_amount: Optional[int] = Field(default=0,ge=0)
+    seat_position: int
+
+    @field_serializer("hole_cards", when_used="json")
+    def hide_hole_cards(self, value):
+        return None
+
+class Hand(BaseModel):
+    status: HandStatus
+    # By default, the first position is the small blind bet and the second position is the large blind bet
+    players: Optional[List[Player]]
+    acting_player_position: Optional[int] = Field(default=None)
+    last_bet: Optional[int] = Field(default=None)
+    deck: Optional[List[Card]]
+    pot: int = Field(default=0,ge=0)
+    start_time: Optional[datetime]
+    flop_cards: Optional[Tuple[Card, Card, Card]]
+    turn_card: Optional[Card]
+    river_card: Optional[Card]
+
+
+class Seat(BaseModel):
+    nickname: str
+    points: int
+    reload_points: int = Field(default=0)
+
+
+class Room(BaseModel):
+    # user_nickname -> user_status
+    users_in_room: Dict[str, UserStatus]
+    seats: List[Optional[Seat]] = Field(default_factory=lambda: [None] * gameconfig.MAX_SEATS)
+    hand: Optional[Hand] = Field(default=None)
+    status: RoomStatus = Field(default=RoomStatus.PENDING_START)
+    buy_in: int = Field(
+        default=gameconfig.MIN_BUY_IN,
+        ge=gameconfig.MIN_BUY_IN,
+        le=gameconfig.MAX_BUY_IN
+    )
+    last_small_blind_position: int = Field(default=0)
+    small_blind: int = Field(
+        default=gameconfig.DEFAULT_SMALL_BLIND,
+        ge=gameconfig.MIN_SMALL_BLIND,
+        le=gameconfig.MAX_SMALL_BLIND
+    )
+
+
+class PlayerAction(BaseModel):
+    user_nickname: str
+    action: PlayerActionType
+    bet_amount: Optional[int] = Field(default=None,ge=0)  # total bet amount
+
+class UserAction(BaseModel):
+    user_nickname: str
+    action: PlayerAction
+
+
+routes.py:
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.database.core import DBsession
+from app.pokertable.websocket import handle_websocket
+
+pokertable_route = APIRouter(prefix="/pokertable",tags=["pokertable"])
+
+@pokertable_route.websocket("/room")
+async def websocket_endpoint(websocket: WebSocket, room_id: str, user_nickname: str, db: DBsession):
+    await handle_websocket(websocket=websocket, user_nickname=user_nickname, room_name=room_id, db=db)
+    
+
+services.py:
+from typing import Optional, Dict, Any, AsyncGenerator
+from sqlmodel import select
+from datetime import datetime
+
+from app.database.core import DBsession
+from app.pokertable.gamelogic import only_room_name, get_blind, deal_cards, do_action
+from app.pokertable.exceptions import GameLogicError
+from app.pokertable.models import Room, Hand, Player, PlayerAction
+from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType
+from app.user.models import User
+from app.pokertable.wsm_schemas import (
+    ClientMessage, ServerMessage,
+    StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
+    HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
+    BroadcastTarget, PersonalTarget, ServerResponse
+)
+
+def only_room_name(room_name: str):
+    if room_name != "room1":
+        raise ValueError("Invalid room name")
+
+
+async def process_action(room: Room, message: ClientMessage, user_nickname: str, room_name: str, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
+    match message:
+        case StartHandMessage():
+            async for message in start_hand(room=room, user_nickname=user_nickname, db=db):
+                yield message
+        case SetSmallBlindMessage(small_blind=blind) :
+            message = await set_small_blind(room=room, user_nickname=user_nickname, small_blind=blind)
+            yield message
+        case SetBuyInMessage(buy_in = buy_in):
+            message = await set_buy_in(room=room, user_nickname=user_nickname, buy_in=buy_in)
+            yield message
+        case SetUserStatusMessage(user_status=status):
+            message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status)
+            yield message
+        case PlayerActionMessage():
+            async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
+                yield message
+        case _:
+            raise GameLogicError(message="Invalid action")
+
+async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
+    # Validation
+    if room.hand is not None:
+        raise GameLogicError(message="Hand already exists")
+    if user_nickname not in room.users_in_room.keys() or room.users_in_room[user_nickname].user_status != UserStatus.READY_TO_PLAY:
+        raise GameLogicError(message="Only players in the room can start the hand")
+    if not room.status == RoomStatus.PENDING_START:
+            raise GameLogicError(message="Invalid status change")
+    ready_players_nicknames = []
+    # lock!!!
+    # async with lock:
+    for nickname, user in room.users_in_room.items():
+        if user.user_status == UserStatus.READY_TO_PLAY :
+            ready_players_nicknames.append(nickname)
+        if user.user_status != UserStatus.READY_TO_WATCH:
+            raise GameLogicError(message="Some players are not ready")
+    if len(ready_players_nicknames) < 2:
+        raise GameLogicError(message="Not enough players to start the round")
+    if len(ready_players_nicknames) > 9:
+        raise GameLogicError(message="Who is u????不是群友就滚!!!!")
+    statement = (
+        select(User)
+        .where(User.nickname.in_(ready_players_nicknames))
+        .with_for_update()
+    )
+    result = await db.exec(statement)
+    users_db = result.all()
+    if len(users_db) != len(ready_players_nicknames):
+        raise GameLogicError(message="Some players are not found")
+    user_db_map = {u.nickname: u for u in users_db}
+    players = []
+    
+    for nickname in ready_players_nicknames:
+        if user_db_map[nickname].points < room.buy_in:
+            raise GameLogicError(message="Player has not enough points to cover buy in")
+        user_db_map[nickname].points -= room.buy_in
+        players.append(Player(nickname=nickname, points=room.buy_in))
+    # Get blind
+    players, last_blind = get_blind(players=players,last_blind=room.last_blind)
+    # Update room status
+    room.status = RoomStatus.HAND_STARTED
+    for nickname, user in room.users_in_room.items():
+        if nickname in last_blind:
+            user.user_status = UserStatus.PLAYING
+        elif user.user_status == UserStatus.READY_TO_WATCH:
+            user.user_status = UserStatus.WATCHING
+    room.hand = Hand(
+        status=HandStatus.READY_TO_START,
+        players=players,
+        start_time=datetime.now(),
+        last_bet=2 * room.small_blind,
+    )
+    # Update DB
+    await db.commit()
+    message = RoomStatusChangedMessage(room_status=room.status, changed_by=user_nickname)
+    yield BroadcastTarget(message=message)
+    # hand started
+    room.hand.status = HandStatus.PRE_FLOP
+    room.hand.acting_player_position = 2 % len(room.hand.players)
+    room.hand.players[0].points -= room.small_blind
+    room.hand.players[0].bet_amount = room.small_blind
+    room.hand.players[1].points -= 2 * room.small_blind
+    room.hand.players[1].bet_amount = 2 * room.small_blind
+    room.hand.pot = 3 * room.small_blind
+    room.hand.last_bet = 2 * room.small_blind
+    message = HandStartedMessage(hand=room.hand)
+    yield BroadcastTarget(message=message)
+    deal_cards(room=room)
+    for player in room.hand.players:
+        message = HoleCardsMessage(cards=player.hole_cards)
+        yield PersonalTarget(nickname=player.nickname, message=message)
+    message = BettingRoundStartedMessage(hand_status=room.hand.status, acting_player=room.hand.players[room.hand.acting_player_position].nickname, pot=room.hand.pot, last_bet=room.hand.last_bet)
+    yield BroadcastTarget(message=message)
+        
+async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> Dict[str, Any]:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can set small blind")
+    if not room.status == RoomStatus.PENDING_START:
+        raise GameLogicError(message="Invalid status change")
+    room.small_blind = small_blind
+    message = SmallBlindSetMessage(small_blind=room.small_blind, set_by=user_nickname)    
+    return BroadcastTarget(message=message)
+
+async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> Dict[str, Any]:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can set buy in")
+    if not room.status == RoomStatus.PENDING_START:
+        raise GameLogicError(message="Invalid status change")
+    room.buy_in = buy_in
+    message = BuyInSetMessage(buy_in=room.buy_in, set_by=user_nickname)
+    return BroadcastTarget(message=message)
+
+async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus) -> Dict[str, Any]:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can set user status")
+    if room.status != RoomStatus.PENDING_START:
+        raise GameLogicError(message="Only pending start status can set user status")
+    if not room.users_in_room[user_nickname].user_status.can_change_to(user_status):
+        raise GameLogicError(message="Invalid status transition")
+    room.users_in_room[user_nickname].user_status = user_status
+    message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname)
+    return BroadcastTarget(message=message)
+
+async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
+    pass
+
+websocket.py:
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import Dict, Optional
+
+
+from app.pokertable.models import Player, Room, Hand, PlayerAction
+from app.pokertable.services import process_action, only_room_name
+from app.pokertable.enums import UserStatus, HandStatus, RoomStatus
+from app.user.models import User
+from app.database.core import DBsession
+from app.pokertable.wsm_schemas import parse_client_message, BroadcastTarget, PersonalTarget, serialize_server_message, UserOnlineMessage, UserOfflineMessage, RoomStateMessage
+
+class GameRoom:
+    def __init__(self):
+        # room_name -> room
+        self.rooms: Dict[str, Room] = {}
+        # room_name -> user_nickname -> websocket
+        self.connections: Dict[str, Dict[str, WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, user_nickname: str,room_name: str):
+        # validation
+        only_room_name(room_name)
+        await websocket.accept()
+        if room_name not in self.rooms.keys():
+            self.rooms[room_name] = Room(
+                users_in_room={}, 
+            )
+            self.connections[room_name] = {}
+        # if user_nickname in self.rooms[room_name].users_in_room.keys():
+        #     if self.rooms[room_name].users_in_room[user_nickname].user_status != UserStatus.OFFLINE:
+        #         raise GameLogicError(message="User is already in the room")
+        #     if self.rooms[room_name].hand is not None:
+        #         for player in self.rooms[room_name].hand.players:
+        #             if player.nickname == user_nickname:
+        #                 self.rooms[room_name].users_in_room[user_nickname].user_status = UserStatus.WATCHING
+        #                 break
+        self.connections[room_name][user_nickname] = websocket
+        self.rooms[room_name].users_in_room[user_nickname] = UserStatus.READY_TO_WATCH
+        message = UserOnlineMessage(nickname=user_nickname, user_status=UserStatus.READY_TO_WATCH)
+        await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+        message = RoomStateMessage(room=self.rooms[room_name])
+        await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+
+    async def disconnect(self, room_name: str, user_nickname: str,db: DBsession):
+        if room_name in self.room.keys():
+            if user_nickname in self.rooms[room_name].users_in_room.keys():
+                player = self.rooms[room_name].users_in_room[user_nickname]
+                if player.user_status == UserStatus.PLAYING or player.user_status == UserStatus.WATCHING:
+                    player.user_status = UserStatus.OFFLINE
+                    message = UserOfflineMessage(nickname=user_nickname)
+                    await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+                else:
+                    del self.rooms[room_name].users_in_room[user_nickname]
+                    del self.connections[room_name][user_nickname]
+                    message = UserOfflineMessage(nickname=user_nickname)
+                    await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+
+            if len(self.rooms[room_name].users_in_room) == 0:
+                # settle up
+                
+                del self.rooms[room_name]
+                del self.connections[room_name]
+
+    async def room_broadcast(self, message: str, room_name: str):
+        # Args: 
+        # message: JSON string
+        if room_name in self.connections:
+            for user_nickname, websocket in self.connections[room_name].items():
+                await websocket.send_text(message)
+
+    async def send_personal_message(self, message: str, user_nickname: str, room_name: str):
+        # Args: 
+        # message: JSON string
+        if room_name in self.connections and user_nickname in self.connections[room_name]:
+            await self.connections[room_name][user_nickname].send_text(message)
+
+
+game_room = GameRoom()
+
+
+async def handle_websocket(websocket: WebSocket, user_nickname: str, room_name: str, db: DBsession):
+    await game_room.connect(websocket=websocket, user_nickname=user_nickname, room_name=room_name)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            client_message = parse_client_message(data)
+            async for message in process_action(
+                room = game_room.rooms[room_name],
+                message = client_message, 
+                user_nickname=user_nickname, 
+                room_name=room_name, 
+                db=db
+            ):
+                match message:
+                    case BroadcastTarget(message=message):
+                        await game_room.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+                    case PersonalTarget(nickname=nickname, message=message):
+                        await game_room.send_personal_message(message=serialize_server_message(message), user_nickname=nickname, room_name=room_name)
+    except WebSocketDisconnect:
+        await game_room.disconnect(room_name=room_name, user_nickname=user_nickname)
+
+wsm_schemas.py:
+from typing import Literal, Union, Optional, List, Annotated
+from pydantic import BaseModel, Field, Discriminator
+from datetime import datetime
+
+from app.pokertable.enums import UserStatus, HandStatus, RoomStatus, PlayerActionType, PlayerStatus
+from app.pokertable.models import Card, Player, Hand, Room
+
+# ============================================
+# client -> server （ClientMessage）
+# ============================================
+
+class SitdownMessage(BaseModel):
+    type: Literal["sit_down"] = "sit_down"
+    seat_number: int
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "sit_down",
+                "seat_number": 0
+            }
+        }
+    }
+
+class SetUserStatusMessage(BaseModel):
+    type: Literal["set_user_status"] = "set_user_status"
+    user_status: UserStatus
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "set_user_status",
+                "user_status": "ready_to_play"
+            }
+        }
+    }
+
+class SetSmallBlindMessage(BaseModel):
+    type: Literal["set_small_blind"] = "set_small_blind"
+    small_blind: int = Field(ge=1, le=10)
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "set_small_blind",
+                "small_blind": 1
+            }
+        }
+    }
+
+class SetBuyInMessage(BaseModel):
+    type: Literal["set_buy_in"] = "set_buy_in"
+    buy_in: int = Field(ge=32, le=128)
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "set_buy_in",
+                "buy_in": 64
+            }
+        }
+    }
+
+
+class StartHandMessage(BaseModel):
+    type: Literal["start_hand"] = "start_hand"
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "start_hand"
+            }
+        }
+    }
+
+
+class PlayerActionMessage(BaseModel):
+    type: Literal["player_action"] = "player_action"
+    action: PlayerActionType
+    bet_amount: Optional[int] = Field(default=None, ge=0)
+    
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "type": "player_action",
+                    "action": "fold"
+                },
+                {
+                    "type": "player_action",
+                    "action": "bet",
+                    "bet_amount": 10
+                },
+                {
+                    "type": "player_action",
+                    "action": "check"
+                }
+            ]
+        }
+    }
+
+
+class ChatMessage(BaseModel):
+    """聊天消息"""
+    type: Literal["chat"] = "chat"
+    message: str = Field(max_length=500)
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "chat",
+                "message": "Good game!"
+            }
+        }
+    }
+
+
+# 客户端消息联合类型（使用 Discriminated Union）
+ClientMessage = Annotated[
+    Union[
+        SetUserStatusMessage,
+        SetSmallBlindMessage,
+        SetBuyInMessage,
+        StartHandMessage,
+        PlayerActionMessage,
+        ChatMessage,
+    ],
+    Field(discriminator="type")
+]
+
+
+# ============================================
+# server -> client （ServerMessage）
+# ============================================
+
+class UserOnlineMessage(BaseModel):
+    
+    type: Literal["user_online"] = "user_online"
+    nickname: str
+    user_status: UserStatus
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class UserOfflineMessage(BaseModel):
+    type: Literal["user_offline"] = "user_offline"
+    nickname: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class SmallBlindSetMessage(BaseModel):
+    type: Literal["small_blind_set"] = "small_blind_set"
+    set_by: str
+    small_blind: int
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class BuyInSetMessage(BaseModel):
+    type: Literal["buy_in_set"] = "buy_in_set"
+    buy_in: int
+    set_by: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class RoomStateMessage(BaseModel):
+    type: Literal["room_state"] = "room_state"
+    room: Room
+
+class UserStatusChangedMessage(BaseModel):
+    type: Literal["user_status_changed"] = "user_status_changed"
+    user_status: UserStatus
+    user_nickname: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class RoomStatusChangedMessage(BaseModel):
+    type: Literal["room_status_changed"] = "room_status_changed"
+    room_status: RoomStatus
+    changed_by: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class HandStartedMessage(BaseModel):
+    type: Literal["hand_started"] = "hand_started"
+    hand : Hand
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class HoleCardsMessage(BaseModel):
+    type: Literal["hole_cards"] = "hole_cards"
+    cards: tuple[Card, Card]
+
+
+class BettingRoundStartedMessage(BaseModel):
+    type: Literal["betting_round_started"] = "betting_round_started"
+    hand_status: HandStatus
+    acting_player: str
+    pot: int
+    last_bet: Optional[int]
+
+
+class PlayerActionBroadcast(BaseModel):
+    """玩家操作广播"""
+    type: Literal["player_action_broadcast"] = "player_action_broadcast"
+    player: str
+    action: PlayerActionType
+    bet_amount: Optional[int]
+    pot: int
+    next_player: Optional[str]
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class HandStageChangedMessage(BaseModel):
+    """手牌阶段变化（发公共牌）"""
+    type: Literal["hand_stage_changed"] = "hand_stage_changed"
+    hand_status: HandStatus
+    community_cards: List[Card]
+    pot: int
+    next_player: str
+
+
+class HandEndedMessage(BaseModel):
+    """手牌结束"""
+    type: Literal["hand_ended"] = "hand_ended"
+    winners: List[str]
+    pot_distribution: dict[str, int]
+    final_board: List[Card]
+    showdown_hands: Optional[dict[str, tuple[Card, Card]]]  
+
+
+class ChatBroadcast(BaseModel):
+    type: Literal["chat_broadcast"] = "chat_broadcast"
+    sender: str
+    message: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class ErrorMessage(BaseModel):
+    type: Literal["error"] = "error"
+    error_code: str
+    message: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "error",
+                "error_code": "NOT_YOUR_TURN",
+                "message": "现在不是你的回合",
+                "timestamp": "2025-12-07T12:00:00"
+            }
+        }
+    }
+
+
+# 服务器消息联合类型
+ServerMessage = Annotated[
+    Union[
+        UserOnlineMessage,
+        UserOfflineMessage,
+        SmallBlindSetMessage,
+        BuyInSetMessage,
+        RoomStateMessage,
+        RoomStatusChangedMessage,
+        HandStartedMessage,
+        HoleCardsMessage,
+        BettingRoundStartedMessage,
+        PlayerActionBroadcast,
+        HandStageChangedMessage,
+        HandEndedMessage,
+        ChatBroadcast,
+        ErrorMessage,
+    ],
+    Field(discriminator="type")
+]
+
+
+def parse_client_message(data: str) -> ClientMessage:
+    """
+    Args:
+        data: JSON 
+    Returns:
+        Pydantic Object
+
+    """
+    import json
+    from pydantic import TypeAdapter
+    
+    data_dict = json.loads(data)
+    adapter = TypeAdapter(ClientMessage)
+    return adapter.validate_python(data_dict)
+
+
+def serialize_server_message(message: ServerMessage) -> str:
+    """
+    Returns:
+        JSON 
+    """
+    return message.model_dump_json()
+
+from dataclasses import dataclass
+
+@dataclass
+class BroadcastTarget:
+    message: ServerMessage
+
+@dataclass
+class PersonalTarget:
+    nickname: str
+    message: ServerMessage
+
+ServerResponse = Union[BroadcastTarget, PersonalTarget]
+

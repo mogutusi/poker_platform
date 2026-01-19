@@ -1,18 +1,21 @@
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
-import os
 
-env_path = Path(__file__).resolve().parent.parent/".env"
-load_dotenv(dotenv_path=env_path)
-    
+ENV_PATH = Path(__file__).resolve().parent / "poker.env"
+
 class GameConfig(BaseSettings):
-    MAX_SEATS: int = int(os.getenv("MAX_SEATS").strip())
-    SMALL_BLIND: int = int(os.getenv("SMALL_BLIND").strip())
-    BIG_BLIND: int = int(os.getenv("BIG_BLIND").strip())
-    ANTE: int = int(os.getenv("ANTE").strip())
-    BLIND_INTERVAL: int = int(os.getenv("BLIND_INTERVAL").strip())
-    BLIND_INTERVAL_TYPE: str = os.getenv("BLIND_INTERVAL_TYPE").strip()
-    BLIND_INTERVAL_VALUE: int = int(os.getenv("BLIND_INTERVAL_VALUE").strip())
+    MAX_SEATS: int
+    DEFAULT_SMALL_BLIND: int
+    MIN_SMALL_BLIND: int
+    MAX_SMALL_BLIND: int
+    MIN_BUY_IN: int
+    MAX_BUY_IN: int
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_PATH, 
+        env_file_encoding='utf-8',
+        case_sensitive=True,
+        extra='ignore' 
+    )
 
 gameconfig = GameConfig()

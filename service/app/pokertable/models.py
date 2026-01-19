@@ -3,15 +3,12 @@ from datetime import datetime
 from fastapi import WebSocket
 from pydantic import BaseModel, Field, field_serializer
 
-from app.pokertable.enums import HandStatus, CardSuit, CardRank, UserStatus, PlayerStatus, RoomStatus, PlayerActionType
+from app.pokertable.enums import HandStatus, CardSuit, CardRank, PlayerStatus, RoomStatus, PlayerActionType, UserStatus
 from app.pokertable.gameconfig import gameconfig
 
 class Card(BaseModel):
     suit: CardSuit
     rank: CardRank
-
-class UserInRoom(BaseModel):
-    user_status: UserStatus = Field(default=UserStatus.ONLINE)
     
 class Player(BaseModel):
     nickname: str
@@ -19,6 +16,7 @@ class Player(BaseModel):
     points: int
     hole_cards: Optional[Tuple[Card, Card]] = Field(default=None)
     bet_amount: Optional[int] = Field(default=0,ge=0)
+    seat_position: int
 
     @field_serializer("hole_cards", when_used="json")
     def hide_hole_cards(self, value):
@@ -41,17 +39,26 @@ class Hand(BaseModel):
 class Seat(BaseModel):
     nickname: str
     points: int
-    reload_points: int = Field(default=0)
+    # reload_points: int = Field(default=0)
+
 
 class Room(BaseModel):
-    # user_nickname -> users_in_room
-    users_in_room: Dict[str, UserInRoom]
+    # user_nickname -> user_status
+    users_in_room: Dict[str, UserStatus]
     seats: List[Optional[Seat]] = Field(default_factory=lambda: [None] * gameconfig.MAX_SEATS)
     hand: Optional[Hand] = Field(default=None)
     status: RoomStatus = Field(default=RoomStatus.PENDING_START)
-    buy_in: int = Field(default=64,ge=32,le=128)
+    buy_in: int = Field(
+        default=gameconfig.MIN_BUY_IN,
+        ge=gameconfig.MIN_BUY_IN,
+        le=gameconfig.MAX_BUY_IN
+    )
     last_small_blind_position: int = Field(default=0)
-    small_blind: int = Field(default=1,ge=1,le=3)
+    small_blind: int = Field(
+        default=gameconfig.DEFAULT_SMALL_BLIND,
+        ge=gameconfig.MIN_SMALL_BLIND,
+        le=gameconfig.MAX_SMALL_BLIND
+    )
 
 
 class PlayerAction(BaseModel):
