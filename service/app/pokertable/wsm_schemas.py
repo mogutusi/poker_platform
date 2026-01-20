@@ -40,7 +40,7 @@ class SetUserStatusMessage(BaseModel):
     type: Literal["set_user_status"] = "set_user_status"
     user_status: UserStatus
     seat_number: int
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -79,7 +79,8 @@ class SetBuyInMessage(BaseModel):
 
 class StartHandMessage(BaseModel):
     type: Literal["start_hand"] = "start_hand"
-    
+    seat_number: int
+
     model_config = {
         "json_schema_extra": {
             "example": {

@@ -53,31 +53,64 @@ class CardRank(IntEnum):
     ACE = 14
 
 class UserStatus(StrEnum):
-    ONLINE = "online"
-    OFFLINE = "offline"
-    READY_TO_PLAY = "ready_to_play"
-    PLAYING = "playing"
-    READY_TO_WATCH = "ready_to_watch"
     WATCHING = "watching"
+    OFFLINE = "offline"
+    SITTING_IN = "sitting_in"
+    READY_TO_PLAY = "ready_to_play"
+    SITTING_OUT = "sitting_out"
+    PLAYING = "playing"
+    
+    def userself_can_change_to(self, new_status: "UserStatus") -> bool:
+        return (self, new_status) in USER_STATUS_SELF_TRANSITIONS
 
     def can_change_to(self, new_status: "UserStatus") -> bool:
         return (self, new_status) in USER_STATUS_TRANSITIONS
     
 
 USER_STATUS_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
-    (UserStatus.ONLINE, UserStatus.OFFLINE),
-    (UserStatus.ONLINE, UserStatus.READY_TO_PLAY),
-    (UserStatus.ONLINE, UserStatus.READY_TO_WATCH),
-    (UserStatus.OFFLINE, UserStatus.ONLINE),
+    # disconnect/reconnect
+    (UserStatus.WATCHING, UserStatus.OFFLINE),
+    (UserStatus.READY_TO_PLAY, UserStatus.OFFLINE),
+    (UserStatus.PLAYING, UserStatus.OFFLINE),
+    (UserStatus.SITTING_OUT, UserStatus.OFFLINE),
+    (UserStatus.OFFLINE, UserStatus.WATCHING),   
+    (UserStatus.OFFLINE, UserStatus.READY_TO_PLAY), 
+    (UserStatus.OFFLINE, UserStatus.PLAYING),       
+    (UserStatus.OFFLINE, UserStatus.SITTING_OUT),
+
+    # sit down
+    (UserStatus.WATCHING, UserStatus.SITTING_IN),
+    
+    # stand up
+    (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
+    (UserStatus.SITTING_OUT, UserStatus.WATCHING),
+    (UserStatus.SITTING_IN, UserStatus.WATCHING),
+
+    # stay in the table
+    (UserStatus.SITTING_IN, UserStatus.READY_TO_PLAY),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_IN, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_OUT, UserStatus.SITTING_IN),
+
+    # game flow
     (UserStatus.READY_TO_PLAY, UserStatus.PLAYING),
-    (UserStatus.READY_TO_PLAY, UserStatus.READY_TO_WATCH),
-    (UserStatus.READY_TO_WATCH, UserStatus.WATCHING),
-    (UserStatus.READY_TO_WATCH, UserStatus.READY_TO_PLAY),
-    (UserStatus.PLAYING, UserStatus.READY_TO_PLAY),
-    (UserStatus.PLAYING, UserStatus.WATCHING),
-    (UserStatus.WATCHING, UserStatus.READY_TO_PLAY),
-    (UserStatus.WATCHING, UserStatus.PLAYING),
+    (UserStatus.PLAYING, UserStatus.SITTING_IN),
+    (UserStatus.PLAYING, UserStatus.SITTING_OUT), 
 }
+
+USER_STATUS_SELF_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
+    (UserStatus.SITTING_IN, UserStatus.READY_TO_PLAY),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN),
+    (UserStatus.SITTING_IN, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_IN, UserStatus.WATCHING),
+    (UserStatus.PLAYING, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_OUT, UserStatus.SITTING_IN),
+    (UserStatus.SITTING_OUT, UserStatus.WATCHING),
+    (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
+}
+
 
 class PlayerStatus(StrEnum):
     ACTIVE = "active"
@@ -124,26 +157,6 @@ import random
 from app.pokertable.models import Player, Card, Room, PlayerAction
 from app.pokertable.enums import CardSuit, CardRank, PlayerStatus, PlayerActionType, HandStatus
 from app.pokertable.exceptions import GameLogicError
-
-
-def get_blind(players: List[Player], last_blind: List[str]) -> Tuple[List[Player], List[str]]:
-    if len(last_blind) == 0:
-        return players, [player.nickname for player in players]
-    last_small_blind = last_blind[0]
-    temp_players = []
-    for player in players:
-        temp_players.append(player.nickname)
-    now_players = [x for x in last_blind if x in temp_players]
-    now_players.extend([x for x in temp_players if x not in last_blind])
-    if last_small_blind in now_players:
-        temp_player = now_players[0]
-        now_players = now_players[1:]
-        now_players.append(temp_player)
-    sorted_players = sorted(
-        players,
-        key=lambda p: now_players.index(p.nickname) if p.nickname in now_players else len(now_players)
-    )
-    return sorted_players, now_players
 
 
 def deal_cards(players: List[Player]) -> List[Card]:
@@ -291,7 +304,7 @@ class Hand(BaseModel):
 class Seat(BaseModel):
     nickname: str
     points: int
-    reload_points: int = Field(default=0)
+    in_game_points: int = Field(default=0,ge=0)
 
 
 class Room(BaseModel):
@@ -305,7 +318,8 @@ class Room(BaseModel):
         ge=gameconfig.MIN_BUY_IN,
         le=gameconfig.MAX_BUY_IN
     )
-    last_small_blind_position: int = Field(default=0)
+    new_player_seat_list: List[int] = Field(default=[])
+    button_position: int = Field(default=gameconfig.MAX_SEATS - 1)
     small_blind: int = Field(
         default=gameconfig.DEFAULT_SMALL_BLIND,
         ge=gameconfig.MIN_SMALL_BLIND,
@@ -344,14 +358,14 @@ from datetime import datetime
 from app.database.core import DBsession
 from app.pokertable.gamelogic import only_room_name, get_blind, deal_cards, do_action
 from app.pokertable.exceptions import GameLogicError
-from app.pokertable.models import Room, Hand, Player, PlayerAction
+from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat
 from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType
 from app.user.models import User
 from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
-    BroadcastTarget, PersonalTarget, ServerResponse
+    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage
 )
 
 def only_room_name(room_name: str):
@@ -361,17 +375,23 @@ def only_room_name(room_name: str):
 
 async def process_action(room: Room, message: ClientMessage, user_nickname: str, room_name: str, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     match message:
-        case StartHandMessage():
-            async for message in start_hand(room=room, user_nickname=user_nickname, db=db):
+        case SitdownMessage(seat_number=seat_number):
+            message = await sit_down(room=room, user_nickname=user_nickname, seat_number=seat_number, db=db)
+            yield message
+        case BuyInMessage(buy_in=buy_in, seat_number=seat_number):
+            message = await player_buy_in(room=room, user_nickname=user_nickname, buy_in=buy_in, seat_number=seat_number, db=db)
+            yield message
+        case StartHandMessage(seat_number=seat_number):
+            async for message in start_hand(room=room, user_nickname=user_nickname, seat_number=seat_number):
                 yield message
-        case SetSmallBlindMessage(small_blind=blind) :
+        case SetSmallBlindMessage(small_blind=blind):
             message = await set_small_blind(room=room, user_nickname=user_nickname, small_blind=blind)
             yield message
         case SetBuyInMessage(buy_in = buy_in):
             message = await set_buy_in(room=room, user_nickname=user_nickname, buy_in=buy_in)
             yield message
-        case SetUserStatusMessage(user_status=status):
-            message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status)
+        case SetUserStatusMessage(user_status=status, seat_number=seat_number):
+            message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status, seat_number=seat_number, db=db)
             yield message
         case PlayerActionMessage():
             async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
@@ -379,60 +399,107 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
         case _:
             raise GameLogicError(message="Invalid action")
 
-async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
-    # Validation
-    if room.hand is not None:
-        raise GameLogicError(message="Hand already exists")
-    if user_nickname not in room.users_in_room.keys() or room.users_in_room[user_nickname].user_status != UserStatus.READY_TO_PLAY:
-        raise GameLogicError(message="Only players in the room can start the hand")
+async def sit_down(room: Room, user_nickname: str, seat_number: int) -> ServerResponse:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can sit down")
     if not room.status == RoomStatus.PENDING_START:
-            raise GameLogicError(message="Invalid status change")
-    ready_players_nicknames = []
-    # lock!!!
-    # async with lock:
-    for nickname, user in room.users_in_room.items():
-        if user.user_status == UserStatus.READY_TO_PLAY :
-            ready_players_nicknames.append(nickname)
-        if user.user_status != UserStatus.READY_TO_WATCH:
-            raise GameLogicError(message="Some players are not ready")
-    if len(ready_players_nicknames) < 2:
-        raise GameLogicError(message="Not enough players to start the round")
-    if len(ready_players_nicknames) > 9:
-        raise GameLogicError(message="Who is u????不是群友就滚!!!!")
+        raise GameLogicError(message="Invalid status change")
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number] is not None:
+        raise GameLogicError(message="Seat already taken")
+    room.seats[seat_number] = Seat(nickname=user_nickname, points=0)
+    room.users_in_room[user_nickname].user_status = UserStatus.SITTING_IN
+    message = UserSitdownMessage(seat_number=seat_number, user_nickname=user_nickname)
+    return BroadcastTarget(message=message)
+
+async def player_buy_in(room: Room, user_nickname: str, buy_in: int, seat_number: int, db: DBsession) -> ServerResponse:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can buy in")
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number] is None or room.seats[seat_number].nickname != user_nickname:
+        raise GameLogicError(message="Only the player in the seat can buy in")
+    if room.buy_in != buy_in:
+        raise GameLogicError(message="Invalid buy in amount")
+    seat = room.seats[seat_number]
+    if seat.points + seat.in_game_points >= buy_in:
+        raise GameLogicError(message="Already bought in enough")
     statement = (
         select(User)
-        .where(User.nickname.in_(ready_players_nicknames))
+        .where(User.nickname == user_nickname)
         .with_for_update()
     )
     result = await db.exec(statement)
-    users_db = result.all()
-    if len(users_db) != len(ready_players_nicknames):
-        raise GameLogicError(message="Some players are not found")
-    user_db_map = {u.nickname: u for u in users_db}
+    user_db = result.one()
+    user_db.points -= buy_in
+    seat.points += buy_in
+    await db.commit()
+    message = PlayerBuyInMessage(seat_number=seat_number, user_nickname=user_nickname, buy_in=buy_in)
+    return BroadcastTarget(message=message)
+
+async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncGenerator[ServerResponse, None]:
+    # Validation
+    if room.hand is not None:
+        raise GameLogicError(message="Hand already exists")
+    if room.seats[seat_number] is None or room.seats[seat_number].nickname != user_nickname:
+        raise GameLogicError(message="Only the player in the seat can start the hand")
+    if room.users_in_room[user_nickname].user_status != UserStatus.READY_TO_PLAY:
+        raise GameLogicError(message="Only ready players can start the hand")
+    if not room.status == RoomStatus.PENDING_START:
+            raise GameLogicError(message="Invalid status change")
+    
+    # lock!!!
+    # async with lock:
+    ready_players_nicknames = []
+
+    for i in range(1,len(room.seats)+1):
+        seat = room.seats[(room.button_position + i) % len(room.seats)]
+        if seat is not None and seat.nickname in room.users_in_room.keys():
+            if room.users_in_room[seat.nickname].user_status == UserStatus.SITTING_IN:
+                raise GameLogicError(message="Some players are not ready")
+            if room.users_in_room[seat.nickname].user_status == UserStatus.READY_TO_PLAY:
+                ready_players_nicknames.append(((room.button_position + i) % len(room.seats),seat.nickname))
+
+    if len(ready_players_nicknames) < 2:
+        raise GameLogicError(message="Not enough players to start the hand")
+    if len(ready_players_nicknames) > 9:
+        raise GameLogicError(message="Who is u????不是群友就滚!!!!")
+    room.button_position = ready_players_nicknames[0][0]
+    
+    # get blind 
+    dead_blind_seat = -1
+    if room.new_player_seat_list != []:
+        room.new_player_seat_list.append(ready_players_nicknames[2][0])
+        temp = sorted(room.new_player_seat_list)
+        dead_blind_seat = temp[(temp.index(ready_players_nicknames[2][0]) - 1) % len(temp)]
+    room.new_player_seat_list = []
+
     players = []
     
-    for nickname in ready_players_nicknames:
-        if user_db_map[nickname].points < room.buy_in:
-            raise GameLogicError(message="Player has not enough points to cover buy in")
-        user_db_map[nickname].points -= room.buy_in
-        players.append(Player(nickname=nickname, points=room.buy_in))
-    # Get blind
-    players, last_blind = get_blind(players=players,last_blind=room.last_blind)
+    dead_blind = -1
+    for i,(position, nickname) in enumerate(ready_players_nicknames[1:]+ready_players_nicknames[:1]):
+        players.append(Player(
+            nickname=nickname, 
+            points=room.seats[position].points, 
+            seat_position=position, 
+        ))
+        room.seats[position].in_game_points = room.seats[position].points
+        room.seats[position].points = 0
+        if position == dead_blind_seat:
+            dead_blind = i
+    
     # Update room status
     room.status = RoomStatus.HAND_STARTED
-    for nickname, user in room.users_in_room.items():
-        if nickname in last_blind:
-            user.user_status = UserStatus.PLAYING
-        elif user.user_status == UserStatus.READY_TO_WATCH:
-            user.user_status = UserStatus.WATCHING
+    for player in players:
+        room.users_in_room[player.nickname].user_status = UserStatus.PLAYING
+    
     room.hand = Hand(
         status=HandStatus.READY_TO_START,
         players=players,
         start_time=datetime.now(),
         last_bet=2 * room.small_blind,
     )
-    # Update DB
-    await db.commit()
     message = RoomStatusChangedMessage(room_status=room.status, changed_by=user_nickname)
     yield BroadcastTarget(message=message)
     # hand started
@@ -440,49 +507,75 @@ async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGener
     room.hand.acting_player_position = 2 % len(room.hand.players)
     room.hand.players[0].points -= room.small_blind
     room.hand.players[0].bet_amount = room.small_blind
-    room.hand.players[1].points -= 2 * room.small_blind
-    room.hand.players[1].bet_amount = 2 * room.small_blind
+    if dead_blind == -1:
+        room.hand.players[1].points -= 2 * room.small_blind
+        room.hand.players[1].bet_amount = 2 * room.small_blind
+    else:
+        room.hand.players[dead_blind].points -= 2 * room.small_blind
+        room.hand.players[dead_blind].bet_amount = 2 * room.small_blind
     room.hand.pot = 3 * room.small_blind
     room.hand.last_bet = 2 * room.small_blind
     message = HandStartedMessage(hand=room.hand)
     yield BroadcastTarget(message=message)
-    deal_cards(room=room)
+    deal_cards(players=room.hand.players)
     for player in room.hand.players:
         message = HoleCardsMessage(cards=player.hole_cards)
         yield PersonalTarget(nickname=player.nickname, message=message)
     message = BettingRoundStartedMessage(hand_status=room.hand.status, acting_player=room.hand.players[room.hand.acting_player_position].nickname, pot=room.hand.pot, last_bet=room.hand.last_bet)
     yield BroadcastTarget(message=message)
         
-async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> Dict[str, Any]:
-    if user_nickname not in room.users_in_room.keys():
-        raise GameLogicError(message="Only players in the room can set small blind")
+async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> ServerResponse:
+    if room.seats[0] is None or room.seats[0].nickname != user_nickname:
+        raise GameLogicError(message="Only the seat 0 can set small blind")
     if not room.status == RoomStatus.PENDING_START:
         raise GameLogicError(message="Invalid status change")
     room.small_blind = small_blind
+    room.last_small_blind_position = 0
     message = SmallBlindSetMessage(small_blind=room.small_blind, set_by=user_nickname)    
     return BroadcastTarget(message=message)
 
-async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> Dict[str, Any]:
-    if user_nickname not in room.users_in_room.keys():
-        raise GameLogicError(message="Only players in the room can set buy in")
+async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> ServerResponse:
+    if room.seats[0] is None or room.seats[0].nickname != user_nickname:
+        raise GameLogicError(message="Only the seat 0 can set buy in")
     if not room.status == RoomStatus.PENDING_START:
         raise GameLogicError(message="Invalid status change")
     room.buy_in = buy_in
     message = BuyInSetMessage(buy_in=room.buy_in, set_by=user_nickname)
     return BroadcastTarget(message=message)
 
-async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus) -> Dict[str, Any]:
+async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus, seat_number: int, db: DBsession) -> ServerResponse:
     if user_nickname not in room.users_in_room.keys():
         raise GameLogicError(message="Only players in the room can set user status")
-    if room.status != RoomStatus.PENDING_START:
-        raise GameLogicError(message="Only pending start status can set user status")
-    if not room.users_in_room[user_nickname].user_status.can_change_to(user_status):
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number] is None or room.seats[seat_number].nickname != user_nickname:
+        raise GameLogicError(message="Only the player in the seat can set user status")
+    now_status = room.users_in_room[user_nickname].user_status
+    if not now_status.userself_can_change_to(user_status):
         raise GameLogicError(message="Invalid status transition")
+    if user_status == UserStatus.READY_TO_PLAY:
+        if room.seats[seat_number].points == 0:
+            raise GameLogicError(message="Player has no points, cannot ready to play")
+        room.new_player_seat_list.append(seat_number)
+    if user_status == UserStatus.WATCHING:
+        if room.seats[seat_number].in_game_points > 0:
+            raise GameLogicError(message="Player has in game points, cannot leave the table")
+        if room.seats[seat_number].points > 0:
+            statement = (
+                select(User)
+                .where(User.nickname == user_nickname)
+                .with_for_update()
+            )
+            result = await db.exec(statement)
+            user_db = result.one()
+            user_db.points += room.seats[seat_number].points
+            await db.commit()
+        room.seats[seat_number] = None
     room.users_in_room[user_nickname].user_status = user_status
-    message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname)
+    message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname, seat_number=seat_number)
     return BroadcastTarget(message=message)
 
-async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[Dict[str, Any], None]:
+async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     pass
 
 websocket.py:
@@ -584,6 +677,8 @@ async def handle_websocket(websocket: WebSocket, user_nickname: str, room_name: 
                         await game_room.room_broadcast(message=serialize_server_message(message), room_name=room_name)
                     case PersonalTarget(nickname=nickname, message=message):
                         await game_room.send_personal_message(message=serialize_server_message(message), user_nickname=nickname, room_name=room_name)
+    except GameLogicError as e:
+        await websocket.send_text(serialize_server_message(ErrorMessage(error_code="GAME_LOGIC_ERROR", message=str(e))))
     except WebSocketDisconnect:
         await game_room.disconnect(room_name=room_name, user_nickname=user_nickname)
 
@@ -612,10 +707,25 @@ class SitdownMessage(BaseModel):
         }
     }
 
+class BuyInMessage(BaseModel):
+    type: Literal["buy_in"] = "buy_in"
+    buy_in: int
+    seat_number: int
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "buy_in",
+                "buy_in": 64
+            }
+        }
+    }
+
 class SetUserStatusMessage(BaseModel):
     type: Literal["set_user_status"] = "set_user_status"
     user_status: UserStatus
-    
+    seat_number: int
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -654,7 +764,8 @@ class SetBuyInMessage(BaseModel):
 
 class StartHandMessage(BaseModel):
     type: Literal["start_hand"] = "start_hand"
-    
+    seat_number: int
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -708,12 +819,14 @@ class ChatMessage(BaseModel):
 # 客户端消息联合类型（使用 Discriminated Union）
 ClientMessage = Annotated[
     Union[
+        SitdownMessage,
         SetUserStatusMessage,
         SetSmallBlindMessage,
         SetBuyInMessage,
         StartHandMessage,
         PlayerActionMessage,
         ChatMessage,
+        BuyInMessage,
     ],
     Field(discriminator="type")
 ]
@@ -722,6 +835,42 @@ ClientMessage = Annotated[
 # ============================================
 # server -> client （ServerMessage）
 # ============================================
+
+class UserSitdownMessage(BaseModel):
+    type: Literal["user_sitdown"] = "user_sitdown"
+    seat_number: int
+    user_nickname: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "user_sitdown",
+                "seat_number": 0,
+                "user_nickname": "John",
+                "timestamp": "2025-12-07T12:00:00"
+            }
+        }
+    }
+
+class PlayerBuyInMessage(BaseModel):
+    type: Literal["player_buy_in"] = "player_buy_in"
+    seat_number: int
+    user_nickname: str
+    buy_in: int
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "player_buy_in",
+                "seat_number": 0,
+                "user_nickname": "John",
+                "buy_in": 64
+            }
+        }
+    }
+
 
 class UserOnlineMessage(BaseModel):
     
@@ -757,6 +906,7 @@ class UserStatusChangedMessage(BaseModel):
     type: Literal["user_status_changed"] = "user_status_changed"
     user_status: UserStatus
     user_nickname: str
+    seat_number: int
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class RoomStatusChangedMessage(BaseModel):

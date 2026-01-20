@@ -53,7 +53,8 @@ class Room(BaseModel):
         ge=gameconfig.MIN_BUY_IN,
         le=gameconfig.MAX_BUY_IN
     )
-    last_small_blind_position: Optional[int] = Field(default=None)
+    new_player_seat_list: List[int] = Field(default=[])
+    button_position: int = Field(default=gameconfig.MAX_SEATS - 1)
     small_blind: int = Field(
         default=gameconfig.DEFAULT_SMALL_BLIND,
         ge=gameconfig.MIN_SMALL_BLIND,

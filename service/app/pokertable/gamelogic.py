@@ -6,26 +6,6 @@ from app.pokertable.enums import CardSuit, CardRank, PlayerStatus, PlayerActionT
 from app.pokertable.exceptions import GameLogicError
 
 
-def get_blind(players: List[Player], last_blind: List[str]) -> Tuple[List[Player], List[str]]:
-    if len(last_blind) == 0:
-        return players, [player.nickname for player in players]
-    last_small_blind = last_blind[0]
-    temp_players = []
-    for player in players:
-        temp_players.append(player.nickname)
-    now_players = [x for x in last_blind if x in temp_players]
-    now_players.extend([x for x in temp_players if x not in last_blind])
-    if last_small_blind in now_players:
-        temp_player = now_players[0]
-        now_players = now_players[1:]
-        now_players.append(temp_player)
-    sorted_players = sorted(
-        players,
-        key=lambda p: now_players.index(p.nickname) if p.nickname in now_players else len(now_players)
-    )
-    return sorted_players, now_players
-
-
 def deal_cards(players: List[Player]) -> List[Card]:
     cards = [Card(suit=suit, rank=rank) for suit in CardSuit for rank in CardRank]
     rng = random.SystemRandom()

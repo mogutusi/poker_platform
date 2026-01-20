@@ -54,6 +54,7 @@ class CardRank(IntEnum):
 class UserStatus(StrEnum):
     WATCHING = "watching"
     OFFLINE = "offline"
+    SITTING_IN = "sitting_in"
     READY_TO_PLAY = "ready_to_play"
     SITTING_OUT = "sitting_out"
     PLAYING = "playing"
@@ -77,25 +78,33 @@ USER_STATUS_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
     (UserStatus.OFFLINE, UserStatus.SITTING_OUT),
 
     # sit down
-    (UserStatus.WATCHING, UserStatus.READY_TO_PLAY),
+    (UserStatus.WATCHING, UserStatus.SITTING_IN),
     
     # stand up
     (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
     (UserStatus.SITTING_OUT, UserStatus.WATCHING),
+    (UserStatus.SITTING_IN, UserStatus.WATCHING),
 
     # stay in the table
+    (UserStatus.SITTING_IN, UserStatus.READY_TO_PLAY),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN),
     (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
-    (UserStatus.SITTING_OUT, UserStatus.READY_TO_PLAY),
+    (UserStatus.SITTING_IN, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_OUT, UserStatus.SITTING_IN),
 
     # game flow
     (UserStatus.READY_TO_PLAY, UserStatus.PLAYING),
-    (UserStatus.PLAYING, UserStatus.READY_TO_PLAY),
+    (UserStatus.PLAYING, UserStatus.SITTING_IN),
     (UserStatus.PLAYING, UserStatus.SITTING_OUT), 
 }
 
 USER_STATUS_SELF_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
+    (UserStatus.SITTING_IN, UserStatus.READY_TO_PLAY),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN),
+    (UserStatus.SITTING_IN, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_IN, UserStatus.WATCHING),
     (UserStatus.PLAYING, UserStatus.SITTING_OUT),
-    (UserStatus.SITTING_OUT, UserStatus.READY_TO_PLAY),
+    (UserStatus.SITTING_OUT, UserStatus.SITTING_IN),
     (UserStatus.SITTING_OUT, UserStatus.WATCHING),
     (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
     (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
