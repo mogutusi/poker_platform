@@ -12,7 +12,7 @@ from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
-    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage
+    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage
 )
 
 def only_room_name(room_name: str):
@@ -24,6 +24,9 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
     match message:
         case SitdownMessage(seat_number=seat_number):
             message = await sit_down(room=room, user_nickname=user_nickname, seat_number=seat_number, db=db)
+            yield message
+        case BuyInMessage(buy_in=buy_in, seat_number=seat_number):
+            message = await player_buy_in(room=room, user_nickname=user_nickname, buy_in=buy_in, seat_number=seat_number, db=db)
             yield message
         case StartHandMessage():
             async for message in start_hand(room=room, user_nickname=user_nickname, db=db):
@@ -54,6 +57,31 @@ async def sit_down(room: Room, user_nickname: str, seat_number: int) -> ServerRe
         raise GameLogicError(message="Seat already taken")
     room.seats[seat_number] = Seat(nickname=user_nickname, points=0)
     message = UserSitdownMessage(seat_number=seat_number, user_nickname=user_nickname)
+    return BroadcastTarget(message=message)
+
+async def player_buy_in(room: Room, user_nickname: str, buy_in: int, seat_number: int, db: DBsession) -> ServerResponse:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can buy in")
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number].nickname != user_nickname:
+        raise GameLogicError(message="Only the player in the seat can buy in")
+    if room.buy_in != buy_in:
+        raise GameLogicError(message="Invalid buy in amount")
+    seat = room.seats[seat_number]
+    if seat.points + seat.in_game_points >= buy_in:
+        raise GameLogicError(message="Already bought in enough")
+    statement = (
+        select(User)
+        .where(User.nickname == user_nickname)
+        .with_for_update()
+    )
+    result = await db.exec(statement)
+    user_db = result.one()
+    user_db.points -= buy_in
+    seat.points += buy_in
+    await db.commit()
+    message = PlayerBuyInMessage(seat_number=seat_number, user_nickname=user_nickname, buy_in=buy_in)
     return BroadcastTarget(message=message)
 
 async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGenerator[ServerResponse, None]:

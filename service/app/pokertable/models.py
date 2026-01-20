@@ -39,7 +39,7 @@ class Hand(BaseModel):
 class Seat(BaseModel):
     nickname: str
     points: int
-    # reload_points: int = Field(default=0)
+    in_game_points: int = Field(default=0,ge=0)
 
 
 class Room(BaseModel):
@@ -53,7 +53,7 @@ class Room(BaseModel):
         ge=gameconfig.MIN_BUY_IN,
         le=gameconfig.MAX_BUY_IN
     )
-    last_small_blind_position: int = Field(default=0)
+    last_small_blind_position: Optional[int] = Field(default=None)
     small_blind: int = Field(
         default=gameconfig.DEFAULT_SMALL_BLIND,
         ge=gameconfig.MIN_SMALL_BLIND,

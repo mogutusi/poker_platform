@@ -22,6 +22,20 @@ class SitdownMessage(BaseModel):
         }
     }
 
+class BuyInMessage(BaseModel):
+    type: Literal["buy_in"] = "buy_in"
+    buy_in: int
+    seat_number: int
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "buy_in",
+                "buy_in": 64
+            }
+        }
+    }
+
 class SetUserStatusMessage(BaseModel):
     type: Literal["set_user_status"] = "set_user_status"
     user_status: UserStatus
@@ -125,6 +139,7 @@ ClientMessage = Annotated[
         StartHandMessage,
         PlayerActionMessage,
         ChatMessage,
+        BuyInMessage,
     ],
     Field(discriminator="type")
 ]
@@ -147,6 +162,24 @@ class UserSitdownMessage(BaseModel):
                 "seat_number": 0,
                 "user_nickname": "John",
                 "timestamp": "2025-12-07T12:00:00"
+            }
+        }
+    }
+
+class PlayerBuyInMessage(BaseModel):
+    type: Literal["player_buy_in"] = "player_buy_in"
+    seat_number: int
+    user_nickname: str
+    buy_in: int
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "type": "player_buy_in",
+                "seat_number": 0,
+                "user_nickname": "John",
+                "buy_in": 64
             }
         }
     }
