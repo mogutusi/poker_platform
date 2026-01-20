@@ -13,5 +13,6 @@ __pycache__/
 node_modules/
 
 original_password.txt
+pokertable_files.txt
 test.py
 *.json
