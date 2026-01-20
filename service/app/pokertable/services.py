@@ -37,8 +37,8 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
         case SetBuyInMessage(buy_in = buy_in):
             message = await set_buy_in(room=room, user_nickname=user_nickname, buy_in=buy_in)
             yield message
-        case SetUserStatusMessage(user_status=status):
-            message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status)
+        case SetUserStatusMessage(user_status=status, seat_number=seat_number):
+            message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status, seat_number=seat_number, db=db)
             yield message
         case PlayerActionMessage():
             async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
@@ -56,6 +56,7 @@ async def sit_down(room: Room, user_nickname: str, seat_number: int) -> ServerRe
     if room.seats[seat_number] is not None:
         raise GameLogicError(message="Seat already taken")
     room.seats[seat_number] = Seat(nickname=user_nickname, points=0)
+    room.users_in_room[user_nickname].user_status = UserStatus.READY_TO_PLAY
     message = UserSitdownMessage(seat_number=seat_number, user_nickname=user_nickname)
     return BroadcastTarget(message=message)
 
@@ -64,7 +65,7 @@ async def player_buy_in(room: Room, user_nickname: str, buy_in: int, seat_number
         raise GameLogicError(message="Only players in the room can buy in")
     if seat_number < 0 or seat_number >= len(room.seats):
         raise GameLogicError(message="Invalid seat number")
-    if room.seats[seat_number].nickname != user_nickname:
+    if room.seats[seat_number] is None or room.seats[seat_number].nickname != user_nickname:
         raise GameLogicError(message="Only the player in the seat can buy in")
     if room.buy_in != buy_in:
         raise GameLogicError(message="Invalid buy in amount")
@@ -159,32 +160,51 @@ async def start_hand(room: Room, user_nickname: str,db: DBsession) -> AsyncGener
     yield BroadcastTarget(message=message)
         
 async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> ServerResponse:
-    if user_nickname not in room.users_in_room.keys():
-        raise GameLogicError(message="Only players in the room can set small blind")
+    if room.seats[0] is None or room.seats[0].nickname != user_nickname:
+        raise GameLogicError(message="Only the seat 0 can set small blind")
     if not room.status == RoomStatus.PENDING_START:
         raise GameLogicError(message="Invalid status change")
     room.small_blind = small_blind
+    room.last_small_blind_position = 0
     message = SmallBlindSetMessage(small_blind=room.small_blind, set_by=user_nickname)    
     return BroadcastTarget(message=message)
 
 async def set_buy_in(room: Room, user_nickname: str, buy_in: int) -> ServerResponse:
-    if user_nickname not in room.users_in_room.keys():
-        raise GameLogicError(message="Only players in the room can set buy in")
+    if room.seats[0] is None or room.seats[0].nickname != user_nickname:
+        raise GameLogicError(message="Only the seat 0 can set buy in")
     if not room.status == RoomStatus.PENDING_START:
         raise GameLogicError(message="Invalid status change")
     room.buy_in = buy_in
     message = BuyInSetMessage(buy_in=room.buy_in, set_by=user_nickname)
     return BroadcastTarget(message=message)
 
-async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus) -> ServerResponse:
+async def set_user_status(room: Room, user_nickname: str, user_status: UserStatus, seat_number: int, db: DBsession) -> ServerResponse:
     if user_nickname not in room.users_in_room.keys():
         raise GameLogicError(message="Only players in the room can set user status")
-    if room.status != RoomStatus.PENDING_START:
-        raise GameLogicError(message="Only pending start status can set user status")
-    if not room.users_in_room[user_nickname].user_status.can_change_to(user_status):
+    if seat_number < 0 or seat_number >= len(room.seats):
+        raise GameLogicError(message="Invalid seat number")
+    if room.seats[seat_number] is None or room.seats[seat_number].nickname != user_nickname:
+        raise GameLogicError(message="Only the player in the seat can set user status")
+    now_status = room.users_in_room[user_nickname].user_status
+    if not now_status.userself_can_change_to(user_status):
         raise GameLogicError(message="Invalid status transition")
+    if user_status == UserStatus.WATCHING:
+        if room.seats[seat_number].in_game_points > 0:
+            raise GameLogicError(message="Player has in game points, cannot leave the table")
+        if room.seats[seat_number].points > 0:
+            statement = (
+                select(User)
+                .where(User.nickname == user_nickname)
+                .with_for_update()
+            )
+            result = await db.exec(statement)
+            user_db = result.one()
+            user_db.points += room.seats[seat_number].points
+            await db.commit()
+        room.seats[seat_number] = None
+
     room.users_in_room[user_nickname].user_status = user_status
-    message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname)
+    message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname, seat_number=seat_number)
     return BroadcastTarget(message=message)
 
 async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:

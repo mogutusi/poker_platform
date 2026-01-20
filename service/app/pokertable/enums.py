@@ -52,31 +52,55 @@ class CardRank(IntEnum):
     ACE = 14
 
 class UserStatus(StrEnum):
-    ONLINE = "online"
+    WATCHING = "watching"
     OFFLINE = "offline"
     READY_TO_PLAY = "ready_to_play"
+    SITTING_OUT = "sitting_out"
     PLAYING = "playing"
-    READY_TO_WATCH = "ready_to_watch"
-    WATCHING = "watching"
+    
+    def userself_can_change_to(self, new_status: "UserStatus") -> bool:
+        return (self, new_status) in USER_STATUS_SELF_TRANSITIONS
 
     def can_change_to(self, new_status: "UserStatus") -> bool:
         return (self, new_status) in USER_STATUS_TRANSITIONS
     
 
 USER_STATUS_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
-    (UserStatus.ONLINE, UserStatus.OFFLINE),
-    (UserStatus.ONLINE, UserStatus.READY_TO_PLAY),
-    (UserStatus.ONLINE, UserStatus.READY_TO_WATCH),
-    (UserStatus.OFFLINE, UserStatus.ONLINE),
-    (UserStatus.READY_TO_PLAY, UserStatus.PLAYING),
-    (UserStatus.READY_TO_PLAY, UserStatus.READY_TO_WATCH),
-    (UserStatus.READY_TO_WATCH, UserStatus.WATCHING),
-    (UserStatus.READY_TO_WATCH, UserStatus.READY_TO_PLAY),
-    (UserStatus.PLAYING, UserStatus.READY_TO_PLAY),
-    (UserStatus.PLAYING, UserStatus.WATCHING),
+    # disconnect/reconnect
+    (UserStatus.WATCHING, UserStatus.OFFLINE),
+    (UserStatus.READY_TO_PLAY, UserStatus.OFFLINE),
+    (UserStatus.PLAYING, UserStatus.OFFLINE),
+    (UserStatus.SITTING_OUT, UserStatus.OFFLINE),
+    (UserStatus.OFFLINE, UserStatus.WATCHING),   
+    (UserStatus.OFFLINE, UserStatus.READY_TO_PLAY), 
+    (UserStatus.OFFLINE, UserStatus.PLAYING),       
+    (UserStatus.OFFLINE, UserStatus.SITTING_OUT),
+
+    # sit down
     (UserStatus.WATCHING, UserStatus.READY_TO_PLAY),
-    (UserStatus.WATCHING, UserStatus.PLAYING),
+    
+    # stand up
+    (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
+    (UserStatus.SITTING_OUT, UserStatus.WATCHING),
+
+    # stay in the table
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_OUT, UserStatus.READY_TO_PLAY),
+
+    # game flow
+    (UserStatus.READY_TO_PLAY, UserStatus.PLAYING),
+    (UserStatus.PLAYING, UserStatus.READY_TO_PLAY),
+    (UserStatus.PLAYING, UserStatus.SITTING_OUT), 
 }
+
+USER_STATUS_SELF_TRANSITIONS: Set[Tuple[UserStatus, UserStatus]] = {
+    (UserStatus.PLAYING, UserStatus.SITTING_OUT),
+    (UserStatus.SITTING_OUT, UserStatus.READY_TO_PLAY),
+    (UserStatus.SITTING_OUT, UserStatus.WATCHING),
+    (UserStatus.READY_TO_PLAY, UserStatus.WATCHING),
+    (UserStatus.READY_TO_PLAY, UserStatus.SITTING_OUT),
+}
+
 
 class PlayerStatus(StrEnum):
     ACTIVE = "active"

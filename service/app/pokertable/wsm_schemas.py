@@ -39,6 +39,7 @@ class BuyInMessage(BaseModel):
 class SetUserStatusMessage(BaseModel):
     type: Literal["set_user_status"] = "set_user_status"
     user_status: UserStatus
+    seat_number: int
     
     model_config = {
         "json_schema_extra": {
@@ -219,6 +220,7 @@ class UserStatusChangedMessage(BaseModel):
     type: Literal["user_status_changed"] = "user_status_changed"
     user_status: UserStatus
     user_nickname: str
+    seat_number: int
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class RoomStatusChangedMessage(BaseModel):
