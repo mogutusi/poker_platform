@@ -60,6 +60,9 @@ class Room(BaseModel):
         ge=gameconfig.MIN_SMALL_BLIND,
         le=gameconfig.MAX_SMALL_BLIND
     )
+    # user_nickname -> user_status
+    # when the room is disconnected, the user_status will be saved to the snapshot
+    disconnect_snapshot: Dict[str, UserStatus] = Field(default={})
 
 
 class PlayerAction(BaseModel):

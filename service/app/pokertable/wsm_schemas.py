@@ -89,6 +89,9 @@ class StartHandMessage(BaseModel):
         }
     }
 
+class LeaveRoomMessage(BaseModel):
+    type: Literal["leave_room"] = "leave_room"
+
 
 class PlayerActionMessage(BaseModel):
     type: Literal["player_action"] = "player_action"
@@ -142,6 +145,7 @@ ClientMessage = Annotated[
         PlayerActionMessage,
         ChatMessage,
         BuyInMessage,
+        LeaveRoomMessage,
     ],
     Field(discriminator="type")
 ]
@@ -200,6 +204,12 @@ class UserOfflineMessage(BaseModel):
     nickname: str
     timestamp: datetime = Field(default_factory=datetime.now)
 
+class UserLeaveRoomMessage(BaseModel):
+    type: Literal["user_leave_room"] = "user_leave_room"
+    nickname: str
+    leave_type: Literal["offline", "leave_room"]
+    timestamp: datetime = Field(default_factory=datetime.now)
+
 
 class SmallBlindSetMessage(BaseModel):
     type: Literal["small_blind_set"] = "small_blind_set"
@@ -233,6 +243,8 @@ class RoomStatusChangedMessage(BaseModel):
 class HandStartedMessage(BaseModel):
     type: Literal["hand_started"] = "hand_started"
     hand : Hand
+    # if dead_blind is -1, it means no dead blind
+    dead_blind: int
     timestamp: datetime = Field(default_factory=datetime.now)
 
 

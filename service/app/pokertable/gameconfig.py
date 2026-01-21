@@ -10,6 +10,7 @@ class GameConfig(BaseSettings):
     MAX_SMALL_BLIND: int
     MIN_BUY_IN: int
     MAX_BUY_IN: int
+    OFFLINE_DELAY_TIME: int
 
     model_config = SettingsConfigDict(
         env_file=ENV_PATH, 

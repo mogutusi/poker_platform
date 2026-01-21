@@ -12,7 +12,7 @@ from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
-    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage
+    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage, LeaveRoomMessage , UserLeaveRoomMessage
 )
 
 def only_room_name(room_name: str):
@@ -39,6 +39,9 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
             yield message
         case SetUserStatusMessage(user_status=status, seat_number=seat_number):
             message = await set_user_status(room=room, user_nickname=user_nickname, user_status=status, seat_number=seat_number, db=db)
+            yield message
+        case LeaveRoomMessage():
+            message = await leave_room(room=room, user_nickname=user_nickname, db=db)
             yield message
         case PlayerActionMessage():
             async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
@@ -171,13 +174,18 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
         room.hand.players[0].bet_amount = 2 * room.small_blind
     room.hand.pot = 3 * room.small_blind
     room.hand.last_bet = 2 * room.small_blind
-    message = HandStartedMessage(hand=room.hand)
+    message = HandStartedMessage(hand=room.hand, dead_blind=dead_blind)
     yield BroadcastTarget(message=message)
     deal_cards(players=room.hand.players)
     for player in room.hand.players:
         message = HoleCardsMessage(cards=player.hole_cards)
         yield PersonalTarget(nickname=player.nickname, message=message)
-    message = BettingRoundStartedMessage(hand_status=room.hand.status, acting_player=room.hand.players[room.hand.acting_player_position].nickname, pot=room.hand.pot, last_bet=room.hand.last_bet)
+    message = BettingRoundStartedMessage(
+        hand_status=room.hand.status, 
+        acting_player=room.hand.players[room.hand.acting_player_position].nickname, 
+        pot=room.hand.pot, 
+        last_bet=room.hand.last_bet
+    )
     yield BroadcastTarget(message=message)
         
 async def set_small_blind(room: Room, user_nickname: str, small_blind: int) -> ServerResponse:
@@ -229,6 +237,34 @@ async def set_user_status(room: Room, user_nickname: str, user_status: UserStatu
         room.seats[seat_number] = None
     room.users_in_room[user_nickname].user_status = user_status
     message = UserStatusChangedMessage(user_status=user_status, user_nickname=user_nickname, seat_number=seat_number)
+    return BroadcastTarget(message=message)
+
+async def leave_room(room: Room, user_nickname: str, db: DBsession) -> ServerResponse:
+    if user_nickname not in room.users_in_room.keys():
+        raise GameLogicError(message="Only players in the room can leave the room")
+    if room.users_in_room[user_nickname] == UserStatus.PLAYING:
+        raise GameLogicError(message="Cannot leave the room in the middle of the hand")
+    if room.users_in_room[user_nickname] != UserStatus.WATCHING:
+        seat_number = -1
+        for i in range(len(room.seats)):
+            if room.seats[i] is not None and room.seats[i].nickname == user_nickname:
+                seat_number = i
+                break
+        if seat_number == -1:
+            raise GameLogicError(message="Seat not found")
+        statement = (
+            select(User)
+            .where(User.nickname == user_nickname)
+            .with_for_update()
+        )
+        result = await db.exec(statement)
+        user_db = result.one()
+        user_db.points += room.seats[seat_number].points
+        await db.commit()
+        room.seats[seat_number] = None
+
+    del room.users_in_room[user_nickname]
+    message = UserLeaveRoomMessage(nickname=user_nickname, leave_type="leave_room")
     return BroadcastTarget(message=message)
 
 async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:

@@ -14,5 +14,7 @@ node_modules/
 
 original_password.txt
 pokertable_files.txt
+
 test.py
+asyncioExample.py
 *.json
