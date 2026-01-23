@@ -15,6 +15,7 @@ class Player(BaseModel):
     player_status: PlayerStatus = Field(default=PlayerStatus.ACTIVE)
     points: int
     hole_cards: Optional[Tuple[Card, Card]] = Field(default=None)
+    # round total bet amount
     bet_amount: Optional[int] = Field(default=0,ge=0)
     seat_position: int
 
@@ -26,6 +27,7 @@ class Hand(BaseModel):
     status: HandStatus
     # By default, the first position is the small blind bet and the second position is the large blind bet
     players: Optional[List[Player]]
+    # players[acting_player_position] is the acting player
     acting_player_position: Optional[int] = Field(default=None)
     last_bet: Optional[int] = Field(default=None)
     deck: Optional[List[Card]]

@@ -3,16 +3,17 @@ from sqlmodel import select
 from datetime import datetime
 
 from app.database.core import DBsession
-from app.pokertable.gamelogic import only_room_name, get_blind, deal_cards, do_action
+from app.pokertable.gamelogic import get_next_player, only_room_name, get_blind, deal_cards, do_action
 from app.pokertable.exceptions import GameLogicError
 from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat
-from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType
+from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType, PlayerStatus
 from app.user.models import User
 from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage,BettingRoundStartedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage,
-    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage, LeaveRoomMessage , UserLeaveRoomMessage
+    BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage, LeaveRoomMessage , UserLeaveRoomMessage,
+    PlayerActionBroadcast
 )
 
 def only_room_name(room_name: str):
@@ -44,8 +45,8 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
             message = await leave_room(room=room, user_nickname=user_nickname, db=db)
             yield message
         case PlayerActionMessage():
-            async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
-                yield message
+            message = await player_action(room=room, user_nickname=user_nickname, message=message, db=db)
+            yield message
         case _:
             raise GameLogicError(message="Invalid action")
 
@@ -182,7 +183,7 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
         yield PersonalTarget(nickname=player.nickname, message=message)
     message = BettingRoundStartedMessage(
         hand_status=room.hand.status, 
-        acting_player=room.hand.players[room.hand.acting_player_position].nickname, 
+        next_acting_player=room.hand.players[room.hand.acting_player_position].nickname, 
         pot=room.hand.pot, 
         last_bet=room.hand.last_bet
     )
@@ -267,5 +268,38 @@ async def leave_room(room: Room, user_nickname: str, db: DBsession) -> ServerRes
     message = UserLeaveRoomMessage(nickname=user_nickname, leave_type="leave_room")
     return BroadcastTarget(message=message)
 
-async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
-    pass
+async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> ServerResponse:
+    if (room.status != RoomStatus.HAND_STARTED 
+    and room.hand.acting_player_position is not None 
+    and room.hand.players[room.hand.acting_player_position].nickname != user_nickname
+    ):
+        raise GameLogicError(message="Not the acting player")
+    hand = room.hand
+    player = hand.players[hand.acting_player_position]
+    match message.action:
+        case PlayerActionType.FOLD:
+            player.player_status = PlayerStatus.FOLDED
+            hand.pot += player.bet_amount
+            
+        case PlayerActionType.BET:
+            bet_amount = message.bet_amount
+            if bet_amount is None:
+                raise GameLogicError(message="Bet amount is required")
+            if bet_amount <= hand.last_bet:
+                raise GameLogicError(message="Bet amount is less or equal to the last bet")
+            if bet_amount > player.points:
+                raise GameLogicError(message="Bet amount is greater than the player's points")
+            player.bet_amount = bet_amount
+            hand.pot += bet_amount
+            hand.last_bet = bet_amount
+            if bet_amount == player.points:
+                player.player_status = PlayerStatus.ALLIN
+        case PlayerActionType.CHECK:
+            if hand.last_bet is not None and hand.last_bet > 0:
+                raise GameLogicError(message="Cannot check after a bet")
+            
+            
+    end_hand()
+    get_next_player()
+    message = PlayerActionBroadcast(player=user_nickname, action=message.action, bet_amount=message.bet_amount, pot=room.hand.pot, next_acting_player=room.hand.players[room.hand.acting_player_position].nickname)
+    return BroadcastTarget(message=message)

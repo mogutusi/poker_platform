@@ -9,7 +9,7 @@ from app.pokertable.services import process_action, only_room_name
 from app.pokertable.enums import UserStatus, HandStatus, RoomStatus
 from app.user.models import User
 from app.database.core import DBsession, AsyncSessionLocal 
-from app.pokertable.wsm_schemas import (parse_client_message, BroadcastTarget, PersonalTarget, serialize_server_message, UserOnlineMessage, UserOfflineMessage, 
+from app.pokertable.wsm_schemas import (HoleCardsMessage, parse_client_message, BroadcastTarget, PersonalTarget, serialize_server_message, UserOnlineMessage, UserOfflineMessage, 
     RoomStateMessage, UserStatusChangedMessage, UserLeaveRoomMessage)
 
 
@@ -41,6 +41,10 @@ class GameRoom:
                     self.rooms[room_name].users_in_room[user_nickname] = self.rooms[room_name].disconnect_snapshot[user_nickname]
                 else:
                     if self.rooms[room_name].status == RoomStatus.HAND_STARTED:
+                        for player in self.rooms[room_name].hand.players:
+                            if player.nickname == user_nickname:
+                                card_message = HoleCardsMessage(cards=player.hole_cards)
+                                break
                         self.rooms[room_name].users_in_room[user_nickname] = UserStatus.PLAYING
                     else:
                         self.rooms[room_name].users_in_room[user_nickname] = UserStatus.SITTING_OUT
@@ -50,6 +54,9 @@ class GameRoom:
         await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
         message = RoomStateMessage(room=self.rooms[room_name])
         await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
+        if card_message is not None:
+            await self.send_personal_message(message=serialize_server_message(card_message), user_nickname=user_nickname, room_name=room_name)
+
 
     async def disconnect(self, room_name: str, user_nickname: str,db: DBsession):
         if room_name in self.rooms.keys():

@@ -96,6 +96,7 @@ class LeaveRoomMessage(BaseModel):
 class PlayerActionMessage(BaseModel):
     type: Literal["player_action"] = "player_action"
     action: PlayerActionType
+    # this round total bet amount
     bet_amount: Optional[int] = Field(default=None, ge=0)
     
     model_config = {
@@ -256,7 +257,7 @@ class HoleCardsMessage(BaseModel):
 class BettingRoundStartedMessage(BaseModel):
     type: Literal["betting_round_started"] = "betting_round_started"
     hand_status: HandStatus
-    acting_player: str
+    next_acting_player: str
     pot: int
     last_bet: Optional[int]
 
@@ -268,7 +269,7 @@ class PlayerActionBroadcast(BaseModel):
     action: PlayerActionType
     bet_amount: Optional[int]
     pot: int
-    next_player: Optional[str]
+    next_acting_player: Optional[str]
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
