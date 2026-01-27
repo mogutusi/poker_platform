@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional
 import random
 
-from app.pokertable.models import Player, Card, Room, PlayerAction
+from app.pokertable.models import Player, Card, Room, PlayerAction, Hand
 from app.pokertable.enums import CardSuit, CardRank, PlayerStatus, PlayerActionType, HandStatus
 from app.pokertable.exceptions import GameLogicError
 
@@ -17,8 +17,10 @@ def deal_cards(players: List[Player]) -> List[Card]:
     players[0].player_status = PlayerStatus.ACTIVE
     return cards
 
-def get_next_player(players: List[Player], position: int, last_bet: Optional[int],handstatus: HandStatus,small_blind:int) -> Tuple[bool, int]:
-    next_position = (position + 1) % len(players)
+# return False if the hand go to the next status
+def get_next_player(hand: Hand, small_blind: int) -> bool:
+    players = hand.players
+    next_position = (hand.acting_player_position + 1) % len(hand.players)
     while players[next_position].player_status != PlayerStatus.ACTIVE:
         next_position = (next_position + 1) % len(players)
     if last_bet is None:

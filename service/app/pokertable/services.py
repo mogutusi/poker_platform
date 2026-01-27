@@ -45,8 +45,8 @@ async def process_action(room: Room, message: ClientMessage, user_nickname: str,
             message = await leave_room(room=room, user_nickname=user_nickname, db=db)
             yield message
         case PlayerActionMessage():
-            message = await player_action(room=room, user_nickname=user_nickname, message=message, db=db)
-            yield message
+            async for message in player_action(room=room, user_nickname=user_nickname, message=message, db=db):
+                yield message
         case _:
             raise GameLogicError(message="Invalid action")
 
@@ -111,6 +111,9 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
                 raise GameLogicError(message="Some players are not ready")
             if room.users_in_room[seat.nickname].user_status == UserStatus.READY_TO_PLAY:
                 ready_players_nicknames.append(((room.button_position + i) % len(room.seats),seat.nickname))
+            if seat.new_here:
+                room.new_player_seat_list.append((room.button_position + i) % len(room.seats))
+                seat.new_here = False
 
     if len(ready_players_nicknames) < 2:
         raise GameLogicError(message="Not enough players to start the hand")
@@ -177,7 +180,7 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
     room.hand.last_bet = 2 * room.small_blind
     message = HandStartedMessage(hand=room.hand, dead_blind=dead_blind)
     yield BroadcastTarget(message=message)
-    deal_cards(players=room.hand.players)
+    room.hand.deck = deal_cards(players=room.hand.players)
     for player in room.hand.players:
         message = HoleCardsMessage(cards=player.hole_cards)
         yield PersonalTarget(nickname=player.nickname, message=message)
@@ -268,7 +271,7 @@ async def leave_room(room: Room, user_nickname: str, db: DBsession) -> ServerRes
     message = UserLeaveRoomMessage(nickname=user_nickname, leave_type="leave_room")
     return BroadcastTarget(message=message)
 
-async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> ServerResponse:
+async def player_action(room: Room, user_nickname: str, message: PlayerActionMessage, db: DBsession) -> AsyncGenerator[ServerResponse, None]:
     if (room.status != RoomStatus.HAND_STARTED 
     and room.hand.acting_player_position is not None 
     and room.hand.players[room.hand.acting_player_position].nickname != user_nickname
@@ -287,19 +290,33 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
                 raise GameLogicError(message="Bet amount is required")
             if bet_amount <= hand.last_bet:
                 raise GameLogicError(message="Bet amount is less or equal to the last bet")
-            if bet_amount > player.points:
+            if bet_amount > player.points + player.bet_amount:
                 raise GameLogicError(message="Bet amount is greater than the player's points")
+            player.points -= bet_amount + player.bet_amount
             player.bet_amount = bet_amount
-            hand.pot += bet_amount
             hand.last_bet = bet_amount
-            if bet_amount == player.points:
+            if player.points == 0:
                 player.player_status = PlayerStatus.ALLIN
         case PlayerActionType.CHECK:
             if hand.last_bet is not None and hand.last_bet > 0:
                 raise GameLogicError(message="Cannot check after a bet")
-            
-            
+    if get_next_player(hand=hand, small_blind=room.small_blind):
+        message = PlayerActionBroadcast(
+            player=user_nickname, 
+            action=message.action, 
+            bet_amount=message.bet_amount, 
+            pot=room.hand.pot, 
+            next_acting_player=room.hand.players[room.hand.acting_player_position].nickname,
+        )
+        yield BroadcastTarget(message=message)    
+    else:
+        message = HandStageChangedMessage(
+            hand_status=hand.status,
+            community_cards=hand.deck[:3],
+            pot=hand.pot,
+            next_player=hand.players[hand.acting_player_position].nickname
+        )
+        yield BroadcastTarget(message=message)
     end_hand()
     get_next_player()
-    message = PlayerActionBroadcast(player=user_nickname, action=message.action, bet_amount=message.bet_amount, pot=room.hand.pot, next_acting_player=room.hand.players[room.hand.acting_player_position].nickname)
-    return BroadcastTarget(message=message)
+    

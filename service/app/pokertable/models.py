@@ -37,12 +37,15 @@ class Hand(BaseModel):
     turn_card: Optional[Card]
     river_card: Optional[Card]
 
+    @field_serializer("deck", when_used="json")
+    def hide_deck(self, value):
+        return None
 
 class Seat(BaseModel):
     nickname: str
     points: int
     in_game_points: int = Field(default=0,ge=0)
-
+    new_here: bool = Field(default=True)
 
 class Room(BaseModel):
     # user_nickname -> user_status
