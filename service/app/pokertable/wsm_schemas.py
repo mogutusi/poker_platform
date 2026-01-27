@@ -254,14 +254,6 @@ class HoleCardsMessage(BaseModel):
     cards: tuple[Card, Card]
 
 
-class BettingRoundStartedMessage(BaseModel):
-    type: Literal["betting_round_started"] = "betting_round_started"
-    hand_status: HandStatus
-    next_acting_player: str
-    pot: int
-    last_bet: Optional[int]
-
-
 class PlayerActionBroadcast(BaseModel):
     """玩家操作广播"""
     type: Literal["player_action_broadcast"] = "player_action_broadcast"
@@ -273,13 +265,13 @@ class PlayerActionBroadcast(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
-class HandStageChangedMessage(BaseModel):
-    """手牌阶段变化（发公共牌）"""
-    type: Literal["hand_stage_changed"] = "hand_stage_changed"
+class HandStatusChangedMessage(BaseModel):
+    type: Literal["hand_status_changed"] = "hand_status_changed"
     hand_status: HandStatus
-    community_cards: List[Card]
+    community_cards: Optional[List[Card]]
     pot: int
-    next_player: str
+    next_acting_player: str
+    last_bet: Optional[int]
 
 
 class HandEndedMessage(BaseModel):
@@ -327,9 +319,8 @@ ServerMessage = Annotated[
         RoomStatusChangedMessage,
         HandStartedMessage,
         HoleCardsMessage,
-        BettingRoundStartedMessage,
         PlayerActionBroadcast,
-        HandStageChangedMessage,
+        HandStatusChangedMessage,
         HandEndedMessage,
         ChatBroadcast,
         ErrorMessage,

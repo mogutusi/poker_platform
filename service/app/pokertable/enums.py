@@ -15,15 +15,16 @@ class HandStatus(StrEnum):
     SHOWDOWN = "showdown"
     ENDING = "ending"
 
-    # _HAND_STATUS_SEQUENCE: Tuple["HandStatus"] = ( PRE_FLOP, FLOP, TURN, RIVER, SHOWDOWN)
-
     @property
     def next_status(self) -> Optional["HandStatus"]:
-        if self not in self._HAND_STATUS_SEQUENCE:
-            return None
-        if self == self._HAND_STATUS_SEQUENCE[-1]:
-            return HandStatus.ENDING
-        return self._HAND_STATUS_SEQUENCE[self._HAND_STATUS_SEQUENCE.index(self) + 1]
+        translation_map = {
+            HandStatus.READY_TO_START: HandStatus.PRE_FLOP,
+            HandStatus.PRE_FLOP: HandStatus.FLOP,
+            HandStatus.FLOP: HandStatus.TURN,
+            HandStatus.TURN: HandStatus.RIVER,
+            HandStatus.RIVER: HandStatus.SHOWDOWN,
+        }
+        return translation_map.get(self, None)
 
 class PlayerActionType(StrEnum):
     FOLD = "fold"

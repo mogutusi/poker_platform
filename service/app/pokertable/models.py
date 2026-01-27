@@ -16,7 +16,7 @@ class Player(BaseModel):
     points: int
     hole_cards: Optional[Tuple[Card, Card]] = Field(default=None)
     # round total bet amount
-    bet_amount: Optional[int] = Field(default=0,ge=0)
+    bet_amount: int = Field(default=0,ge=0)
     seat_position: int
 
     @field_serializer("hole_cards", when_used="json")
@@ -29,7 +29,7 @@ class Hand(BaseModel):
     players: Optional[List[Player]]
     # players[acting_player_position] is the acting player
     acting_player_position: Optional[int] = Field(default=None)
-    last_bet: Optional[int] = Field(default=None)
+    last_bet: int = Field(default=0,ge=0)
     deck: Optional[List[Card]]
     pot: int = Field(default=0,ge=0)
     start_time: Optional[datetime]

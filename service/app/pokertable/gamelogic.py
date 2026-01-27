@@ -17,13 +17,17 @@ def deal_cards(players: List[Player]) -> List[Card]:
     players[0].player_status = PlayerStatus.ACTIVE
     return cards
 
-# return False if the hand go to the next status
-def get_next_player(hand: Hand, small_blind: int) -> bool:
+# return True if the hand go to the next status
+def get_next_player(hand: Hand, small_blind: int) -> Tuple[bool, int]:
     players = hand.players
-    next_position = (hand.acting_player_position + 1) % len(hand.players)
-    while players[next_position].player_status != PlayerStatus.ACTIVE:
-        next_position = (next_position + 1) % len(players)
-    if last_bet is None:
+    next_position = -1
+    for i in range(len(players)):
+        if players[(hand.acting_player_position + i) % len(players)].player_status == PlayerStatus.ACTIVE:
+            next_position = (hand.acting_player_position + i) % len(players)
+            break
+    if next_position == -1:
+        return True, -1
+    if hand.last_bet == 0:
         first_player = -1
         for player in players:
             first_player+=1
@@ -32,9 +36,10 @@ def get_next_player(hand: Hand, small_blind: int) -> bool:
         if first_player == next_position:
             return True,first_player
         return False,next_position
-    if players[next_position].bet_amount == last_bet:
-        if handstatus == HandStatus.PRE_FLOP and next_position==1:
-            if 2 * small_blind == last_bet:
+    if players[next_position].bet_amount == hand.last_bet:
+        ## BB preflop Optional action
+        if hand.handstatus == HandStatus.PRE_FLOP and next_position==1:
+            if 2 * small_blind == hand.last_bet:
                 return False,next_position
         first_player = -1
         for player in players:
@@ -44,17 +49,10 @@ def get_next_player(hand: Hand, small_blind: int) -> bool:
         return True,first_player
     return False,next_position
 
-def end_hand(room: Room) -> bool:
-    active_players = 0
-    allin_players = 0
-    for player in room.hand.players:
+def end_round(hand: Hand) -> bool:
+    players = hand.players
+    for player in players:
         if player.player_status == PlayerStatus.ACTIVE:
-            active_players += 1
-        if player.player_status == PlayerStatus.ALLIN:
-            allin_players += 1
-    if active_players == 1 and allin_players == 0:
-        return True
-    if active_players == 0:
-        return True
-    return False
+            return False
+    return True
 
