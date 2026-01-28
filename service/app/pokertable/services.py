@@ -155,6 +155,7 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
         players=players,
         start_time=datetime.now(),
         last_bet=2 * room.small_blind,
+        pots={},
     )
     message = RoomStatusChangedMessage(room_status=room.status, changed_by=user_nickname)
     yield BroadcastTarget(message=message)
@@ -164,6 +165,8 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
         room.hand.acting_player_position = 2 
         room.hand.players[0].points -= room.small_blind
         room.hand.players[0].bet_amount = room.small_blind
+        room.hand.pots[room.hand.players[0].nickname] = room.small_blind
+        room.hand.pots[room.hand.players[1].nickname] = 2*room.small_blind
         if dead_blind == -1:
             room.hand.players[1].points -= 2 * room.small_blind
             room.hand.players[1].bet_amount = 2 * room.small_blind
@@ -180,7 +183,6 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
         room.hand.players[0].player_status = PlayerStatus.ALLIN
     if room.hand.players[1].points == 0:
         room.hand.players[1].player_status = PlayerStatus.ALLIN
-    room.hand.pot = 3 * room.small_blind
     room.hand.last_bet = 2 * room.small_blind
     message = HandStartedMessage(hand=room.hand, dead_blind=dead_blind)
     yield BroadcastTarget(message=message)
@@ -191,7 +193,7 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
     message = HandStatusChangedMessage(
         hand_status=room.hand.status, 
         community_cards=None,
-        pot=room.hand.pot,
+        pot=room.hand.pots.values().sum(),
         next_acting_player=room.hand.players[room.hand.acting_player_position].nickname,
         last_bet=room.hand.last_bet
     )
@@ -283,63 +285,55 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
     ):
         raise GameLogicError(message="Not the acting player")
     hand = room.hand
-    player = hand.players[hand.acting_player_position]
-    match message.action:
-        case PlayerActionType.FOLD:
-            player.player_status = PlayerStatus.FOLDED
-            
-        case PlayerActionType.BET:
-            bet_amount = message.bet_amount
-            if bet_amount is None:
-                raise GameLogicError(message="Bet amount is required")
-            if bet_amount > player.points + player.bet_amount:
-                raise GameLogicError(message="Bet amount is greater than the player's points")
-            if bet_amount < hand.last_bet:
-                if bet_amount == player.points + player.bet_amount:
-                    player.player_status = PlayerStatus.ALLIN
-                    player.points = 0
-                    player.bet_amount = bet_amount
-                else:
-                    raise GameLogicError(message="Bet amount is less than the last bet")
-            else:
-                player.points = player.points - bet_amount + player.bet_amount
-                player.bet_amount = bet_amount
-                hand.last_bet = bet_amount
-                if player.points == 0:
-                    player.player_status = PlayerStatus.ALLIN
-        case PlayerActionType.CHECK:
-            if hand.last_bet is not None and hand.last_bet > 0:
-                raise GameLogicError(message="Cannot check after a bet")
+    do_action(message=message, hand=hand, player=hand.players[hand.acting_player_position])
 
     # go next round or end hand
     go_next, next_player_position = get_next_player(hand=hand, small_blind=room.small_blind)
-    if go_next:
+    if not go_next:
+        hand.next_player_position = next_player_position
         message = PlayerActionBroadcast(
             player=user_nickname, 
             action=message.action, 
             bet_amount=message.bet_amount, 
-            pot=hand.pot, 
+            pot=hand.pots.values().sum(), 
+            next_acting_player=hand.players[next_player_position].nickname,
         )
         yield BroadcastTarget(message=message)
-        active_player_num = 0
-        notfold_player_num = 0
+    else:
+        message = PlayerActionBroadcast(
+            player=user_nickname, 
+            action=message.action, 
+            bet_amount=message.bet_amount, 
+            pot=hand.pots.values().sum(), 
+        )
+        yield BroadcastTarget(message=message)
+        active_player_list = []
+        notfold_player_list = []
         for player in hand.players:
-            hand.pot += player.bet_amount
+            hand.pots[player.nickname] += player.bet_amount
             player.points -= player.bet_amount
             if player.player_status == PlayerStatus.ACTIVE:
-                active_player_num += 1
+                active_player_list.append(player)
             if player.player_status != PlayerStatus.FOLDED:
-                notfold_player_num += 1
-        if active_player_num == 1:
-            if notfold_player_num == 1:
-                external_message = end_hand()
+                notfold_player_list.append(player)
+        if len(active_player_list) == 1:
+            if len(notfold_player_list) == 1:
+                external_message = await end_hand()
+                yield BroadcastTarget(message=external_message)
             else:
                 external_message = show_down()
-        if active_player_num == 0:
+                yield BroadcastTarget(message=external_message)
+        if len(active_player_list) == 0:
             external_message = show_down()
-            
+            yield BroadcastTarget(message=external_message)
+
+        # go next round but don't end the hand
         else:
             hand.status = hand.status.next_status
+            if hand.status == HandStatus.SHOWDOWN:
+                external_message = show_down()
+                yield BroadcastTarget(message=external_message)
+                return
             community_cards = None
             if hand.status == HandStatus.FLOP:
                 community_cards = []
@@ -352,23 +346,33 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
             elif hand.status == HandStatus.RIVER:
                 community_cards = hand.deck.pop()
                 hand.river_card = community_cards
+
+            hand.acting_player_position = next_player_position
             message = HandStatusChangedMessage(
                 hand_status=hand.status,
                 community_cards=community_cards,
-                pot=hand.pot,
+                pot=hand.pots.values().sum(),
                 next_acting_player=hand.players[next_player_position].nickname,
                 last_bet=hand.last_bet
             )
             yield BroadcastTarget(message=message)
-        hand.acting_player_position = next_player_position
-    else:
-        hand.next_player_position = next_player_position
-        message = PlayerActionBroadcast(
-            player=user_nickname, 
-            action=message.action, 
-            bet_amount=message.bet_amount, 
-            pot=hand.pot, 
-            next_acting_player=hand.players[next_player_position].nickname,
-        )
-        yield BroadcastTarget(message=message)
-        
+            
+
+async def end_hand(room: Room, active_player: Optional[Player], notfold_player_list: list[Player], db: DBsession) -> ServerResponse:
+    room.hand.status = HandStatus.ENDING
+    hand = room.hand
+    winner = get_winner(hand=hand,active_player=active_player,notfold_player_list=notfold_player_list)
+    winner_pot = {}
+    hand.pots.sort(key=lambda x: x[1], reverse=True)
+    for player in winner:
+        winner_pot[player.nickname] = hand.pots[player.nickname]
+    return BroadcastTarget(message=message)
+
+async def show_down(room: Room) -> ServerResponse:
+    if room.hand is None:
+        raise GameLogicError(message="No hand to show down")
+    if room.hand.status != HandStatus.READY_TO_START:
+        raise GameLogicError(message="Invalid status change")
+    room.hand.status = HandStatus.SHOW_DOWN
+    message = HandShowDownMessage(hand=room.hand)
+    return BroadcastTarget(message=message)

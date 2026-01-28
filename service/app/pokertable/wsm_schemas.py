@@ -268,10 +268,10 @@ class PlayerActionBroadcast(BaseModel):
 class HandStatusChangedMessage(BaseModel):
     type: Literal["hand_status_changed"] = "hand_status_changed"
     hand_status: HandStatus
-    community_cards: Optional[List[Card]]
-    pot: int
-    next_acting_player: str
-    last_bet: Optional[int]
+    community_cards: Optional[List[Card]] = Field(default=None)
+    pot: int 
+    next_acting_player: str 
+    last_bet: Optional[int] = Field(default=None)
 
 
 class HandEndedMessage(BaseModel):

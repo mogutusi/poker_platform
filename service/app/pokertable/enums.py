@@ -32,25 +32,25 @@ class PlayerActionType(StrEnum):
     CHECK = "check"
 
 class CardSuit(StrEnum):
-    HEARTS = "hearts"
-    DIAMONDS = "diamonds"
-    CLUBS = "clubs"
-    SPADES = "spades"
+    HEARTS = "h"
+    DIAMONDS = "d"
+    CLUBS = "c"
+    SPADES = "s"
 
-class CardRank(IntEnum):
-    TWO = 2
-    THREE = 3
-    FOUR = 4
-    FIVE = 5
-    SIX = 6
-    SEVEN = 7
-    EIGHT = 8
-    NINE = 9
-    TEN = 10
-    JACK = 11
-    QUEEN = 12
-    KING = 13
-    ACE = 14
+class CardRank(StrEnum):
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FIVE = "5"
+    SIX = "6"
+    SEVEN = "7"
+    EIGHT = "8"
+    NINE = "9"
+    TEN = "T"
+    JACK = "J"
+    QUEEN = "Q"
+    KING = "K"
+    ACE = "A"
 
 class UserStatus(StrEnum):
     WATCHING = "watching"

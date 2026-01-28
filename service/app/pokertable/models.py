@@ -9,6 +9,9 @@ from app.pokertable.gameconfig import gameconfig
 class Card(BaseModel):
     suit: CardSuit
     rank: CardRank
+
+    def to_treys_card(self) -> str:
+        return self.rank+self.suit
     
 class Player(BaseModel):
     nickname: str
@@ -31,11 +34,13 @@ class Hand(BaseModel):
     acting_player_position: Optional[int] = Field(default=None)
     last_bet: int = Field(default=0,ge=0)
     deck: Optional[List[Card]]
-    pot: int = Field(default=0,ge=0)
+    # player_nickname -> this hand's bet_amount
+    pots: Dict[str, int]
     start_time: Optional[datetime]
     flop_cards: Optional[Tuple[Card, Card, Card]]
     turn_card: Optional[Card]
     river_card: Optional[Card]
+
 
     @field_serializer("deck", when_used="json")
     def hide_deck(self, value):

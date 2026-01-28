@@ -854,6 +854,18 @@ typing-extensions = {version = ">=4.10.0", markers = "python_version < \"3.13\""
 full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
 
 [[package]]
+name = "treys"
+version = "0.1.8"
+description = "treys is a pure Python poker hand evaluation library"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "treys-0.1.8-py3-none-any.whl", hash = "sha256:9ba3460ff2ed597510fb535af6280f115254b0b70699ea362f8f1ee067378063"},
+    {file = "treys-0.1.8.tar.gz", hash = "sha256:a486a42b899e91985b4da4fdac9a30e638275648977104487acb90a2dd7cd73b"},
+]
+
+[[package]]
 name = "ttxsgm"
 version = "0.1.0"
 description = ""
@@ -1012,4 +1024,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "9386984bb0e5a9e6bc5467d53355d9ea5e74880bd51b042920bc8a5518305fec"
+content-hash = "7b8b5da12b620a03f176b34c6dc647952c6cdebd1ba492dadccc1c8b6481bf4e"
