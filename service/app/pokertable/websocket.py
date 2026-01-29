@@ -8,6 +8,7 @@ from app.pokertable.models import Player, Room, Hand, PlayerAction
 from app.pokertable.services import process_action, only_room_name
 from app.pokertable.enums import UserStatus, HandStatus, RoomStatus
 from app.user.models import User
+from app.pokertable.gameconfig import gameconfig
 from app.database.core import DBsession, AsyncSessionLocal 
 from app.pokertable.wsm_schemas import (HoleCardsMessage, parse_client_message, BroadcastTarget, PersonalTarget, serialize_server_message, UserOnlineMessage, UserOfflineMessage, 
     RoomStateMessage, UserStatusChangedMessage, UserLeaveRoomMessage)
@@ -31,6 +32,8 @@ class GameRoom:
                 users_in_room={}, 
             )
             self.connections[room_name] = {}
+        if self.rooms[room_name].status == RoomStatus.HAND_ENDED:
+            raise GameLogicError(message="Hand ended, cannot join the room")
         if user_nickname in self.rooms[room_name].users_in_room.keys():
             if self.rooms[room_name].users_in_room[user_nickname] != UserStatus.OFFLINE:
                 raise GameLogicError(message="User is already in the room")
@@ -68,7 +71,7 @@ class GameRoom:
                     del self.connections[room_name][user_nickname]
                     message = UserOfflineMessage(nickname=user_nickname)
                     await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
-                    task = asyncio.create_task(self.delayed_cleanup(999,room_name=room_name, user_nickname=user_nickname))
+                    task = asyncio.create_task(self.delayed_cleanup(999999,room_name=room_name, user_nickname=user_nickname))
                     self.disconnect_tasks[room_name][user_nickname] = task
                 elif user_status == UserStatus.READY_TO_PLAY or user_status == UserStatus.SITTING_IN:
                     for i in range(len(self.rooms[room_name].seats)):
@@ -79,14 +82,14 @@ class GameRoom:
                     user_status = UserStatus.OFFLINE
                     message = UserOfflineMessage(nickname=user_nickname)
                     await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
-                    task = asyncio.create_task(self.delayed_cleanup(15,room_name=room_name, user_nickname=user_nickname, seat_number=seat_number))
+                    task = asyncio.create_task(self.delayed_cleanup(gameconfig.OFFLINE_DELAY_TIME,room_name=room_name, user_nickname=user_nickname, seat_number=seat_number))
                     self.disconnect_tasks[room_name][user_nickname] = task
                 else:
                     del self.connections[room_name][user_nickname]
                     user_status = UserStatus.OFFLINE
                     message = UserOfflineMessage(nickname=user_nickname)
                     await self.room_broadcast(message=serialize_server_message(message), room_name=room_name)
-                    task = asyncio.create_task(self.delayed_cleanup(15,room_name=room_name, user_nickname=user_nickname))
+                    task = asyncio.create_task(self.delayed_cleanup(gameconfig.OFFLINE_DELAY_TIME,room_name=room_name, user_nickname=user_nickname))
                     self.disconnect_tasks[room_name][user_nickname] = task
                     
 
@@ -166,6 +169,14 @@ async def handle_websocket(websocket: WebSocket, user_nickname: str, room_name: 
                         game_room.disconnect_tasks.pop(room_name, None)
                     break
     except GameLogicError as e:
-        await websocket.send_text(serialize_server_message(ErrorMessage(error_code="GAME_LOGIC_ERROR", message=str(e))))
+        if e.message == "Hand ended, clear offline players":
+            for user_nickname, user_status in game_room.rooms[room_name].users_in_room.items():
+                if user_status == UserStatus.OFFLINE and game_room.rooms[room_name].disconnect_snapshot[user_nickname] == UserStatus.PLAYING:
+                    game_room.disconnect_tasks[room_name][user_nickname].cancel()
+                    game_room.disconnect_tasks[room_name][user_nickname] = UserStatus.SITTING_OUT
+                    await game_room.delayed_cleanup(gameconfig.OFFLINE_DELAY_TIME,room_name=room_name, user_nickname=user_nickname)
+            game_room.rooms[room_name].status = RoomStatus.PENDING_START
+        else:
+            await websocket.send_text(serialize_server_message(ErrorMessage(error_code="GAME_LOGIC_ERROR", message=str(e))))
     except WebSocketDisconnect:
         await game_room.disconnect(room_name=room_name, user_nickname=user_nickname, db=db)

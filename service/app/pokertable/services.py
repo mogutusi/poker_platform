@@ -8,6 +8,7 @@ from app.pokertable.exceptions import GameLogicError
 from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat, Card
 from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType, PlayerStatus
 from app.user.models import User
+from app.handrecord.models import HandRecord, HandParticipants
 from app.pokertable.wsm_schemas import (
     ClientMessage, ServerMessage,
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
@@ -367,12 +368,45 @@ async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession)
     message = HandEndedMessage(total_pot=total_pot, pot_distribution=winner_pot)
     yield BroadcastTarget(message=message)
 
+    points_change = []
     for player in hand.players:
-        room.seats[player.seat_position].points += player.points
-        points_change = room.seats[player.seat_position].in_game_points - player.points
-        room.seats[player.seat_position].in_game_points = 0
-        
-    
+        seat = room.seats[player.seat_position]
+        seat.points += player.points
+        points_change.append([player.nickname,seat.in_game_points - player.points])
+        seat.in_game_points = 0
+        if room.users_in_room[player.nickname] == UserStatus.PLAYING:
+            room.users_in_room[player.nickname] = UserStatus.SITTING_IN
+
+    # update db hand record
+    hand_record = HandRecord(
+        start_time=hand.start_time,
+        end_time=datetime.now(),
+        final_pot=total_pot
+    )
+    db.add(hand_record)
+    await db.flush()
+    statement = (
+        select(User)
+        .where(User.nickname.in_([player.nickname for player in hand.players]))
+    )
+    result = await db.exec(statement)
+    users = result.all()
+    participants = [
+        HandParticipants(
+            hand_id=hand_record.id,
+            player_id=user.id,
+            initial_points=user.points,
+            final_points=user.points
+        )
+        for user in users
+    ]
+    db.add_all(participants)
+    await db.commit()
+
+    # update status
+    room.hand = None
+    room.status = RoomStatus.PENDING_START
+    raise GameLogicError(message="Hand ended, clear offline players")
 
 async def show_down(room: Room) -> ServerResponse:
     if room.hand is None:
