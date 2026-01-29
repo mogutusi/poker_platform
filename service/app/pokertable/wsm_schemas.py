@@ -1,4 +1,4 @@
-from typing import Literal, Union, Optional, List, Annotated
+from typing import Literal, Union, Optional, List, Annotated, Tuple, Dict
 from pydantic import BaseModel, Field, Discriminator
 from datetime import datetime
 
@@ -251,7 +251,7 @@ class HandStartedMessage(BaseModel):
 
 class HoleCardsMessage(BaseModel):
     type: Literal["hole_cards"] = "hole_cards"
-    cards: tuple[Card, Card]
+    cards: Tuple[Card, Card]
 
 
 class PlayerActionBroadcast(BaseModel):
@@ -277,10 +277,10 @@ class HandStatusChangedMessage(BaseModel):
 class HandEndedMessage(BaseModel):
     """手牌结束"""
     type: Literal["hand_ended"] = "hand_ended"
-    winners: List[str]
-    pot_distribution: dict[str, int]
-    final_board: List[Card]
-    showdown_hands: Optional[dict[str, tuple[Card, Card]]]  
+    total_pot: int
+    pot_distribution: Dict[str, int]
+
+
 
 
 class ChatBroadcast(BaseModel):

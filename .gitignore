@@ -16,5 +16,6 @@ original_password.txt
 pokertable_files.txt
 
 test.py
+test_winner_pot.py
 asyncioExample.py
 *.json

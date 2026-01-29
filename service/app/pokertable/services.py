@@ -1,11 +1,11 @@
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, List
 from sqlmodel import select
 from datetime import datetime
 
 from app.database.core import DBsession
-from app.pokertable.gamelogic import get_next_player, only_room_name, get_blind, deal_cards, do_action
+from app.pokertable.gamelogic import get_next_player, only_room_name, get_blind, deal_cards, do_action, get_winner_pot
 from app.pokertable.exceptions import GameLogicError
-from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat
+from app.pokertable.models import Room, Hand, Player, PlayerAction, Seat, Card
 from app.pokertable.enums import UserStatus, RoomStatus, HandStatus, PlayerActionType, PlayerStatus
 from app.user.models import User
 from app.pokertable.wsm_schemas import (
@@ -13,7 +13,7 @@ from app.pokertable.wsm_schemas import (
     StartHandMessage, SetSmallBlindMessage, SetBuyInMessage, SetUserStatusMessage, PlayerActionMessage,
     HandStartedMessage, HoleCardsMessage, RoomStatusChangedMessage, SmallBlindSetMessage, BuyInSetMessage, UserStatusChangedMessage, HandStatusChangedMessage,
     BroadcastTarget, PersonalTarget, ServerResponse, SitdownMessage, UserSitdownMessage, BuyInMessage, PlayerBuyInMessage, LeaveRoomMessage , UserLeaveRoomMessage,
-    PlayerActionBroadcast
+    PlayerActionBroadcast, HandEndedMessage, HandShowDownMessage
 )
 
 def only_room_name(room_name: str):
@@ -316,21 +316,16 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
                 active_player_list.append(player)
             if player.player_status != PlayerStatus.FOLDED:
                 notfold_player_list.append(player)
-        if len(active_player_list) == 1:
+        if len(active_player_list) <= 1:
             if len(notfold_player_list) == 1:
                 external_message = await end_hand()
                 yield BroadcastTarget(message=external_message)
             else:
                 external_message = show_down()
                 yield BroadcastTarget(message=external_message)
-        if len(active_player_list) == 0:
-            external_message = show_down()
-            yield BroadcastTarget(message=external_message)
-
         # go next round but don't end the hand
         else:
-            hand.status = hand.status.next_status
-            if hand.status == HandStatus.SHOWDOWN:
+            if hand.status == HandStatus.RIVER:
                 external_message = show_down()
                 yield BroadcastTarget(message=external_message)
                 return
@@ -358,15 +353,26 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
             yield BroadcastTarget(message=message)
             
 
-async def end_hand(room: Room, active_player: Optional[Player], notfold_player_list: list[Player], db: DBsession) -> ServerResponse:
+async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession) -> AsyncGenerator[ServerResponse, None]:
+    room.status = RoomStatus.HAND_ENDED
     room.hand.status = HandStatus.ENDING
     hand = room.hand
-    winner = get_winner(hand=hand,active_player=active_player,notfold_player_list=notfold_player_list)
-    winner_pot = {}
-    hand.pots.sort(key=lambda x: x[1], reverse=True)
-    for player in winner:
-        winner_pot[player.nickname] = hand.pots[player.nickname]
-    return BroadcastTarget(message=message)
+    total_pot = hand.pots.values().sum()
+    if len(notfold_player_list) == 1:
+        winner = notfold_player_list[0]
+        winner_pot = {winner.nickname: total_pot}
+    else:
+        winner_pot = get_winner_pot(hand=hand, notfold_player_list=notfold_player_list)
+    
+    message = HandEndedMessage(total_pot=total_pot, pot_distribution=winner_pot)
+    yield BroadcastTarget(message=message)
+
+    for player in hand.players:
+        room.seats[player.seat_position].points += player.points
+        points_change = room.seats[player.seat_position].in_game_points - player.points
+        room.seats[player.seat_position].in_game_points = 0
+        
+    
 
 async def show_down(room: Room) -> ServerResponse:
     if room.hand is None:

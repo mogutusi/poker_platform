@@ -33,10 +33,10 @@ class Hand(BaseModel):
     # players[acting_player_position] is the acting player
     acting_player_position: Optional[int] = Field(default=None)
     last_bet: int = Field(default=0,ge=0)
-    deck: Optional[List[Card]]
+    deck: Optional[List[Card]] = Field(default=None)
     # player_nickname -> this hand's bet_amount
     pots: Dict[str, int]
-    start_time: Optional[datetime]
+    start_time: Optional[datetime] = Field(default_factory=datetime.now)
     flop_cards: Optional[Tuple[Card, Card, Card]]
     turn_card: Optional[Card]
     river_card: Optional[Card]
