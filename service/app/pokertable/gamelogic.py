@@ -28,17 +28,13 @@ def get_next_player(hand: Hand, small_blind: int) -> Tuple[bool, int]:
     players = hand.players
     next_position = -1
     for i in range(len(players)):
-        if players[(hand.acting_player_position + i) % len(players)].player_status == PlayerStatus.ACTIVE:
-            next_position = (hand.acting_player_position + i) % len(players)
+        if players[(hand.acting_player_position + 1 + i) % len(players)].player_status == PlayerStatus.ACTIVE:
+            next_position = (hand.acting_player_position + 1 + i) % len(players)
             break
     if next_position == -1:
         return True, -1
     if hand.last_bet == 0:
-        first_player = -1
-        for player in players:
-            first_player+=1
-            if player.player_status == PlayerStatus.ACTIVE:
-                break
+        first_player = next((i for i, p in enumerate(players) if p.player_status == PlayerStatus.ACTIVE), 0)
         if first_player == next_position:
             return True,first_player
         return False,next_position
@@ -47,17 +43,15 @@ def get_next_player(hand: Hand, small_blind: int) -> Tuple[bool, int]:
         if hand.handstatus == HandStatus.PRE_FLOP and next_position==1:
             if 2 * small_blind == hand.last_bet:
                 return False,next_position
-        first_player = -1
-        for player in players:
-            first_player+=1
-            if player.player_status == PlayerStatus.ACTIVE:
-                break
+        first_player = next((i for i, p in enumerate(players) if p.player_status == PlayerStatus.ACTIVE), 0)
         return True,first_player
     return False,next_position
 
 def do_action(message: PlayerActionMessage, hand: Hand, player: Player) -> None:
     match message.action:
         case PlayerActionType.FOLD:
+            if hand.last_bet == 0:
+                raise GameLogicError(message="Why not check?")
             player.player_status = PlayerStatus.FOLDED
             
         case PlayerActionType.BET:

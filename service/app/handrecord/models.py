@@ -56,7 +56,12 @@ class HandRecordReadPagination(BaseModel):
     page: int
     total: int
 
-class MyHandRecordRead(BaseModel):
+class PersonalHandRecordRequest(BaseModel):
+    user_nickname: str
+    itemperpage: int
+    page: int
+
+class PersonalHandRecordRead(BaseModel):
     hand_id: int
     start_time: datetime
     end_time: datetime
@@ -64,8 +69,8 @@ class MyHandRecordRead(BaseModel):
     initial_points: int
     final_points: int
 
-class MyHandRecordReadPagination(BaseModel):
-    hand_records: list[MyHandRecordRead]
+class PersonalHandRecordReadPagination(BaseModel):
+    hand_records: list[PersonalHandRecordRead]
     itemperpage: int
     page: int
     total: int

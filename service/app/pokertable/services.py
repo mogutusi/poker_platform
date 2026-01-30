@@ -1,3 +1,4 @@
+import tempfile
 from typing import Optional, Dict, Any, AsyncGenerator, List
 from sqlmodel import select
 from datetime import datetime
@@ -319,30 +320,32 @@ async def player_action(room: Room, user_nickname: str, message: PlayerActionMes
                 notfold_player_list.append(player)
         if len(active_player_list) <= 1:
             if len(notfold_player_list) == 1:
-                external_message = await end_hand()
-                yield BroadcastTarget(message=external_message)
+                async for external_message in end_hand(room=room, notfold_player_list=notfold_player_list, db=db):
+                    yield external_message
             else:
-                external_message = show_down()
-                yield BroadcastTarget(message=external_message)
+                async for external_message in show_down(room=room, notfold_player_list=notfold_player_list, db=db):
+                    yield external_message
         # go next round but don't end the hand
         else:
             if hand.status == HandStatus.RIVER:
-                external_message = show_down()
-                yield BroadcastTarget(message=external_message)
+                async for external_message in show_down(room=room, notfold_player_list=notfold_player_list, db=db):
+                    yield external_message
                 return
             community_cards = None
             if hand.status == HandStatus.FLOP:
-                community_cards = []
+                temp = []
                 for _ in range(3):
-                    community_cards.append(hand.deck.pop())
-                hand.flop_cards = tuple(community_cards)
+                    temp.append(hand.deck.pop())
+                hand.flop_cards = tuple(temp)
+                community_cards = {"flop": temp}
             elif hand.status == HandStatus.TURN:
-                community_cards = hand.deck.pop()
+                temp = hand.deck.pop()
                 hand.turn_card = community_cards
+                community_cards = {"turn": [temp]}
             elif hand.status == HandStatus.RIVER:
-                community_cards = hand.deck.pop()
-                hand.river_card = community_cards
-
+                temp = hand.deck.pop()
+                hand.river_card = temp
+                community_cards = {"river": [temp]}
             hand.acting_player_position = next_player_position
             message = HandStatusChangedMessage(
                 hand_status=hand.status,
@@ -368,11 +371,11 @@ async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession)
     message = HandEndedMessage(total_pot=total_pot, pot_distribution=winner_pot)
     yield BroadcastTarget(message=message)
 
-    points_change = []
+    points_change = {}
     for player in hand.players:
         seat = room.seats[player.seat_position]
+        points_change[player.nickname] = [seat.in_game_points,player.points]
         seat.points += player.points
-        points_change.append([player.nickname,seat.in_game_points - player.points])
         seat.in_game_points = 0
         if room.users_in_room[player.nickname] == UserStatus.PLAYING:
             room.users_in_room[player.nickname] = UserStatus.SITTING_IN
@@ -395,8 +398,8 @@ async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession)
         HandParticipants(
             hand_id=hand_record.id,
             player_id=user.id,
-            initial_points=user.points,
-            final_points=user.points
+            initial_points=points_change[user.nickname][0],
+            final_points=points_change[user.nickname][1]
         )
         for user in users
     ]
@@ -408,11 +411,23 @@ async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession)
     room.status = RoomStatus.PENDING_START
     raise GameLogicError(message="Hand ended, clear offline players")
 
-async def show_down(room: Room) -> ServerResponse:
-    if room.hand is None:
-        raise GameLogicError(message="No hand to show down")
-    if room.hand.status != HandStatus.READY_TO_START:
-        raise GameLogicError(message="Invalid status change")
-    room.hand.status = HandStatus.SHOW_DOWN
-    message = HandShowDownMessage(hand=room.hand)
-    return BroadcastTarget(message=message)
+async def show_down(room: Room,notfold_player_list: List[Player],db: DBsession) -> AsyncGenerator[ServerResponse, None]:
+    hand = room.hand
+    if hand.status == HandStatus.PRE_FLOP:
+        hand.flop_cards = tuple([hand.deck.pop() for _ in range(3)])
+        hand.status = hand.status.next_status
+    if hand.status == HandStatus.FLOP:
+        hand.turn_card = hand.deck.pop()
+        hand.status = hand.status.next_status
+    if hand.status == HandStatus.TURN:
+        hand.river_card = hand.deck.pop()
+        hand.status = hand.status.next_status
+    community_cards = list(hand.flop_cards).extend([hand.turn_card, hand.river_card])
+
+    show_down_player_hole_cards = {player.nickname: player.hole_cards for player in notfold_player_list}
+
+    message = HandShowDownMessage(community_cards=community_cards, show_down_player_hole_cards=show_down_player_hole_cards)
+    yield BroadcastTarget(message=message)
+
+    async for external_message in end_hand(room=room, notfold_player_list=notfold_player_list, db=db):
+        yield external_message

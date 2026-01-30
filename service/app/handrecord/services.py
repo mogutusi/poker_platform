@@ -3,7 +3,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 from typing import List
 
-from app.handrecord.models import  HandRecordReadPagination, HandRecord, HandParticipants,HandParticipantsRead, MyHandRecordReadPagination, MyHandRecordRead
+from app.user.models import User
+from app.handrecord.models import  HandRecordReadPagination, HandRecord, HandParticipants,HandParticipantsRead, PersonalHandRecordReadPagination, PersonalHandRecordRead
 from app.database.core import DBsession
 
 async def handrecord_get(itemperpage: int, page: int, db: DBsession) -> HandRecordReadPagination:
@@ -20,12 +21,17 @@ async def handrecord_get(itemperpage: int, page: int, db: DBsession) -> HandReco
     return HandRecordReadPagination(hand_records=handrecord, itemperpage=itemperpage, page=page, total=total_count)
 
 async def handrecord_get_detail(hand_id: int, db: DBsession) -> List[HandParticipantsRead]:
-    handdetail = await db.exec(
-        select(HandParticipants)
-        .options(selectinload(HandParticipants.player))
+    statement = (
+        select(
+            User.nickname,
+            HandParticipants.initial_points,
+            HandParticipants.final_points
+        )
+        .join(HandParticipants.player)
         .where(HandParticipants.hand_id == hand_id)
     )
-    handdetail = handdetail.all()
+    result = await db.exec(statement)
+    handdetail = result.all()
     handdetail_list: List[HandParticipantsRead] = [
         HandParticipantsRead(
             nickname=participant.player.nickname,
@@ -36,29 +42,33 @@ async def handrecord_get_detail(hand_id: int, db: DBsession) -> List[HandPartici
     ]
     return handdetail_list
 
-async def handrecord_get_my_record(user_id: int,itemperpage: int, page: int, db: DBsession) -> MyHandRecordReadPagination:
-    total_count = await db.scalar(
-        select(func.count(HandParticipants.hand_id))
-        .where(HandParticipants.player_id == user_id)
+async def handrecord_get_personal_record(user_nickname: str,itemperpage: int, page: int, db: DBsession) -> PersonalHandRecordReadPagination:
+    count_statement = (
+        select(func.count())
+        .select_from(HandParticipants)
+        .join(User, HandParticipants.player_id == User.id)
+        .where(User.nickname == user_nickname)
     )
-    handrecord = await db.exec(
-        select(HandParticipants,HandRecord)
-        .join(HandRecord, HandParticipants.hand_id == HandRecord.id)
-        .where(HandParticipants.player_id == user_id)
+    total_count = await db.scalar(count_statement)
+    statement = (
+        select(
+            HandRecord.id.label("hand_id"),
+            HandRecord.start_time,
+            HandRecord.end_time,
+            HandRecord.final_pot,
+            HandParticipants.initial_points,
+            HandParticipants.final_points
+        )
+        .join(HandRecord.participants)
+        .join(HandParticipants.player)
+        .where(User.nickname == user_nickname)
         .order_by(HandRecord.start_time.desc())
         .offset((page - 1) * itemperpage)
         .limit(itemperpage)
     )
-    handrecord = handrecord.all()
-    myhandrecord_list: List[MyHandRecordRead] = [
-        MyHandRecordRead(
-            hand_id=hand.id,
-            start_time=hand.start_time,
-            end_time=hand.end_time,
-            final_pot=hand.final_pot,
-            initial_points=participant.initial_points,
-            final_points=participant.final_points,
-        )
-        for participant, hand in handrecord
+    result = await db.exec(statement)
+    handrecord = result.mappings().all()
+    personalhandrecord_list: List[PersonalHandRecordRead] = [
+        PersonalHandRecordRead(**row) for row in handrecord
     ]
-    return MyHandRecordReadPagination(hand_records=myhandrecord_list, itemperpage=itemperpage, page=page, total=total_count)
+    return PersonalHandRecordReadPagination(hand_records=personalhandrecord_list, itemperpage=itemperpage, page=page, total=total_count)

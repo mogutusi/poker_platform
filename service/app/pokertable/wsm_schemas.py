@@ -268,7 +268,7 @@ class PlayerActionBroadcast(BaseModel):
 class HandStatusChangedMessage(BaseModel):
     type: Literal["hand_status_changed"] = "hand_status_changed"
     hand_status: HandStatus
-    community_cards: Optional[List[Card]] = Field(default=None)
+    community_cards: Optional[Dict[str, List[Card]]] = Field(default=None)
     pot: int 
     next_acting_player: str 
     last_bet: Optional[int] = Field(default=None)
@@ -281,7 +281,11 @@ class HandEndedMessage(BaseModel):
     pot_distribution: Dict[str, int]
 
 
-
+class HandShowDownMessage(BaseModel):
+    type: Literal["hand_show_down"] = "hand_show_down"
+    community_cards: List[Card]
+    show_down_player_hole_cards: Dict[str, List[Card]]
+    timestamp: datetime = Field(default_factory=datetime.now)
 
 class ChatBroadcast(BaseModel):
     type: Literal["chat_broadcast"] = "chat_broadcast"

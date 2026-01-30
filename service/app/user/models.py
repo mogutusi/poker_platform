@@ -30,6 +30,7 @@ class UserChangePasswordResponse(BaseModel):
     token: str
 
 class UserRead(UserBase):
+    nickname: str
     points: int
 
 class UserReadPagination(BaseModel):
