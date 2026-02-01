@@ -1,8 +1,9 @@
 from fastapi import HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
 from sqlmodel import select
 from ttxsgm import sm3_hash
+import secrets
 
 from app.database.core import DBsession
 from app.user.models import User, UserLogin, UserChangePassword, UserChangeNickname
@@ -16,8 +17,16 @@ async def user_login(user: UserLogin, db: DBsession):
         raise HTTPException(status_code=401, detail="User not found")
     if not db_user.hash_password == sm3_hash(user.password):
         raise HTTPException(status_code=401, detail="Password is incorrect")
-    token = jwt.encode({"sub": str(db_user.id)}, settings.JWT_SECRET, algorithm="HS256")
-    return token
+    refresh_token = secrets.token_urlsafe(32)
+    db_user.refresh_token = refresh_token
+    db_user.refresh_token_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+    await db.commit()
+    access_token = jwt.encode(
+        payload = {"sub": db_user.name,"exp": datetime.now(timezone.utc) + timedelta(minutes=30)}, 
+        key = settings.JWT_SECRET, 
+        algorithm="HS256",
+    )
+    return access_token, refresh_token
 
 async def user_change_password(user: UserChangePassword, db: DBsession):
     db_user = await db.exec(select(User).where(User.name == user.name))

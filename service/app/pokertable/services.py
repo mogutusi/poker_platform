@@ -1,7 +1,7 @@
 import tempfile
 from typing import Optional, Dict, Any, AsyncGenerator, List
 from sqlmodel import select
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.database.core import DBsession
 from app.pokertable.gamelogic import get_next_player, only_room_name, get_blind, deal_cards, do_action, get_winner_pot
@@ -155,7 +155,7 @@ async def start_hand(room: Room, user_nickname: str, seat_number: int) -> AsyncG
     room.hand = Hand(
         status=HandStatus.READY_TO_START,
         players=players,
-        start_time=datetime.now(),
+        start_time=datetime.now(timezone.utc),
         last_bet=2 * room.small_blind,
         pots={},
     )
@@ -383,7 +383,7 @@ async def end_hand(room: Room, notfold_player_list: List[Player], db: DBsession)
     # update db hand record
     hand_record = HandRecord(
         start_time=hand.start_time,
-        end_time=datetime.now(),
+        end_time=datetime.now(timezone.utc),
         final_pot=total_pot
     )
     db.add(hand_record)

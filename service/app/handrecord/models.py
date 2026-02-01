@@ -3,12 +3,12 @@ from sqlmodel import Field, SQLModel, Relationship
 from pydantic import BaseModel
 
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 class HandRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     
-    start_time: datetime = Field(default_factory=datetime.now,nullable=False)
+    start_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),nullable=False)
     end_time: datetime = Field(nullable=False)
     
     final_pot: int = Field(nullable=False)

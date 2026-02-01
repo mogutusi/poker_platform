@@ -3,9 +3,11 @@ from pathlib import Path
 def print_py_files(directory: str):
     base = Path(directory)
 
+    ignore_dirs = ["__pycache__", ".venv",  "visions"]
+
     with open("pokertable_files.txt", "w", encoding="utf-8") as out:
         for py_file in sorted(base.rglob("*.py")):
-            if "__pycache__" in py_file.parts or ".venv" in py_file.parts:
+            if any(ignore_dir in py_file.parts for ignore_dir in ignore_dirs):
                 continue
 
             out.write(f"{py_file.relative_to(base)}:\n")
@@ -16,4 +18,4 @@ def print_py_files(directory: str):
             out.write("\n\n")
 
 if __name__ == "__main__":
-    print_py_files("../app/pokertable/")
+    print_py_files("../app/")

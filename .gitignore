@@ -18,4 +18,6 @@ pokertable_files.txt
 test.py
 test_winner_pot.py
 asyncioExample.py
+count.py
+
 *.json

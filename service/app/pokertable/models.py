@@ -1,5 +1,5 @@
 from typing import List, Tuple, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import WebSocket
 from pydantic import BaseModel, Field, field_serializer
 
@@ -36,7 +36,7 @@ class Hand(BaseModel):
     deck: Optional[List[Card]] = Field(default=None)
     # player_nickname -> this hand's bet_amount
     pots: Dict[str, int]
-    start_time: Optional[datetime] = Field(default_factory=datetime.now)
+    start_time: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
     flop_cards: Optional[Tuple[Card, Card, Card]]
     turn_card: Optional[Card]
     river_card: Optional[Card]

@@ -1,6 +1,6 @@
 from typing import Literal, Union, Optional, List, Annotated, Tuple, Dict
 from pydantic import BaseModel, Field, Discriminator
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.pokertable.enums import UserStatus, HandStatus, RoomStatus, PlayerActionType, PlayerStatus
 from app.pokertable.models import Card, Player, Hand, Room
@@ -160,7 +160,7 @@ class UserSitdownMessage(BaseModel):
     type: Literal["user_sitdown"] = "user_sitdown"
     seat_number: int
     user_nickname: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
     model_config = {
         "json_schema_extra": {
@@ -178,7 +178,7 @@ class PlayerBuyInMessage(BaseModel):
     seat_number: int
     user_nickname: str
     buy_in: int
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
     model_config = {
         "json_schema_extra": {
@@ -197,32 +197,32 @@ class UserOnlineMessage(BaseModel):
     type: Literal["user_online"] = "user_online"
     nickname: str
     user_status: UserStatus
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 
 class UserOfflineMessage(BaseModel):
     type: Literal["user_offline"] = "user_offline"
     nickname: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class UserLeaveRoomMessage(BaseModel):
     type: Literal["user_leave_room"] = "user_leave_room"
     nickname: str
     leave_type: Literal["offline", "leave_room"]
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 
 class SmallBlindSetMessage(BaseModel):
     type: Literal["small_blind_set"] = "small_blind_set"
     set_by: str
     small_blind: int
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class BuyInSetMessage(BaseModel):
     type: Literal["buy_in_set"] = "buy_in_set"
     buy_in: int
     set_by: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class RoomStateMessage(BaseModel):
     type: Literal["room_state"] = "room_state"
@@ -233,20 +233,20 @@ class UserStatusChangedMessage(BaseModel):
     user_status: UserStatus
     user_nickname: str
     seat_number: int
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class RoomStatusChangedMessage(BaseModel):
     type: Literal["room_status_changed"] = "room_status_changed"
     room_status: RoomStatus
     changed_by: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class HandStartedMessage(BaseModel):
     type: Literal["hand_started"] = "hand_started"
     hand : Hand
     # if dead_blind is -1, it means no dead blind
     dead_blind: int
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 
 class HoleCardsMessage(BaseModel):
@@ -262,7 +262,7 @@ class PlayerActionBroadcast(BaseModel):
     bet_amount: Optional[int]
     pot: int
     next_acting_player: Optional[str]
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 
 class HandStatusChangedMessage(BaseModel):
@@ -285,20 +285,20 @@ class HandShowDownMessage(BaseModel):
     type: Literal["hand_show_down"] = "hand_show_down"
     community_cards: List[Card]
     show_down_player_hole_cards: Dict[str, List[Card]]
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 class ChatBroadcast(BaseModel):
     type: Literal["chat_broadcast"] = "chat_broadcast"
     sender: str
     message: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
 
 
 class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     error_code: str
     message: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = datetime.now(timezone.utc)
     
     model_config = {
         "json_schema_extra": {
