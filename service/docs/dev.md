@@ -112,6 +112,16 @@ poetry run alembic history               # 迁移历史
 - **秘密零容忍**:`K_user`、`session_token`、密码、`JWT_SECRET` 任何形式都不进 git(同 [log.md](log.md) 脱敏红线)。新增秘密文件先加 `.gitignore` 再说。
 - 改了配置项,**提交的是 `*.example`**(不含真值),真值留在本地 `.env`/`poker.env`(同 [config.md](config.md))。
 
+### 认证(一次性设置)
+
+GitHub HTTPS 推送不能用账号密码,需下列之一(配一次,凭证缓存后免重复):
+
+- **浏览器授权(本机当前用法,最省事)**:配了 `git config --global credential.helper store` 后首次 `git push`,Git Credential Manager 弹浏览器登录 GitHub 即可,凭证缓存,之后推送无需再输。
+- **PAT + HTTPS**:建 fine-grained token(仅本仓库、Contents: Read and write),`git push` 时用户名填 GitHub 账号、密码粘 token。
+- **SSH**:`ssh-keygen` → 公钥加到 GitHub → `git remote set-url origin git@github.com:mogutusi/poker_platform.git`。
+
+> 秘密(token/SSH 私钥)绝不进 git、不写进文档/命令行历史明文。
+
 ### 日常流程
 
 ```bash
