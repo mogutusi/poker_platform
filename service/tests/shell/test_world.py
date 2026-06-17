@@ -65,15 +65,20 @@ def test_commit_replaces_room_reference():
     assert world.rooms["r1"] is work.room
 
 
-def test_failed_command_leaves_world_untouched():
-    # 模拟「reduce 失败」:checkout 出副本、改了它,但不 commit。
+def test_commit_or_discard_is_the_only_rollback():
+    # commit-or-discard:回滚机制就是「不 commit」——失败臂改了副本却不落定,
+    # 成功臂才落定。同一份被改副本对照证明:回滚不靠补偿动作,只靠没 commit。
     world = _world_one_room()
     work = world_api.checkout(world, SitDown(origin="A", seat=0))
     work.room.status = RoomStatus.HAND_STARTED
     work.users["A"].points = 0
-    # 不 commit ⇒ world 一字节没动。
+    # 失败臂:不 commit ⇒ world 一字节没动。
     assert world.rooms["r1"].status is RoomStatus.PENDING_START
     assert world.users["A"].points == 500
+    # 成功臂:commit 后同一份改动才落定。
+    world_api.commit(world, work)
+    assert world.rooms["r1"].status is RoomStatus.HAND_STARTED
+    assert world.users["A"].points == 0
 
 
 def test_commit_creates_new_room():

@@ -61,7 +61,7 @@ class Timer:
 ```
 
 > 配套事件(属 [architecture.md](architecture.md) **Event B 组**:同步派发、不走队列),由 dispatch 路由到上面方法:
-> `TurnChanged(room, epoch, acting_nick, timeout_s)` → `on_turn_changed`;`ClearAction(room)` → `clear_action`。
+> `TurnChanged(room, acting_nick, epoch)` → `on_turn_changed`;`ClearAction(room)` → `clear_action`。事件**不带 `timeout_s`**(字段以 [events.py](../app/core/events.py) 为准):core 不读配置,倒计时长由 Timer 自己取 `gameconfig.ACTION_TIMEOUT`(`on_turn_changed` 的 `timeout_s=None` 即走配置,留参仅作可选覆盖)。
 
 ## tick 主循环(唯一让出点 `asyncio.sleep`)
 
@@ -100,7 +100,7 @@ if room.users_in_room.get(cmd.nickname) is not UserStatus.OFFLINE:
 ## 三条流程
 
 **行动倒计时**
-1. reduce 推进到玩家 A 的回合,`epoch += 1`,产出 `TurnChanged(room, epoch, "A", 15)`。
+1. reduce 推进到玩家 A 的回合,`epoch += 1`,产出 `TurnChanged(room, "A", epoch)`(倒计时长不在事件里,Timer 用 `ACTION_TIMEOUT`≈15s)。
 2. dispatch 调 `on_turn_changed`,记下 `fire_at`(覆盖上一回合)。
 3. A 在 15s 内行动 → reduce 再次推进 → 新 `TurnChanged` 覆盖旧 deadline;旧的即便漏触发,`Timeout` 也因 `epoch` 不符被忽略。
 4. A 超时未动 → 投 `Timeout` → reduce 校验仍是该回合 → 执行默认动作。

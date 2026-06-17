@@ -35,9 +35,9 @@ class Hand:
     last_raise_size: int = 0  # 最近一次加注的增量,供 min-raise
     deck: list[Card] = field(default_factory=list)  # 隐私:未发的牌堆
     contributed: dict[str, int] = field(default_factory=dict)  # nick → 本手累计投入
-    flop: tuple[Card, Card, Card] | None = None
-    turn: Card | None = None
-    river: Card | None = None
+    flop: tuple[Card, Card, Card] | None = None  # 前 3 张公共牌;None = 未发
+    turn: Card | None = None  # 第 4 张公共牌;None = 未发
+    river: Card | None = None  # 第 5 张公共牌;None = 未发
     epoch: int = 0  # 每次行动推进/街切换自增;Timeout staleness 判据
 
 

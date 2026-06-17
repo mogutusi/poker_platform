@@ -28,7 +28,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | 状态机 | 取值 | 谁推进 |
 |---|---|---|
 | **RoomStatus** | `PENDING_START` → `HAND_STARTED` → (回到)`PENDING_START` | StartHand / 手牌结束 |
-| **UserStatus** | `WATCHING`/`SITTING_IN`/`READY_TO_PLAY`/`SITTING_OUT`/`PLAYING`/`OFFLINE` | 玩家操作 + 连接生命周期;合法转移表见 [enums.py](../app/pokertable/enums.py) |
+| **UserStatus** | `WATCHING`/`SITTING_IN`/`READY_TO_PLAY`/`SITTING_OUT`/`PLAYING`/`OFFLINE` | 玩家操作 + 连接生命周期;合法转移表见 [enums.py](../app/core/enums.py) |
 | **HandStatus** | `PRE_FLOP` → `FLOP` → `TURN` → `RIVER` → `SHOWDOWN` → `ENDING` | 下注轮关闭(`next_status`) |
 | **PlayerStatus** | `ACTIVE` / `FOLDED` / `ALLIN` | 玩家动作 |
 

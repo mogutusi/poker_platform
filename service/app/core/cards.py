@@ -3,13 +3,15 @@ from enum import StrEnum
 
 
 class CardSuit(StrEnum):
-    HEARTS = "h"
-    DIAMONDS = "d"
-    CLUBS = "c"
-    SPADES = "s"
+    # 花色短码(treys 串用)
+    HEARTS = "h"  # 红桃
+    DIAMONDS = "d"  # 方块
+    CLUBS = "c"  # 梅花
+    SPADES = "s"  # 黑桃
 
 
 class CardRank(StrEnum):
+    # 点数短码(treys 串用):2..9 即点数自文档,T=10、J/Q/K/A 为缩写
     TWO = "2"
     THREE = "3"
     FOUR = "4"

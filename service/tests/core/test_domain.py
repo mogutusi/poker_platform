@@ -86,6 +86,14 @@ def test_self_transitions_are_subset_of_all():
     assert USER_STATUS_SELF_TRANSITIONS <= USER_STATUS_TRANSITIONS
 
 
+def test_userself_transition_distinguishes_system_from_player():
+    # 玩家经 SetUserStatus 可主动发起的转移
+    assert UserStatus.SITTING_IN.userself_can_change_to(UserStatus.READY_TO_PLAY)
+    # 开局 READY_TO_PLAY→PLAYING 是系统转移:合法但不在玩家可自发子集
+    assert UserStatus.READY_TO_PLAY.can_change_to(UserStatus.PLAYING)
+    assert not UserStatus.READY_TO_PLAY.userself_can_change_to(UserStatus.PLAYING)
+
+
 def test_offline_reconnect_round_trip_legal():
     assert UserStatus.PLAYING.can_change_to(UserStatus.OFFLINE)
     assert UserStatus.OFFLINE.can_change_to(UserStatus.PLAYING)
