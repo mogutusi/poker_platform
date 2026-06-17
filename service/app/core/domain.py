@@ -10,7 +10,7 @@ class UserState:
     uid: int  # immutable DB key; persistence keys on this, not the mutable nickname
     nickname: str
     points: int
-    room: str | None = None
+    room: str  # always set: lobby users live only in ConnectionManager, not in world.users
 
 
 @dataclass

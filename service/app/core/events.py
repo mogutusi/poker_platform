@@ -29,6 +29,7 @@ class Personal(Event):
 @dataclass(frozen=True, slots=True)
 class TurnChanged(Event):
     room: str
+    acting_nick: str
     epoch: int
 
 
