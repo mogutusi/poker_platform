@@ -14,9 +14,9 @@ from app.core.domain import Room, UserState, World
 
 @dataclass
 class Work:
-    room_name: str | None
-    room: Room | None  # None = room absent in world (reduce may create it, e.g. JoinRoom)
-    users: dict[str, UserState]
+    room_name: str | None  # target room key (None = pure-lobby command, no room)
+    room: Room | None  # deep copy of target room; None = absent in world (reduce may create it)
+    users: dict[str, UserState]  # deep copy of the whole users table
 
 
 def _target_room(world: World, cmd: Command) -> str | None:

@@ -27,8 +27,9 @@ class CardRank(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Card:
-    rank: CardRank
-    suit: CardSuit
+    rank: CardRank  # 2..A
+    suit: CardSuit  # h/d/c/s
 
     def to_treys(self) -> str:
+        # treys card string is "<rank><suit>", e.g. "As", "Th"
         return f"{self.rank.value}{self.suit.value}"

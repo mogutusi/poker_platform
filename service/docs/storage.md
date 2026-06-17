@@ -25,9 +25,11 @@
    - **失败 / 抛异常** → **丢弃工作副本**,真正的 `world` 一字节没动。
    - **成功** → 把工作副本**装回** `world`(替换引用),再 dispatch events(含 `Persist`)。
 
+`checkout` / `commit` 是 **`shell/world.py` 的模块级函数**,不是 `World` 的方法(`World` 是 core 纯 dataclass,挂方法会破坏分层,见 [models.md](models.md))。它们接收 `world` 作首参,返回 / 落定一个 `Work`(`room_name` / `room` / `users`):
+
 ```python
 # GameLoop 主循环(简化)
-work = world.checkout(cmd)             # 解析目标房 + 深复制:目标房间 + users 表 → 工作副本
+work = checkout(world, cmd)            # 解析目标房 + 深复制:目标房间 + users 表 → 工作副本
 try:
     events, err = reduce(work, cmd)    # 只改副本
 except Exception:
@@ -35,11 +37,11 @@ except Exception:
 if err is not None:
     send_error(cmd, err)               # 丢弃 work,world 未动
 else:
-    world.commit(work)                 # 装回(房间增/删/替换 + users 表替换)
+    commit(world, work)                # 装回(房间增/删/替换 + users 表替换)
     for ev in events: dispatch(ev)     # 只 put_nowait
 ```
 
-### `checkout(cmd)`:目标房按命令类型解析(不是简单的 `cmd.room`)
+### `checkout(world, cmd)`:目标房按命令类型解析(不是简单的 `cmd.room`)
 
 模型 2 下命令大多**不带 room**,所以 `checkout` 接收整条 `cmd`、按类型解析目标房,再深拷「该房 + `users` 表」。**GameLoop 读 `world.users` 来解析房间是允许的**——它是唯一写者、单协程,读自己的已提交状态不破坏任何不变量(不变量 2 禁的是「其它协程写 world」「shell 读 world 做载入决策」,不禁 GameLoop 自己读):
 
@@ -52,7 +54,7 @@ else:
 
 > 纯大厅的 `Connect`/`Disconnect` 没有目标房,`checkout` 只拷 `users` 表(或连 users 都不必动);reduce 对它们「core 无事」或只动 presence(在 shell)。
 
-### `commit(work)`:房间的增 / 删 / 替换都在这里落定
+### `commit(world, work)`:房间的增 / 删 / 替换都在这里落定
 
 `commit` 不只是「替换一个房间引用」,它把工作副本相对权威的差异整体落回 `world.rooms` 顶层 dict:
 

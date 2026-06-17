@@ -26,18 +26,25 @@ class Room:
     hand_seq: int = 0                       # 房间内手牌单调序号,见「手牌标识」
     entry_vote: EntryVote | None = None     # 进行中的免盲投票(approvals 集合),见 rules.md
     waive_entry_for: set[str] = set()       # 已全票免盲、下一手免费入局的 new_here 集合(快照)
+    leaving: set[str] = set()               # 局中 LeaveRoom 已 auto-fold、待手尾驱逐(rules.md ④)
+
+class EntryVote:                             # 免盲投票进行态,见 rules.md ①
+    approvals: set[str] = set()             # 已 approve 的投票人 nick
+    rejected: bool = False                  # 任一 reject 即失败
 
 class Seat:                                  # 「在桌」的钱与身份,跨手牌存活
     nickname: str
     points: int                             # 桌上可用筹码(不在手牌里时)
     in_game_points: int = 0                 # 手牌进行中被锁进 Hand 的本金(快照,用于结算/记录)
-    new_here: bool = True
+    new_here: bool = True                   # 上一手未参与;入局需付盲即玩 / 等大盲
+    wait_for_big_blind: bool = False        # 选「等大盲免费入局」而非「付盲即玩」(wire 标志,rules.md ①)
 
 class Hand:
     status: HandStatus
     players: list[Player]                    # 按行动顺序排列,见「座位与盲注」
     acting_position: int | None             # players[acting_position] = 当前行动者
     last_bet: int                            # 本街需跟到的额度
+    last_raise_size: int = 0                # 最近一次加注增量,供 min-raise(rules.md ②)
     deck: list[Card]
     contributed: dict[str, int]             # nick → 本手累计投入(旧名 pots,改名澄清语义)
     flop: tuple[Card, Card, Card] | None
@@ -52,6 +59,7 @@ class Player:                                # 「在这一手里」的状态,�
     status: PlayerStatus                     # ACTIVE / FOLDED / ALLIN
     points: int                             # 本手剩余筹码(可下注额)
     bet_amount: int = 0                     # 本街已投入(街结束清零、并入 contributed)
+    has_acted: bool = False                 # 本街是否已自愿行动(街开始/被加注重开置 False,rules.md ②)
     hole_cards: tuple[Card, Card] | None
     seat_position: int
 ```
@@ -95,7 +103,7 @@ class Player:                                # 「在这一手里」的状态,�
 
 ## 房间生命周期(创建 / 销毁)
 
-- **创建**:**v1 房间在 lifespan 按配置 `ROOMS` 静态预置**(见 [lobby.md](lobby.md)),`JoinRoom` 时房必已存在。动态建房(future)走同一机制:`JoinRoom` 到不存在的房时 `checkout(cmd)` 给「无此房间」的副本,reduce 在副本上新建 `Room`(空座、`PENDING_START`)再加入用户,`commit` 插回 `world.rooms`(见 [storage.md](storage.md))。
+- **创建**:**v1 房间在 lifespan 按配置 `ROOMS` 静态预置**(见 [lobby.md](lobby.md)),`JoinRoom` 时房必已存在。动态建房(future)走同一机制:`JoinRoom` 到不存在的房时 `checkout(world, cmd)` 给「无此房间」的副本(`work.room is None`),reduce 在副本上新建 `Room`(空座、`PENDING_START`)再加入用户,`commit` 插回 `world.rooms`(见 [storage.md](storage.md))。
 - **销毁**:**最后一人离开房间时销毁**(仅动态房;静态预置房可选保留)。`LeaveRoom` / `Cleanup` 把用户移出 `users_in_room` 后,若房间已空,reduce 在副本上 `del` 该房,`commit` 落定。销毁前若该用户座位上还有筹码,先退分(产出 `Persist(PointsWrite)`)再删,顺序不能反;**销毁的房不再 `Broadcast`**(见 [connection.md](connection.md))。
 - `Disconnect` **不**移出房间、不销毁(只标 `OFFLINE`、保留座位);真正的移出/销毁等 `Cleanup` 到期或 `LeaveRoom`。
 

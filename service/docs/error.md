@@ -38,7 +38,9 @@ class ErrorCode(str, Enum):
     ROOM_FULL = "ROOM_FULL"               # JoinRoom 满座
     CANT_CHANGE_NICK_IN_ROOM = "CANT_CHANGE_NICK_IN_ROOM"   # 在房间内不能改昵称(见 rest.md/lobby.md)
     INTERNAL = "INTERNAL"
-    # …随业务补充;后续做成配置
+    # …随业务补充;后续做成配置。**权威清单以 app/core/errors.py 的 ErrorCode 为准**,本块是示意
+    # (实现已含 NOT_IN_ROOM/SEAT_TAKEN/NOT_YOUR_SEAT/INVALID_STATUS_TRANSITION/HAND_IN_PROGRESS/
+    #  ILLEGAL_ACTION/NOT_ENOUGH_PLAYERS/NO_VOTE_IN_PROGRESS/NOT_A_VOTER 等)
 
 # ② Err —— 纯错误值:「出了什么错」,不含收件人。core↔GameLoop 间传递,不进队列
 @dataclass(frozen=True)
@@ -97,7 +99,7 @@ events, err = reduce(work, cmd)
 if err is not None:                       # 失败臂:丢弃 work,只回发发起人
     self.send_error(cmd, err)
 else:
-    self.world.commit(work)               # 成功才 commit
+    commit(self.world, work)              # 成功才 commit(shell/world.py 模块函数)
     for ev in events:
         self.dispatch(ev)
 
