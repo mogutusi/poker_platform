@@ -1,0 +1,177 @@
+# delayDB 写通道
+
+## 一句话定位
+
+**delayDB 是「内存权威 → DB」的滞后落库写通道。** `reduce` 改的是内存(经工作副本 commit),改动以 `Persist` 事件交给本通道,由 **PersistWriter**(全进程唯一 DB 写者)**周期批量**落库,异步追平 DB。core 不碰 DB,只产出 `Persist`;一切落库都在 shell。
+
+> 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;前置概念在那里。
+> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)。新实体按下文「两类写」归类即可接入,不新增通道。
+
+## 两类写(接入新实体先归类)
+
+| 类别 | 语义 | 例子 | 落库 | 能否覆盖 | 键 |
+|---|---|---|---|---|---|
+| **状态写 `StateWrite`** | 实体「现在的样子」 | 全局积分 `points` | UPSERT by 主键 | **可覆盖**(同键只留最新) | `(table, pk)` |
+| **事件写 `AppendWrite`** | 「发生过一件事」 | 手牌记录 + 参与者 | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
+
+判据:**描述「实体当前状态」(可覆盖)还是「一次已发生的事实」(必追加)?** 拿不准默认归事件写——覆盖一个本该追加的实体会**静默丢数据**,代价远高于多落几条。
+
+**为什么状态写要覆盖而非 FIFO**:内存是权威,DB 只需追平到当前值。用户一秒内买入两次再退分,DB 只关心最终值;中间值落库是纯浪费。同键后写直接盖前写,N 次变更合成 1 次落库。
+
+## 数据结构:写缓冲 `WriteBuffer`
+
+```python
+StateKey = tuple[str, ...]          # (table, pk),如 ("user", uid)
+
+@dataclass(frozen=True)
+class StateWrite:
+    key: StateKey
+    payload: ...                    # 快照值,如 PointsWrite(uid, points)
+
+@dataclass(frozen=True)
+class AppendWrite:
+    dedupe_key: str                 # 业务唯一键,重试幂等用
+    payload: ...                    # 快照值,如 HandRecord 字段 + 其 participants
+
+class WriteBuffer:
+    def __init__(self) -> None:
+        self._dirty: dict[StateKey, StateWrite] = {}   # 覆盖:同 key 后写盖前写
+        self._appends: list[AppendWrite] = []          # 追加:逐条落
+
+    # —— 由 GameLoop.dispatch 同步调用(与 put_nowait 同级,绝不 await)——
+    def put_state(self, w: StateWrite) -> None:  self._dirty[w.key] = w
+    def put_append(self, w: AppendWrite) -> None: self._appends.append(w)
+
+    # —— 由 PersistWriter 调用:双缓冲,同步取走清空,之后才 await 落库 ——
+    def swap(self) -> tuple[dict[StateKey, StateWrite], list[AppendWrite]]:
+        dirty, appends = self._dirty, self._appends
+        self._dirty, self._appends = {}, []
+        return dirty, appends
+    def is_empty(self) -> bool:  return not self._dirty and not self._appends
+```
+
+`dispatch` 按 `Persist` payload 类型选 `put_state` / `put_append`,**同步内存写**(覆盖 dict 项 / append list),不 `await`,守不变量 3。
+
+## 关键并发不变量:先 swap 后 await
+
+缓冲被两个协程碰——GameLoop 的 `dispatch`(写)和 PersistWriter(读+落库)。单线程 asyncio 下安全的唯一前提:
+
+> **`put_*` 与 `swap` 都是同步无 `await` 的纯内存操作;PersistWriter 必须「先 `swap()` 同步拿走并清空,再 `await` 落库」。**
+
+这是**双缓冲**:`swap` 之后,正在落库的批次是 PersistWriter 私有局部变量;`await commit()` 期间 GameLoop 新写进的是**新的空缓冲**,既不丢也不混。
+
+**反例(必错)**:PersistWriter 边遍历 `self._dirty` 边 `await` 写库——`await` 让出时 GameLoop 改同一个 dict → `RuntimeError: dict changed size` 或丢写。**务必先 swap 后 await,绝不持缓冲本体跨 `await`。**
+
+## PersistWriter 主循环
+
+```python
+async def run(self) -> None:
+    while True:
+        await asyncio.sleep(gameconfig.DB_FLUSH_INTERVAL_MS / 1000)   # 让出点①
+        if self._buf.is_empty():
+            continue
+        dirty, appends = self._buf.swap()                # 同步取走清空(双缓冲)
+        try:
+            async with self._session() as s:             # 一批一个短事务
+                for w in dirty.values():   await s.merge(to_orm(w.payload))   # UPSERT
+                for w in appends:          s.add(to_orm(w.payload))           # INSERT
+                await s.commit()                         # 让出点②
+        except Exception:
+            self._requeue(dirty, appends)                # 整批回灌,下周期重试
+            log.error("delayDB flush failed, requeued", exc_info=True)
+```
+
+**为什么周期而非「来一条写一条」**:给覆盖一个窗口。立即消费则窗口为零、覆盖退化成 FIFO。`DB_FLUSH_INTERVAL_MS` 是「同实体多次变更合并的时间窗」,也是「积分落库最多滞后多久 / 崩溃窗口」——积分非货币,可放宽。可选增强:条目超 `DB_FLUSH_MAX_BATCH` 提前 flush。
+
+## 失败与重试
+
+```python
+def _requeue(self, dirty, appends) -> None:
+    for k, w in dirty.items():
+        self._buf._dirty.setdefault(k, w)   # 更新者优先:期间已有更新的写就保留新的,绝不旧盖新
+    self._buf._appends[:0] = appends        # 事件写放回,下批重新 INSERT
+```
+
+- **状态写回灌用 `setdefault`(更新者优先)**:这是覆盖语义下唯一的正确性要点——回灌的是上一批的旧值,若期间 GameLoop 又写了更新值,**必须保留更新的**,否则旧值盖新值 = 把内存权威最新状态写错。
+- **覆盖红利**:重试不必记「重试到第几条 / 累计多少增量」,状态写永远只关心当前值,回灌后下周期再 UPSERT,天然幂等。
+- **事件写幂等**:每批一个事务,失败整批回滚、什么都没落,原样放回重 INSERT 不会重复。`dedupe_key` 是额外保险(防"commit 成功但进程在记账前崩"),落库用 `INSERT ... ON CONFLICT (dedupe_key) DO NOTHING`。
+- **毒丸(永久失败)**:同一批连续失败超 `DB_WRITE_MAX_RETRY` 次 → 落 ERROR、移出缓冲(别卡死后续),留人工介入。这是 bug 信号。
+
+## 事务分组 & session
+
+- **手牌记录与其参与者必须同事务**(参与者外键引用 record.id):一个 `AppendWrite` 单元 = 「一条 record + 它全部 participants」,整体 INSERT、整体成败。
+- 状态写各实体独立,可与事件写同批同事务;一批失败整批回滚,回灌安全。
+- **每批一个短事务,用完即关 session**;PersistWriter 持自己的 `AsyncSessionLocal`,**不复用** WS 请求注入的 `DBsession`。
+- 唯一写者 ⇒ **全程无 `with_for_update` / 无行锁**。读路径(REST 查手牌、查余额)走各自请求级 `DBsession`,与写路径互不干扰(读 DB 可能比内存旧,实时判定一律以内存为准)。
+
+## 优雅关闭(drain · 必须有)
+
+「内存权威 + 滞后落库」意味着任一时刻缓冲里都可能压着**已对玩家生效、未落库**的变更。进程优雅退出前必须 flush 干净,否则凭空丢数据。关闭顺序(FastAPI lifespan 编排):
+
+1. **停 Receiver**:不再接新连接 / 新命令。
+2. **排空 inbox + 停 GameLoop**:在途命令处理完,不再产生新 `Persist`。
+3. **PersistWriter 终结 flush**:循环 `swap` + 落库直到 `is_empty()`。
+4. 关 DB 连接池、关 Sender。
+
+drain 落库仍可能失败:有限重试(`DB_DRAIN_TIMEOUT_MS` 上限)后放弃并 **CRITICAL** 落日志——进程要退,这一小段窗口接受。
+
+## 崩溃语义
+
+- **非优雅崩溃**:缓冲里未 flush 的状态写 / 事件写全丢。状态写丢「最近未落库的最新值」,事件写丢「最近几手记录」。因积分非货币、手牌量小,**接受**;重启从 DB 载入初值,无需对账。
+- `DB_FLUSH_INTERVAL_MS` 越小崩溃窗口越窄但落库越频——它是**崩溃窗口**旋钮,不是性能旋钮。
+
+## `Persist` 接口(core ↔ 本模块的契约)
+
+```python
+# 状态写(覆盖)
+class PointsWrite(BaseModel):
+    uid: int              # StateKey 的 pk = 不可变 User.id(= UserState.uid),绝不用可变的 nickname
+    points: int           # 内存权威的最新全量值,不是增量
+
+# 事件写(追加)
+class HandRecordWrite(BaseModel):
+    dedupe_key: str       # = f"{room}:{hand.seq}",由 core 生成(见 core.md「手牌标识」)
+    start_time: datetime  # core 携带(开局时 shell 经 StartHand 带入的墙钟值)
+    end_time: datetime    # core 留空 → shell 在派发本 Persist 时盖墙钟(core 不读时钟)
+    final_pot: int
+    participants: list[ParticipantWrite]   # 每个含 uid / initial_points / final_points(uid = 不可变 User.id)
+```
+
+> **墙钟由 shell 盖**:`end_time` 是手牌结束的真实时刻,但 core 不读时钟——它产出 `HandRecordWrite` 时 `end_time` 为空,由 dispatch(shell)盖上 `now()` 再进写缓冲。`start_time` 则是 core 从 `StartHand` 命令携带过来的值,同属外移(见 [core.md](core.md))。
+
+- payload 必须是**快照值**:core 产出 `Persist` 那一刻就是不可变值(int / 新构造的记录),不带 `world` 活引用(配合工作副本回滚,见不变量 7)。
+- **新增持久化实体** = 在状态写/事件写里选语义 + 给键,不另起炉灶、不加第三种通道(受「不过度解耦」约束)。
+
+## 配置(照 [config.md](config.md),不硬编码)
+
+```python
+class GameConfig(BaseSettings):
+    DB_FLUSH_INTERVAL_MS: int = Field(ge=100, le=10000)   # 覆盖窗口 / 落库滞后 = 崩溃窗口
+    DB_FLUSH_MAX_BATCH: int   = Field(ge=1, le=10000)     # 超过提前 flush(可选)
+    DB_WRITE_MAX_RETRY: int   = Field(ge=1, le=100)       # 毒丸阈值
+    DB_DRAIN_TIMEOUT_MS: int  = Field(ge=500, le=60000)   # 关闭 drain 上限
+```
+
+```ini
+# poker.env
+DB_FLUSH_INTERVAL_MS=500
+DB_FLUSH_MAX_BATCH=500
+DB_WRITE_MAX_RETRY=10
+DB_DRAIN_TIMEOUT_MS=5000
+```
+
+## 与架构契约(必须守住)
+
+1. **core 不碰 DB**,只产出 `Persist`(快照值);载入/落库全在 shell。core 内禁止 `import sqlalchemy` / `await commit`。
+2. **`put_*` 同步无 `await`;PersistWriter 先 `swap` 后 `await`**(双缓冲),绝不持缓冲本体跨 `await`。
+3. **状态写按键覆盖、只落最新;事件写逐条追加、靠唯一键幂等。** 别把事件写设成可覆盖。
+4. **失败回灌「更新者优先」**(`setdefault`),绝不旧值盖新值。
+5. **唯一写者 ⇒ 无行锁;优雅关闭前必须 drain。**
+6. 载入(读 DB 进内存一次、绝不重载)属存储模型,见 [storage.md](storage.md)。
+
+## 注意点
+
+- **覆盖 ≠ 丢一致性**:落的是内存权威**当前值**,DB 追平即正确;被覆盖的中间值本就无需持久化。把这点和「事件写绝不可覆盖」分清,是本模块唯一易错处。
+- **脱敏红线**:落库 payload **不得带 `hole_cards` / `deck`**(见 [log.md](log.md));手牌记录存**结果**(`initial_points`/`final_points`/`final_pot`),不是底牌。
+- **读写分离**:实时判定一律读内存;DB 只服务事后查询与崩溃后冷启动初值。
+- **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 ERROR、drain 失败 CRITICAL。
