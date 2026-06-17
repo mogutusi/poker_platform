@@ -5,8 +5,8 @@
 
 from datetime import datetime, timezone
 
-from app.core.domain import Room, Seat, UserState, World
-from app.core.enums import UserStatus
+from app.core.domain import Hand, Player, Room, Seat, UserState, World
+from app.core.enums import HandStatus, PlayerStatus, UserStatus
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)  # 固定墙钟,core 不读时钟、测试可断言
 
@@ -45,3 +45,43 @@ def make_world(
     users: dict[str, UserState] | None = None,
 ) -> World:
     return World(rooms=rooms or {}, users=users or {})
+
+
+def player(
+    nickname: str,
+    points: int,
+    *,
+    seat: int = 0,
+    bet_amount: int = 0,
+    status: PlayerStatus = PlayerStatus.ACTIVE,
+    has_acted: bool = False,
+) -> Player:
+    return Player(
+        nickname=nickname,
+        seat_position=seat,
+        points=points,
+        status=status,
+        bet_amount=bet_amount,
+        has_acted=has_acted,
+    )
+
+
+def hand(
+    players: list[Player],
+    *,
+    last_bet: int = 0,
+    last_raise_size: int = 0,
+    contributed: dict[str, int] | None = None,
+    status: HandStatus = HandStatus.PRE_FLOP,
+    acting_position: int = 0,
+) -> Hand:
+    return Hand(
+        status=status,
+        players=players,
+        seq=1,
+        start_time=T0,
+        acting_position=acting_position,
+        last_bet=last_bet,
+        last_raise_size=last_raise_size,
+        contributed=contributed if contributed is not None else {},
+    )

@@ -18,12 +18,12 @@
 
 ## P1 · core 规则(主力,纯单测)
 
-- [ ] `core/deck.py`:`SystemRandom` 洗牌 + treys `Evaluator` 单例
+- [x] `core/deck.py`:`SystemRandom` 洗牌 + treys `Evaluator` 单例 — 0007
 - [ ] `core/rules/blinds.py`:定庄/盲位/heads-up、入局「付盲即玩 / 等大盲免费」、免盲投票
-- [ ] `core/rules/betting.py`:三动作校验、min-raise/重开、`street_closed` 谓词(`has_acted`)
-- [ ] `core/rules/sidepot.py`:退还未叫注 → 分层削池 → 判池 + 奇数零头
+- [x] `core/rules/betting.py`:三动作校验、min-raise/重开、`street_closed` 谓词(`has_acted`)— 0007(另含 `settle_street`、`next_active_position`)
+- [x] `core/rules/sidepot.py`:退还未叫注 → 分层削池 → 判池 + 奇数零头 — 0007
 - [ ] `core/reduce.py`:顶层 `match` + 各 helper(开局/动作/推进/摊牌/结束/连接/断线/超时/清理/买入/入座/状态/聊天/投票)
-- [ ] `tests/core/`:按 [rules.md](../rules.md) 编号转穷举单测;守恒 + 隐私断言默认开
+- [~] `tests/core/`:按 [rules.md](../rules.md) 编号转穷举单测;守恒 + 隐私断言默认开 — 0007 落地 ②/③ 穷举(deck/betting/sidepot 58 测试);①(blinds)与 reduce 集成待后续
 
 ## P2 · shell 骨架
 
