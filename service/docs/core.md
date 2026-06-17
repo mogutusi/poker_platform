@@ -8,63 +8,20 @@ core 是**纯同步的游戏规则层**:`reduce(work, cmd) -> (list[Event], Err 
 
 ## 域模型(core 的权威状态)
 
-core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md);具体字段在 .py)。字段在现有 [models.py](../app/pokertable/models.py) 基础上调整:
+core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**精确字段清单以 [`app/core/domain.py`](../app/core/domain.py) 为准**(每个字段带中文注释,代码即文档);本文只讲各实体的职责与几条关键不变量:
 
-```python
-class World:
-    rooms: dict[str, Room]
-    users: dict[str, UserState]        # 全局积分,见 user.md
+| 实体 | 职责 | 要点 |
+|---|---|---|
+| `World` | 内存权威:全部房间 + 全局用户表 | `users` 键为 nick,只装在房用户(大厅用户不进,见 [user.md](user.md)) |
+| `Room` | 一个牌桌的全部状态 | 定长 `seats`、`button_position`、`hand_seq`(手牌标识);`entry_vote`/`waive_entry_for` 见免盲投票、`leaving` 见局中离桌([rules.md](rules.md) ①④) |
+| `EntryVote` | 免盲投票进行态 | `approvals` 集合 + 任一 `rejected` 即失败([rules.md](rules.md) ①) |
+| `Seat` | 「在桌」的钱与身份,跨手牌存活 | `points`(桌上筹码)/`in_game_points`(锁入本手的快照)/`new_here`/`wait_for_big_blind`(入局方式) |
+| `Hand` | 一手牌的全部状态 | `players` 按行动序([0]=SB、[1]=BB);`contributed`(本手累计投入,旧名 pots);`last_bet`/`last_raise_size` 供下注规则;`epoch`(staleness)/`seq`(标识)/`start_time`(shell 盖、core 不读) |
+| `Player` | 「在这一手里」的状态,手尾即弃 | `status`、`points`、`bet_amount`(本街)、`has_acted`([rules.md](rules.md) ②)、`hole_cards`(隐私) |
 
-class Room:
-    users_in_room: dict[str, UserStatus]    # 在房用户 → 状态机
-    seats: list[Seat | None]                # 定长 = MAX_SEATS
-    hand: Hand | None
-    status: RoomStatus
-    small_blind: int
-    buy_in: int
-    button_position: int                    # 庄家座位号
-    hand_seq: int = 0                       # 房间内手牌单调序号,见「手牌标识」
-    entry_vote: EntryVote | None = None     # 进行中的免盲投票(approvals 集合),见 rules.md
-    waive_entry_for: set[str] = set()       # 已全票免盲、下一手免费入局的 new_here 集合(快照)
-    leaving: set[str] = set()               # 局中 LeaveRoom 已 auto-fold、待手尾驱逐(rules.md ④)
-
-class EntryVote:                             # 免盲投票进行态,见 rules.md ①
-    approvals: set[str] = set()             # 已 approve 的投票人 nick
-    rejected: bool = False                  # 任一 reject 即失败
-
-class Seat:                                  # 「在桌」的钱与身份,跨手牌存活
-    nickname: str
-    points: int                             # 桌上可用筹码(不在手牌里时)
-    in_game_points: int = 0                 # 手牌进行中被锁进 Hand 的本金(快照,用于结算/记录)
-    new_here: bool = True                   # 上一手未参与;入局需付盲即玩 / 等大盲
-    wait_for_big_blind: bool = False        # 选「等大盲免费入局」而非「付盲即玩」(wire 标志,rules.md ①)
-
-class Hand:
-    status: HandStatus
-    players: list[Player]                    # 按行动顺序排列,见「座位与盲注」
-    acting_position: int | None             # players[acting_position] = 当前行动者
-    last_bet: int                            # 本街需跟到的额度
-    last_raise_size: int = 0                # 最近一次加注增量,供 min-raise(rules.md ②)
-    deck: list[Card]
-    contributed: dict[str, int]             # nick → 本手累计投入(旧名 pots,改名澄清语义)
-    flop: tuple[Card, Card, Card] | None
-    turn: Card | None
-    river: Card | None
-    epoch: int = 0                          # ← 新增:行动推进计数,timer staleness 判据
-    seq: int                                # ← 新增:= 开局时的 room.hand_seq,手牌标识
-    start_time: datetime                    # ← 新增:开局墙钟,由 shell 在 StartHand 里盖;core 只存不读、绝不据它分支(记录元数据)
-
-class Player:                                # 「在这一手里」的状态,手牌结束即弃
-    nickname: str
-    status: PlayerStatus                     # ACTIVE / FOLDED / ALLIN
-    points: int                             # 本手剩余筹码(可下注额)
-    bet_amount: int = 0                     # 本街已投入(街结束清零、并入 contributed)
-    has_acted: bool = False                 # 本街是否已自愿行动(街开始/被加注重开置 False,rules.md ②)
-    hole_cards: tuple[Card, Card] | None
-    seat_position: int
-```
-
-> **底牌/牌堆是隐私**:`hole_cards`、`deck` 任何时候都不进日志/落库(见 [log.md](log.md));wire 上默认隐藏,只有摊牌时由专门事件显式揭示(见下)。
+> **底牌/牌堆是隐私**:`Player.hole_cards`、`Hand.deck` 任何时候都不进日志/落库(见 [log.md](log.md));wire 上默认隐藏,只有摊牌时由专门事件显式揭示(见下)。
+>
+> **墙钟外移**:`Hand.start_time` 由 shell 在 `StartHand` 里盖好带入,core 只存不读、绝不据它分支(不变量 1)。
 
 ## 状态机(四套,各管一层)
 

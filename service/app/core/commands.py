@@ -7,14 +7,14 @@ from app.core.enums import PlayerActionType, UserStatus
 
 @dataclass(frozen=True, slots=True)
 class Command:
-    origin: str | None  # originating nick (= who to reply errors to); None for system commands
+    origin: str | None  # 发起命令的 nick(= 错误回发给谁);系统命令为 None
 
 
 @dataclass(frozen=True, slots=True)
 class JoinRoom(Command):
-    room: str  # target room (the only command carrying a room)
-    uid: int  # account id read from DB by shell
-    loaded: int  # account's current global points read from DB by shell
+    room: str  # 目标房(唯一带 room 的命令)
+    uid: int  # shell 从 DB 读出的账号主键
+    loaded: int  # shell 从 DB 读出的该账号当前全局积分
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,47 +24,47 @@ class LeaveRoom(Command):
 
 @dataclass(frozen=True, slots=True)
 class SitDown(Command):
-    seat: int  # seat index to occupy
+    seat: int  # 要入座的座位号
 
 
 @dataclass(frozen=True, slots=True)
 class BuyIn(Command):
-    seat: int  # seat to fund
-    amount: int  # points to move from global balance into the seat stack
+    seat: int  # 要充值的座位
+    amount: int  # 从全局积分转入座位筹码的额度
 
 
 @dataclass(frozen=True, slots=True)
 class SetUserStatus(Command):
-    status: UserStatus  # requested new status
-    seat: int | None = None  # seat affected, if the transition involves seating
+    status: UserStatus  # 请求的新状态
+    seat: int | None = None  # 涉及就座时的目标座位
 
 
 @dataclass(frozen=True, slots=True)
 class SetSmallBlind(Command):
-    amount: int  # new small blind (seat 0 config)
+    amount: int  # 新小盲额(0 号位配置)
 
 
 @dataclass(frozen=True, slots=True)
 class SetBuyIn(Command):
-    amount: int  # new room buy-in (seat 0 config)
+    amount: int  # 新房间买入额(0 号位配置)
 
 
 @dataclass(frozen=True, slots=True)
 class StartHand(Command):
-    seat: int  # initiator's seat
-    started_at: datetime  # wall clock stamped by shell, carried into Hand.start_time
-    deck: list[Card] | None = None  # injected in tests/replay; None -> SystemRandom shuffle
+    seat: int  # 发起人座位
+    started_at: datetime  # shell 盖好的墙钟,带入 Hand.start_time
+    deck: list[Card] | None = None  # 测试/重放注入;None → SystemRandom 洗牌
 
 
 @dataclass(frozen=True, slots=True)
 class PlayerAction(Command):
     action: PlayerActionType  # FOLD / CHECK / BET
-    bet_amount: int | None = None  # target total for this street (required for BET)
+    bet_amount: int | None = None  # 本街目标总额(BET 时必填)
 
 
 @dataclass(frozen=True, slots=True)
 class RoomChat(Command):
-    text: str  # chat body; read-only command, produces Broadcast(ChatMessage)
+    text: str  # 聊天内容;只读命令,产出 Broadcast(ChatMessage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,25 +74,25 @@ class OpenFreeEntryVote(Command):
 
 @dataclass(frozen=True, slots=True)
 class VoteFreeEntry(Command):
-    approve: bool  # this voter's stance on waiving entry blinds
+    approve: bool  # 该投票人对免盲的表态
 
 
 @dataclass(frozen=True, slots=True)
 class Connect(Command):
-    nick: str  # connecting nick; reconnect if already in world.users (OFFLINE)
+    nick: str  # 接入的 nick;已在 world.users(OFFLINE)则为重连
 
 
 @dataclass(frozen=True, slots=True)
 class Disconnect(Command):
-    nick: str  # disconnecting nick; mark OFFLINE if in a room
+    nick: str  # 断开的 nick;在房则标 OFFLINE
 
 
 @dataclass(frozen=True, slots=True)
 class Timeout(Command):
-    nick: str  # whose turn timed out (game target, not error recipient)
-    epoch: int  # hand.epoch snapshot at schedule time; staleness check on arrival
+    nick: str  # 轮到谁超时(游戏目标,非错误收件人)
+    epoch: int  # 调度时的 hand.epoch 快照;进门做 staleness 比对
 
 
 @dataclass(frozen=True, slots=True)
 class Cleanup(Command):
-    nick: str  # occupant whose seat-hold expired (OFFLINE past liveness)
+    nick: str  # 占座到期者(OFFLINE 超过 liveness)

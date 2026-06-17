@@ -7,71 +7,71 @@ from app.core.enums import HandStatus, PlayerStatus, RoomStatus, UserStatus
 
 @dataclass
 class UserState:
-    uid: int  # immutable DB key (= User.id); persistence keys on this, not the mutable nickname
-    nickname: str  # mutable display name; also the world.users key (changeable only in lobby)
-    points: int  # global point balance, memory-authoritative
-    room: str  # current room; always set — lobby users live in ConnectionManager, not world.users
+    uid: int  # 不可变账号主键(= User.id);落库/记录按它,不按可变的 nickname
+    nickname: str  # 可变显示名;也是 world.users 的键(只能在大厅改)
+    points: int  # 全局积分余额,内存权威
+    room: str  # 当前房间;恒有值——大厅用户只活在 ConnectionManager,不进 world.users
 
 
 @dataclass
 class Player:
-    nickname: str  # identity within the hand
-    seat_position: int  # which Room.seats index this player occupies
-    points: int  # remaining stack this hand (spendable on bets)
+    nickname: str  # 本手内的身份
+    seat_position: int  # 占用的 Room.seats 下标
+    points: int  # 本手剩余筹码(可下注额)
     status: PlayerStatus = PlayerStatus.ACTIVE  # ACTIVE / FOLDED / ALLIN
-    bet_amount: int = 0  # invested this street; folded into contributed and zeroed at street end
-    has_acted: bool = False  # voluntarily acted this street; reset on street start / raise reopen
-    hole_cards: tuple[Card, Card] | None = None  # private; never broadcast/logged/persisted
+    bet_amount: int = 0  # 本街已投入;街结束并入 contributed 并清零
+    has_acted: bool = False  # 本街是否已自愿行动;街开始/被加注重开时置 False
+    hole_cards: tuple[Card, Card] | None = None  # 隐私:不进广播/日志/落库
 
 
 @dataclass
 class Hand:
-    status: HandStatus  # current street (PRE_FLOP..ENDING)
-    players: list[Player]  # action order: [0]=SB, [1]=BB (heads-up: [0]=button=SB)
-    seq: int  # = room.hand_seq at start; monotonic per room; dedupe_key = f"{room}:{seq}"
-    start_time: datetime  # stamped by shell; core stores but never reads it (no wall-clock branching)
-    acting_position: int | None = None  # players[acting_position] = current actor
-    last_bet: int = 0  # amount to call this street
-    last_raise_size: int = 0  # size of the last raise increment, for min-raise checks
-    deck: list[Card] = field(default_factory=list)  # private: undealt cards
-    contributed: dict[str, int] = field(default_factory=dict)  # nick -> total invested this hand
+    status: HandStatus  # 当前街(PRE_FLOP..ENDING)
+    players: list[Player]  # 行动顺序:[0]=小盲、[1]=大盲(两人局 [0]=庄=小盲)
+    seq: int  # = 开局时 room.hand_seq;房间内单调;dedupe_key = f"{room}:{seq}"
+    start_time: datetime  # shell 盖入的墙钟;core 只存不读(不据墙钟分支)
+    acting_position: int | None = None  # players[acting_position] = 当前行动者
+    last_bet: int = 0  # 本街需跟到的额度
+    last_raise_size: int = 0  # 最近一次加注的增量,供 min-raise
+    deck: list[Card] = field(default_factory=list)  # 隐私:未发的牌堆
+    contributed: dict[str, int] = field(default_factory=dict)  # nick → 本手累计投入
     flop: tuple[Card, Card, Card] | None = None
     turn: Card | None = None
     river: Card | None = None
-    epoch: int = 0  # bumped on every action/street advance; Timeout staleness key
+    epoch: int = 0  # 每次行动推进/街切换自增;Timeout staleness 判据
 
 
 @dataclass
 class Seat:
-    nickname: str  # occupant
-    points: int  # table stack available when not in a hand
-    in_game_points: int = 0  # principal locked into the current Hand (snapshot, for settle/record)
-    new_here: bool = True  # didn't play last hand; entry requires post-or-wait (rules.md ①)
-    wait_for_big_blind: bool = False  # chose "wait for BB (free)" over "post now" (wire flag)
+    nickname: str  # 占座者
+    points: int  # 不在手牌时桌上可用筹码
+    in_game_points: int = 0  # 手牌进行中锁进 Hand 的本金(快照,用于结算/记录)
+    new_here: bool = True  # 上一手未参与;入局需付盲即玩 / 等大盲
+    wait_for_big_blind: bool = False  # 选「等大盲免费入局」而非「付盲即玩」(wire 标志)
 
 
 @dataclass
 class EntryVote:
-    approvals: set[str] = field(default_factory=set)  # voter nicks who approved so far
-    rejected: bool = False  # any reject ends the vote as failed
+    approvals: set[str] = field(default_factory=set)  # 已 approve 的投票人 nick
+    rejected: bool = False  # 任一 reject 即失败
 
 
 @dataclass
 class Room:
-    seats: list[Seat | None]  # fixed length = MAX_SEATS; None = empty seat
-    small_blind: int  # SB amount; BB = 2 * small_blind
-    buy_in: int  # default buy-in amount for this room
-    users_in_room: dict[str, UserStatus] = field(default_factory=dict)  # in-room nick -> status machine
-    hand: Hand | None = None  # current hand, None between hands
+    seats: list[Seat | None]  # 定长 = MAX_SEATS;None = 空座
+    small_blind: int  # 小盲额;大盲 = 2 * small_blind
+    buy_in: int  # 本房默认买入额
+    users_in_room: dict[str, UserStatus] = field(default_factory=dict)  # 在房 nick → 状态机
+    hand: Hand | None = None  # 当前手牌;两手之间为 None
     status: RoomStatus = RoomStatus.PENDING_START  # PENDING_START / HAND_STARTED
-    button_position: int = 0  # dealer seat index
-    hand_seq: int = 0  # monotonic hand counter within the room
-    entry_vote: EntryVote | None = None  # in-progress free-entry vote, if any
-    waive_entry_for: set[str] = field(default_factory=set)  # snapshot: new_here nicks granted free entry next hand
-    leaving: set[str] = field(default_factory=set)  # mid-hand LeaveRoom: auto-folded, evicted at hand end
+    button_position: int = 0  # 庄家座位号
+    hand_seq: int = 0  # 房间内手牌单调计数
+    entry_vote: EntryVote | None = None  # 进行中的免盲投票
+    waive_entry_for: set[str] = field(default_factory=set)  # 快照:下一手免费入局的 new_here 集合
+    leaving: set[str] = field(default_factory=set)  # 局中 LeaveRoom 已 auto-fold、待手尾驱逐
 
 
 @dataclass
 class World:
-    rooms: dict[str, Room] = field(default_factory=dict)  # room name -> Room
-    users: dict[str, UserState] = field(default_factory=dict)  # nick -> UserState (only in-room users)
+    rooms: dict[str, Room] = field(default_factory=dict)  # 房间名 → Room
+    users: dict[str, UserState] = field(default_factory=dict)  # nick → UserState(仅在房用户)

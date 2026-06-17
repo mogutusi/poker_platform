@@ -86,32 +86,14 @@ ws ◀──ServerMessage(含 ErrorMessage)── Sender ◀──────�
    - **失败 / 抛异常** → **丢弃工作副本**,真正的 `world` 一字节未动。
    - **成功** → 把工作副本**装回** `world`(替换引用),再 dispatch events(含 `Persist`)。
 
-`checkout` / `commit` 是 **`shell/world.py` 的模块级函数**(`checkout(world, cmd)` / `commit(world, work)`),不是 `World` 的方法——`World` 是 core 的纯 dataclass(见 [models.md](models.md)),把「深拷贝 + 解析目标房 + 返回 shell 的 `Work`」挂成它的方法会让 core 类型背上 shell 职责、依赖 `Work` 这个 shell 类型,破坏分层。
+`checkout` / `commit` 是 **`shell/world.py` 的模块级函数**(`checkout(world, cmd)` / `commit(world, work)`),不是 `World` 的方法——`World` 是 core 的纯 dataclass(见 [models.md](models.md)),把「深拷贝 + 解析目标房 + 返回 shell 的 `Work`」挂成它的方法会让 core 类型背上 shell 职责、依赖 `Work` 这个 shell 类型,破坏分层。GameLoop 主循环每条命令的处理:
 
-```python
-from app.shell.world import checkout, commit
-
-class GameLoop:
-    world: World
-    inbox: asyncio.Queue[Command]
-    conns: ConnectionManager     # 把 nick 解析成物理 Sender 队列(连接绑 nick,见 connection.md)
-    persist: PersistWriter       # delayDB(见 db.md)
-    timer: Timer
-    async def run(self):
-        while True:
-            cmd = await self.inbox.get()              # 唯一让出点
-            work = checkout(self.world, cmd)          # ① 按命令类型解析目标房 + 深拷贝(房 + users 表)→ 工作副本
-            try:
-                events, err = reduce(work, cmd)       # ② 同步,只改副本
-            except Exception:
-                log.exception("reduce crashed on %s", cmd)
-                events, err = [], Err(ErrorCode.INTERNAL)   # 异常归一为失败臂
-            if err is not None:                       # ③ 失败/异常:丢弃 work,world 未动
-                self.send_error(cmd, err)
-            else:
-                commit(self.world, work)              # ④ 成功:装回 world(替换引用)
-                for ev in events:
-                    self.dispatch(ev)                 # 只 put_nowait,不 await
+```
+cmd = await inbox.get()              # 唯一让出点
+work = checkout(world, cmd)          # ① 解析目标房 + 深拷贝(房 + users 表)→ 工作副本
+events, err = reduce(work, cmd)      # ② 同步,只改副本;异常归一为 ([], Err(INTERNAL))
+if err: send_error(cmd, err)         # ③ 失败/异常:丢弃 work,world 未动
+else:   commit(world, work);  for ev in events: dispatch(ev)   # ④ 成功:装回 + 只 put_nowait
 ```
 
 要点:

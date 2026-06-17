@@ -14,12 +14,14 @@ from app.core.domain import Room, UserState, World
 
 @dataclass
 class Work:
-    room_name: str | None  # target room key (None = pure-lobby command, no room)
-    room: Room | None  # deep copy of target room; None = absent in world (reduce may create it)
-    users: dict[str, UserState]  # deep copy of the whole users table
+    room_name: str | None  # 目标房键(None = 纯大厅命令,无房)
+    room: Room | None  # 目标房深拷贝;None = world 中无此房(reduce 可新建)
+    users: dict[str, UserState]  # 整份 users 表的深拷贝
 
 
 def _target_room(world: World, cmd: Command) -> str | None:
+    # 按命令类型解析目标房(见 storage.md):JoinRoom 自带 room;系统命令看 nick;
+    # 其余 wire 命令看 origin。nick 不在 world.users(纯大厅)→ 无房。
     if isinstance(cmd, JoinRoom):
         return cmd.room
     if isinstance(cmd, (Connect, Disconnect, Timeout, Cleanup)):
@@ -43,10 +45,10 @@ def checkout(world: World, cmd: Command) -> Work:
 
 
 def commit(world: World, work: Work) -> None:
-    world.users = work.users
+    world.users = work.users  # users 表整份替换
     if work.room_name is None:
         return
     if work.room is None:
-        world.rooms.pop(work.room_name, None)
+        world.rooms.pop(work.room_name, None)  # reduce 置 None = 销毁空房
     else:
-        world.rooms[work.room_name] = work.room
+        world.rooms[work.room_name] = work.room  # 新建或替换,统一写回引用

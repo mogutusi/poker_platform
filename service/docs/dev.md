@@ -93,7 +93,7 @@ poetry run alembic history               # 迁移历史
 
 ### 提交(commit)
 
-- **提交信息一律全英文**(标题 + 正文 + trailer)。便于检索、跨环境一致,同 [log.md](log.md)「日志一律英文」。中文留给设计文档和 `changes/` 变更记录,代码与 commit 用英文。
+- **提交信息一律全英文**(标题 + 正文 + trailer)。便于检索、跨环境一致,同 [log.md](log.md)「日志一律英文」。**标识符(类/函数/变量名)用英文,但代码注释用中文**(同设计文档语言,见 [coding_principle.md](coding_principle.md));提交信息仍全英文。
 - **提交信息引用变更记录编号**(见 [refactor/README.md](refactor/README.md) §5 的 `changes/NNNN-*.md`),让 commit ↔ 设计变更可追溯:
   ```
   P0: core domain models + enums (refactor 0002)

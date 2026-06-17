@@ -31,5 +31,5 @@ class Card:
     suit: CardSuit  # h/d/c/s
 
     def to_treys(self) -> str:
-        # treys card string is "<rank><suit>", e.g. "As", "Th"
+        # treys 牌串形如 "<rank><suit>",如 "As"、"Th"
         return f"{self.rank.value}{self.suit.value}"
