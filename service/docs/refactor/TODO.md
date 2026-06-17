@@ -9,12 +9,12 @@
 
 ## P0 · 基线(数据类型 + 工作副本 API)
 
-- [ ] `core/enums.py`:四套状态枚举 + `USER_STATUS_TRANSITIONS` 合法转移表(从现 [enums.py](../../app/pokertable/enums.py) 迁移)
-- [ ] `core/domain.py`:`World/Room/Hand/Player/Seat/UserState` dataclass(含 `UserState.uid`、`Hand.epoch/seq/start_time`、`Seat.in_game_points/new_here`、`Room.entry_vote/waive_entry_for`)
-- [ ] `core/commands.py`:Command 全集,统一 `origin: str | None`,**不带 room**(`JoinRoom(room, uid, loaded)` 例外带 room)
-- [ ] `core/events.py`:`Broadcast(room,msg)`/`Personal(nick,msg)`/`Persist(payload)`/`TurnChanged`/`ClearAction`
-- [ ] `core/errors.py`:`ErrorCode` 枚举 + `Err(code, detail)`
-- [ ] `shell/world.py`:`World.checkout(cmd)` 按命令类型解析目标房(表见 [storage.md](../storage.md));`commit(work)` 处理房间增/删/替换 + users 表替换
+- [x] `core/enums.py`:四套状态枚举 + `USER_STATUS_TRANSITIONS` 合法转移表(从现 [enums.py](../../app/pokertable/enums.py) 迁移) — 0002
+- [x] `core/domain.py`:`World/Room/Hand/Player/Seat/UserState` dataclass(含 `UserState.uid`、`Hand.epoch/seq/start_time`、`Seat.in_game_points/new_here`、`Room.entry_vote/waive_entry_for`) — 0002(另含 `Hand.last_raise_size`、`Player.has_acted`、`Seat.wait_for_big_blind`、`Room.leaving`、`EntryVote`、`core/cards.py`)
+- [x] `core/commands.py`:Command 全集,统一 `origin: str | None`,**不带 room**(`JoinRoom(room, uid, loaded)` 例外带 room) — 0002
+- [x] `core/events.py`:`Broadcast(room,msg)`/`Personal(nick,msg)`/`Persist(payload)`/`TurnChanged`/`ClearAction` — 0002
+- [x] `core/errors.py`:`ErrorCode` 枚举 + `Err(code, detail)` — 0002
+- [x] `shell/world.py`:`checkout(world, cmd)` 按命令类型解析目标房(表见 [storage.md](../storage.md));`commit(world, work)` 处理房间增/删/替换 + users 表替换 — 0002(模块级函数而非 World 方法,见 0002 偏离记录)
 
 ## P1 · core 规则(主力,纯单测)
 
