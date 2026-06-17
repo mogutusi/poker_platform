@@ -26,13 +26,15 @@ poetry install                              # 按 pyproject + poetry.lock 装
 poetry add <pkg>
 poetry add --group dev pytest pytest-asyncio   # 开发依赖(测试见 testing.md)
 
-# 跑东西(二选一)
-poetry run python -m app.main        # 不激活、直接在 venv 里跑
-poetry env activate                   # 或先激活再跑命令
+# 跑东西(三选一,工作目录 service/)
+poetry run python -m app.main        # 不激活、直接在 venv 里跑(推荐)
+poetry env activate                   # 或先激活、再裸跑命令
+.venv/bin/python -m app.main          # 或直接点名 venv 解释器(等价)
 ```
 
+- **venv 路径固定在 `service/.venv`**(`virtualenvs.in-project true` 的结果,Python 3.12):解释器是 `service/.venv/bin/python`,`pytest`/`alembic` 等可执行文件都在 `service/.venv/bin/` 下。IDE/编辑器把 Python interpreter 指到 `service/.venv/bin/python` 即可。
+- **裸 `python`/`pytest` 多半不存在或缺依赖**(系统环境既无项目依赖、也不在 venv 里,常见 `command not found`)——所有命令(`python`、`pytest`、`alembic`)一律走 `poetry run <cmd>`、先 `poetry env activate`,或直接调 `service/.venv/bin/<cmd>`。
 - **`poetry.lock` 要提交**:别人 `poetry install` 复现同样版本。改了依赖记得连 lock 一起提交。
-- 所有命令(`alembic`、`pytest`、`python`)都要在 venv 内跑:`poetry run <cmd>` 或先 `poetry env activate`。
 
 ## Alembic
 

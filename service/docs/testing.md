@@ -14,6 +14,17 @@
 
 工具:`pytest` + `pytest-asyncio`(`poetry add --group dev pytest pytest-asyncio`,见 [dev.md](dev.md))。目录建议 `tests/core/`、`tests/shell/`、`tests/crypto/`。
 
+**怎么跑**:测试都在项目内 venv(`service/.venv`,Python 3.12;`virtualenvs.in-project true` 的产物)里跑,工作目录切到 `service/`:
+
+```bash
+cd service
+poetry run pytest                  # 全量;或先 `poetry env activate` 再裸跑 `pytest`
+poetry run pytest tests/core -q    # 只跑 core 单测
+.venv/bin/pytest tests/core/test_betting.py   # 等价:直接点名 venv 里的 pytest
+```
+
+裸 `python`/`pytest`(系统环境)没装项目依赖、也不在 venv 里,会 `command not found` 或缺包——一律走 `poetry run` 或 `service/.venv/bin/` 下的可执行文件。venv 路径与解释器见 [dev.md](dev.md)。
+
 ## core 单测怎么写
 
 **形状**:构造 `world` → 跑一条/一串命令 → 断言三样:① 改后 `world` 关键字段、② `events` 列表、③ `err`。
