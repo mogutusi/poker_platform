@@ -27,7 +27,6 @@ def test_checkout_resolves_room_from_user():
     work = world_api.checkout(world, SitDown(origin="A", seat=0))
     assert work.room_name == "r1"
     assert work.room is not None
-    assert work.room_existed is True
 
 
 def test_checkout_joinroom_uses_command_room_even_if_absent():
@@ -36,7 +35,6 @@ def test_checkout_joinroom_uses_command_room_even_if_absent():
     work = world_api.checkout(world, JoinRoom(origin="A", room="r9", uid=1, loaded=500))
     assert work.room_name == "r9"
     assert work.room is None
-    assert work.room_existed is False
 
 
 def test_checkout_lobby_connect_has_no_room():

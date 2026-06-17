@@ -45,10 +45,18 @@
 ### 偏离设计 / 决策
 
 - **`checkout`/`commit` 写成模块级函数**(`world_api.checkout(world, cmd)`),而非 `World` 的方法。理由:`World` 是 core dataclass,把 shell 的 checkout 逻辑挂上去会让 core 类型耦合 shell 职责;模块函数更干净。文档伪码写 `world.checkout(...)`,语义一致,签名以实现为准(README §0 允许)。
-- **新增 `Work.room_existed`**:`commit` 用不到(新建/替换同写回),但 P1 的 reduce 需要据它区分「JoinRoom 到不存在的房 → 新建」与「已存在 → 加入」,先在 P0 备好。
 - **`Seat.wait_for_big_blind`**:rules.md ① 提到「等大盲免费」是个 wire 标志,落成 `Seat` 字段。
 - **`Room.leaving`**:rules.md ④ 局中 `LeaveRoom` auto-fold + 标「离桌中」待手尾驱逐,落成 `Room` 字段。
 - 旧 `app/pokertable/` 未删(README §2 视为参考)。
+
+## 复盘修正(用户反馈:别盲目执行计划 + 注释克制)
+
+第一版写得太「照着 TODO 跑」,据反馈做了两类修正,并把「带批判性思考、别盲目执行计划」写进 [README.md](../README.md) §0 与 §5:
+
+1. **删冗余字段 `Work.room_existed`**:第一版加了它想给 P1 reduce 区分「新建 vs 加入」,但 `room_existed` 在 checkout 时恒等于 `work.room is not None`(都由 `existing` 派生)、`commit` 也用不到——纯冗余。reduce 用 `work.room is None` 即可判断房不存在。删除并改对应测试。这正是「质疑计划每一步、别把冗余当必要」的实例。
+2. **注释克制**:删掉所有模块开头的大段 docstring 与复述式注释——设计依据已在 `docs/`(architecture/core/storage)里,代码里只留极少数非显然的「为什么」单行标注(隐私字段、`start_time` core 不读时钟、`epoch` staleness 键)。新增 memory 记录此偏好。
+
+23 个测试仍全绿。
 
 ## 待办 / 下一步
 
