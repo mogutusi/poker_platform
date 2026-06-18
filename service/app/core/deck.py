@@ -8,6 +8,8 @@ from app.core.cards import Card, CardRank, CardSuit
 # 整副 52 张(花色 × 点数);洗牌从它复制,不原地改
 FULL_DECK: list[Card] = [Card(rank, suit) for suit in CardSuit for rank in CardRank]
 
+BOARD_CARDS = 5  # 一手最多的公共牌数:flop 3 + turn 1 + river 1(reduce 校验牌堆够发用)
+
 _RNG = random.SystemRandom()  # 密码学随机;不变量 1 允许的本地非阻塞计算
 _EVALUATOR = Evaluator()  # treys 单例;evaluate 是 O(1) 纯计算
 

@@ -10,7 +10,7 @@
 
 from app.core.enums import HandStatus, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
-from app.core.events import Broadcast, Personal, TurnChanged
+from app.core.events import Broadcast, ClearAction, Personal, Persist, TurnChanged
 from app.core.commands import StartHand
 from app.core.messages import HandStarted, HandStatusChanged, HoleCards
 from tests.builders import DECK, T0, make_table, run, seat
@@ -363,20 +363,25 @@ def test_sitting_out_established_blocks_free_entry():
     assert c.bet_amount == BB and c.points == 98  # 整桌有已入局玩家 → C 付入局 BB(否则=躲盲漏洞)
 
 
-# ── 全员投盲即 all-in:无人可行动 → acting_position=None、不产 TurnChanged(0010 行为)──
-# 「跑公共牌直接摊牌」收尾留 0011(rules.md ③);此测试钉住 0010 不把手卡死且无人察觉。
-def test_all_dealt_all_in_on_blinds_no_actor():
+# ── born-all-in:全员投盲即 all-in、无人可行动 → 不等动作,立即跑公共牌摊牌结算(0011 接住 0010 §6)──
+def test_born_all_in_runs_out_and_settles():
     world = make_table(
         {0: seat("A", 1, new_here=False), 1: seat("B", 1, new_here=False)},  # 双方 <BB,投盲即 all-in
         button=1,
     )
     world, events, err = _start(world, "A", 0)
     assert err is None
-    h = _hand(world)
-    assert all(p.status is PlayerStatus.ALLIN for p in h.players)
-    assert h.acting_position is None  # 无 ACTIVE 可行动
-    assert not any(isinstance(e, TurnChanged) for e in events)  # 不起行动倒计时
-    assert _room(world).status is RoomStatus.HAND_STARTED  # 已开局,待 0011 跑公共牌收尾
+    room = _room(world)
+    # 手牌已跑完公共牌、结算、收尾(不再卡在 HAND_STARTED)
+    assert room.hand is None and room.status is RoomStatus.PENDING_START
+    assert not any(isinstance(e, TurnChanged) for e in events)  # 无人可行动,不起倒计时
+    kinds = [type(e.msg).__name__ for e in events if isinstance(e, Broadcast)]
+    assert "HandShowDown" in kinds and "HandEnded" in kinds  # 摊牌 + 结束
+    assert any(isinstance(e, Persist) for e in events)  # 手牌记录(事件写)
+    assert any(isinstance(e, ClearAction) for e in events)  # 停行动倒计时
+    # 守恒:两人各锁入 1,结算后还回座位总额不变(此局 board 成顺/同花,平分各得 1)
+    assert room.seats[0].points + room.seats[1].points == 2
+    assert room.seats[0].in_game_points == 0 and room.seats[1].in_game_points == 0
 
 
 # ── 注入牌堆过短 → 返 Err(守 helper「绝不 raise」),工作副本丢弃、world 不动 ──

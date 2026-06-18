@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 
 from app.core.cards import Card
-from app.core.enums import HandStatus, PlayerStatus
+from app.core.enums import HandStatus, PlayerActionType, PlayerStatus
 from app.core.events import ServerMessage
 
 
@@ -42,3 +42,41 @@ class HoleCards(ServerMessage):
 class HandStatusChanged(ServerMessage):
     status: HandStatus  # 当前街(开局为 PRE_FLOP)
     board: tuple[Card, ...]  # 已发公共牌;PRE_FLOP 为空,逐街追加
+
+
+@dataclass(frozen=True)
+class PlayerActed(ServerMessage):
+    seat_position: int  # 行动者座位
+    nickname: str  # 行动者
+    action: PlayerActionType  # FOLD / CHECK / BET
+    bet_amount: int  # 行动后本人本街投入(快照于街结算清零前)
+    points: int  # 行动后本人剩余筹码
+    status: PlayerStatus  # 行动后本人状态(ACTIVE / FOLDED / ALLIN)
+    last_bet: int  # 推进后本街需跟到的额度(进新街为 0)
+    pot: int  # 推进后总底池(contributed + 各人本街 bet_amount)
+    acting_position: int | None  # 推进后下一行动者(players 下标);手牌结束为 None
+
+
+@dataclass(frozen=True)
+class ShowdownReveal:
+    seat_position: int  # 摊牌者座位
+    nickname: str  # 摊牌者
+    hole_cards: tuple[Card, Card]  # 隐私揭示:仅摊牌(HandShowDown)合法公开未弃牌者底牌
+
+
+@dataclass(frozen=True)
+class HandShowDown(ServerMessage):
+    board: tuple[Card, ...]  # 完整 5 张公共牌
+    reveals: tuple[ShowdownReveal, ...]  # 未弃牌者底牌(底牌唯一合法公开点,见 core.md 不变量 3)
+
+
+@dataclass(frozen=True)
+class NickAmount:
+    nickname: str  # 收款者
+    amount: int  # 金额(赢得 / 退还)
+
+
+@dataclass(frozen=True)
+class HandEnded(ServerMessage):
+    winnings: tuple[NickAmount, ...]  # 各赢家从子池赢得
+    refunds: tuple[NickAmount, ...]  # 未叫注退还(及退化无主池退回)
