@@ -16,7 +16,8 @@ class ErrorCode(StrEnum):
     NO_HAND = "NO_HAND"  # 该操作需要进行中的手牌
     NOT_YOUR_TURN = "NOT_YOUR_TURN"  # PlayerAction 非当前行动者发起
     ILLEGAL_ACTION = "ILLEGAL_ACTION"  # 动作违反下注规则(rules.md ②)
-    NOT_ENOUGH_PLAYERS = "NOT_ENOUGH_PLAYERS"  # StartHand 时 ready 玩家 < 2
+    NOT_ENOUGH_PLAYERS = "NOT_ENOUGH_PLAYERS"  # StartHand 时在局 ready 玩家 < 2
+    NOT_READY = "NOT_READY"  # 该操作要求发起人 READY_TO_PLAY(如 StartHand 发起人)
     NO_VOTE_IN_PROGRESS = "NO_VOTE_IN_PROGRESS"  # VoteFreeEntry 时无进行中投票
     NOT_A_VOTER = "NOT_A_VOTER"  # 非合格投票人却投票
 

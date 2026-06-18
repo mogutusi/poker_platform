@@ -1,5 +1,4 @@
 import copy
-from dataclasses import dataclass
 
 from app.core.commands import (
     Cleanup,
@@ -9,14 +8,10 @@ from app.core.commands import (
     JoinRoom,
     Timeout,
 )
-from app.core.domain import Room, UserState, World
+from app.core.domain import Work, World
 
-
-@dataclass
-class Work:
-    room_name: str | None  # 目标房键(None = 纯大厅命令,无房)
-    room: Room | None  # 目标房深拷贝;None = world 中无此房(reduce 可新建)
-    users: dict[str, UserState]  # 整份 users 表的深拷贝
+# Work 的类型定义已上移到 core/domain(reduce 的操作面,守「core 不 import shell」);
+# checkout/commit 仍是 shell 的模块级函数,负责构造/落定工作副本(见 storage.md)。
 
 
 def _target_room(world: World, cmd: Command) -> str | None:

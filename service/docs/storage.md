@@ -25,7 +25,7 @@
    - **失败 / 抛异常** → **丢弃工作副本**,真正的 `world` 一字节没动。
    - **成功** → 把工作副本**装回** `world`(替换引用),再 dispatch events(含 `Persist`)。
 
-`checkout` / `commit` 是 **`shell/world.py` 的模块级函数**,不是 `World` 的方法(`World` 是 core 纯 dataclass,挂方法会破坏分层,见 [models.md](models.md))。它们接收 `world` 作首参,返回 / 落定一个 `Work`(`room_name` / `room` / `users`):
+`checkout` / `commit` 是 **`shell/world.py` 的模块级函数**,不是 `World` 的方法(`World` 是 core 纯 dataclass,挂方法会破坏分层,见 [models.md](models.md))。它们接收 `world` 作首参,返回 / 落定一个 `Work`(`room_name` / `room` / `users`)。**`Work` 的类型定义在 `core/domain.py`**(它是 reduce 的操作面;若放 shell 则 core/reduce import shell 会破「core 不 import shell」铁律),`checkout`/`commit` 只是其构造者/落定者(shell→core 合法)——0010 落 reduce 时上移,见 [changes/0010](refactor/changes/0010-p1-reduce-start-hand.md):
 
 ```python
 # GameLoop 主循环(简化)

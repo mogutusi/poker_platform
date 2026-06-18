@@ -75,3 +75,12 @@ class Room:
 class World:
     rooms: dict[str, Room] = field(default_factory=dict)  # 房间名 → Room
     users: dict[str, UserState] = field(default_factory=dict)  # nick → UserState(仅在房用户)
+
+
+@dataclass
+class Work:
+    # reduce 的工作副本:目标房 + users 表的深拷贝。reduce 原地改它,成功 commit、失败丢弃。
+    # 类型属 core(reduce 的操作面);构造/落定由 shell/world 的 checkout/commit 负责(见 storage.md)。
+    room_name: str | None  # 目标房键(None = 纯大厅命令,无房)
+    room: Room | None  # 目标房深拷贝;None = world 中无此房(reduce 可新建)
+    users: dict[str, UserState]  # 整份 users 表的深拷贝
