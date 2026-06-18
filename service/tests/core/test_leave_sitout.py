@@ -401,14 +401,17 @@ def test_set_status_ready_toggle_out_of_hand():
     assert msg.nickname == "A" and msg.status is UserStatus.READY_TO_PLAY and msg.seat_position == 0
 
 
-def test_set_status_standup_not_yet_implemented():
-    # 起身离座(→WATCHING)归后续座位簇,本簇占位 INTERNAL(不误判为合法)
+# 起身(→WATCHING)已于 0015 落地:腾座 + 退筹回全局 + UserStatusChanged。
+# 完整钱路/守恒断言见 test_seat_buyin.py;此处仅确认 SetUserStatus 路由到起身、不再 INTERNAL。
+def test_set_status_standup_now_implemented():
     world = make_table(
         {0: seat("A", 100, new_here=False)}, button=0, statuses={"A": UserStatus.SITTING_IN}
     )
     world, events, err = run(world, SetUserStatus(origin="A", status=UserStatus.WATCHING))
-    assert err is not None and err.code is ErrorCode.INTERNAL and events == []
-    assert _room(world).users_in_room["A"] is UserStatus.SITTING_IN  # 未改
+    assert err is None
+    room = _room(world)
+    assert room.users_in_room["A"] is UserStatus.WATCHING and room.seats[0] is None  # 起身腾座
+    assert world.users["A"].points == 100  # 座位筹码退回全局积分
 
 
 def test_set_status_illegal_transition():

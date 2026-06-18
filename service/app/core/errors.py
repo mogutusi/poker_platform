@@ -12,6 +12,7 @@ class ErrorCode(StrEnum):
     NOT_YOUR_SEAT = "NOT_YOUR_SEAT"  # 操作了不属于自己的座位
     INVALID_STATUS_TRANSITION = "INVALID_STATUS_TRANSITION"  # 不在 USER_STATUS_TRANSITIONS 表
     INSUFFICIENT_POINTS = "INSUFFICIENT_POINTS"  # 买入超过全局积分余额
+    INVALID_BUY_IN = "INVALID_BUY_IN"  # 买入额非法(≤0;上下限随 gameconfig 收编后补,见 config.md)
     HAND_IN_PROGRESS = "HAND_IN_PROGRESS"  # 手牌进行中不可执行该操作
     NO_HAND = "NO_HAND"  # 该操作需要进行中的手牌
     NOT_YOUR_TURN = "NOT_YOUR_TURN"  # PlayerAction 非当前行动者发起

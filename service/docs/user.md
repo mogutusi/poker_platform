@@ -73,9 +73,9 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 3. **驱逐**:用户离场(`LeaveRoom` / `Cleanup` 退完分)时,reduce 产出**最后一笔退分 `Persist` 后**,再 `del work.users[nick]`,用户回大厅。因一个用户只在一个房间,这条就是它的彻底离场,**驱逐无歧义**。
    > 断线**不立即驱逐**:`OFFLINE` 期间座位筹码、`UserState` 都保留;等 `LIVENESS_TIMEOUT` 到期投 `Cleanup` 才真正退分 + 驱逐。重连落在窗口内则 `UserState` 安然无恙(见 [timer.md](timer.md))。
 
-## 出入口窄:只在买入/离桌动全局积分
+## 出入口窄:只在买入 / 腾座动全局积分
 
-**对局内的筹码流转(下注、底池、结算回座位)不碰全局积分。** `Hand` 里的下注、`Seat.in_game_points`、手牌结束把筹码还回 `Seat.points` 全是**房间内**积分,不落 DB、不经 `UserState`。`UserState.points` **只在买入(扣)和离桌/清理(还)两处变动**——出入口窄,易审计。
+**对局内的筹码流转(下注、底池、结算回座位)不碰全局积分。** `Hand` 里的下注、`Seat.in_game_points`、手牌结束把筹码还回 `Seat.points` 全是**房间内**积分,不落 DB、不经 `UserState`。`UserState.points` 只在两类时点变动——**买入(借记:全局→座位)** 与 **腾座(贷记:座位→全局)**;后者涵盖**离桌 `LeaveRoom` / 清理 `Cleanup` / 起身 `SetUserStatus(WATCHING)`**(三者都把座位筹码退回全局,见 [changes/0015](refactor/changes/0015-p1-seat-buyin.md) `_release_seat`)。唯一借记是买入、所有贷记都是腾座——出入口仍窄,易审计。
 
 ## 单房间约束(一个用户只在一个房间)
 
@@ -100,7 +100,7 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 2. **载入决策在 reduce**(判 `nick` 是否已在 `work.users`),shell 不读 `world`;**绝不重载已在内存的实体**。
 3. **改积分只改工作副本**(GameLoop 已深拷贝 `users` 表),失败丢弃即回滚,无需用户专用机制。
 4. **积分校验先于修改**(好习惯),`Persist` 带快照值。
-5. **全局积分只在买入/离桌两处变动**,对局内流转走房间内积分,不落 DB。
+5. **全局积分只在买入(借记)/ 腾座——离桌·清理·起身(贷记)变动**,对局内流转走房间内积分,不落 DB。
 6. **一个用户只在一个房间**(`UserState.room`):`Connect` 到别房即拒,驱逐无歧义、不必引用计数。
 
 ## 注意点

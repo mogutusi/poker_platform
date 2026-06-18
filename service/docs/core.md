@@ -161,7 +161,7 @@ treys 评估只在 core 内做纯计算(无 IO),合法。`Evaluator` 单例在 c
 | 动作·进街 | `Broadcast(PlayerAction)` + `Broadcast(HandStatusChanged)` | `TurnChanged` |
 | 摊牌 | `Broadcast(HandShowDown)` | — |
 | 结束 | `Broadcast(HandEnded)` + `Persist(HandRecord)` | `ClearAction` |
-| 买入/离桌 | `Broadcast(...)` + `Persist(PointsWrite)` | — |
+| 买入/离桌/起身 | `Broadcast(...)` + `Persist(PointsWrite)` | — |
 | 接入/重连 | `Personal(StateSnapshot)`(私发全量桌面快照) | — |
 
 `Broadcast`/`Personal` 的 payload 是 wire `ServerMessage`;`Persist` 是 delayDB 结构。两者都带快照值,不持 `world` 活引用(不变量 7,由工作副本天然保证)。

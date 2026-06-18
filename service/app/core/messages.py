@@ -93,3 +93,11 @@ class UserStatusChanged(ServerMessage):
 class UserLeft(ServerMessage):
     nickname: str  # 离房者;Broadcast 给留下者、Personal 回执给本人(见 connection.md/lobby.md)
     seat_position: int | None  # 离开时释放的座位号;未就座者为 None
+
+
+@dataclass(frozen=True)
+class PlayerBoughtIn(ServerMessage):
+    nickname: str  # 买入者
+    seat_position: int  # 充值的座位号
+    amount: int  # 本次从全局积分转入的额度
+    seat_points: int  # 买入后座位的可用筹码(快照)

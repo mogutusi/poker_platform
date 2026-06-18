@@ -4,17 +4,19 @@
 
 from app.core.cards import Card
 from app.core.commands import (
+    BuyIn,
     Cleanup,
     Command,
     Disconnect,
     LeaveRoom,
     PlayerAction,
     SetUserStatus,
+    SitDown,
     StartHand,
     Timeout,
 )
 from app.core.deck import BOARD_CARDS, evaluate, shuffled_deck
-from app.core.domain import Hand, Player, Room, Work
+from app.core.domain import Hand, Player, Room, Seat, Work
 from app.core.enums import (
     HandStatus,
     PlayerActionType,
@@ -32,6 +34,7 @@ from app.core.messages import (
     HoleCards,
     NickAmount,
     PlayerActed,
+    PlayerBoughtIn,
     PlayerView,
     ShowdownReveal,
     UserLeft,
@@ -40,9 +43,10 @@ from app.core.messages import (
 from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
 from app.core.rules import betting, blinds, sidepot
 
-# SetUserStatus 本簇支持的「就座内」目标状态(起身离座→WATCHING / 入座归后续座位簇,见 0014)
+# SetUserStatus 玩家可主动发起的目标状态:就座内 ready/sit-out 切换 + 起身离座(→WATCHING)。
+# 入座(WATCHING→SITTING_IN)走 SitDown,不在此列。
 _SELF_STATUS_TARGETS = frozenset(
-    {UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN, UserStatus.SITTING_OUT}
+    {UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN, UserStatus.SITTING_OUT, UserStatus.WATCHING}
 )
 
 ReduceResult = tuple[list[Event], Err | None]
@@ -65,6 +69,10 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _cleanup(work, cmd)
         case SetUserStatus():
             return _set_user_status(work, cmd)
+        case SitDown():
+            return _sit_down(work, cmd)
+        case BuyIn():
+            return _buy_in(work, cmd)
         case _:
             # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
             # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
@@ -548,19 +556,29 @@ def _begin_leave(work: Work, room: Room, nick: str) -> list[Event]:
     return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot)]
 
 
-def _evict(work: Work, room: Room, nick: str) -> list[Event]:
-    # 驱逐离房者:退座位筹码回全局积分 → Persist(PointsWrite) → 释座 → 移出 users_in_room →
-    # del work.users[nick] → UserLeft(Broadcast 给留下者 + Personal 回执本人)。顺序守 user.md「退分 Persist 先于 del」。
-    events: list[Event] = []
+def _release_seat(work: Work, room: Room, nick: str) -> Persist | None:
+    # 腾座:退座位筹码回全局积分 + 释座,产 Persist(PointsWrite);无座位(观战者)→ None。
+    # _evict(离房驱逐)与起身(→WATCHING)共用——任何「腾座」都把座位筹码还回全局(user.md)。
     seat_idx = _seat_of(room, nick)
-    if seat_idx is not None:
-        seat = room.seats[seat_idx]
-        assert seat is not None
-        user = work.users[nick]
-        user.points += seat.points  # 座位筹码退回全局积分(对局内流转此前已结算回 Seat.points)
-        seat.points = 0
-        room.seats[seat_idx] = None  # 释座
-        events.append(Persist(payload=PointsWrite(uid=user.uid, points=user.points)))
+    if seat_idx is None:
+        return None
+    seat = room.seats[seat_idx]
+    assert seat is not None
+    user = work.users[nick]
+    user.points += seat.points  # 座位筹码退回全局积分(对局内流转此前已结算回 Seat.points)
+    seat.points = 0
+    room.seats[seat_idx] = None  # 释座
+    return Persist(payload=PointsWrite(uid=user.uid, points=user.points))
+
+
+def _evict(work: Work, room: Room, nick: str) -> list[Event]:
+    # 驱逐离房者:腾座(_release_seat,退筹 Persist 先于 del)→ 移出 users_in_room →
+    # del work.users[nick] → UserLeft(Broadcast 给留下者 + Personal 回执本人)。
+    seat_idx = _seat_of(room, nick)  # 释座前取座位号供 UserLeft
+    events: list[Event] = []
+    pw = _release_seat(work, room, nick)
+    if pw is not None:
+        events.append(pw)
     room.users_in_room.pop(nick, None)
     del work.users[nick]  # 彻底离场回大厅;单房间约束 ⇒ 驱逐无歧义(user.md)
     left = UserLeft(nickname=nick, seat_position=seat_idx)
@@ -568,6 +586,53 @@ def _evict(work: Work, room: Room, nick: str) -> list[Event]:
     events.append(Broadcast(room=work.room_name, msg=left))
     events.append(Personal(nick=nick, msg=left))
     return events
+
+
+def _sit_down(work: Work, cmd: SitDown) -> ReduceResult:
+    # 观战 → 就座:占一个空座,新建 Seat(new_here=True → 下一手付盲即玩/等大盲,防躲盲,见 rules.md ①)。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
+    current = room.users_in_room[nick]
+    if current is not UserStatus.WATCHING:
+        return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} 当前 {current},仅观战者可入座")
+    if not (0 <= cmd.seat < len(room.seats)):
+        return [], Err(ErrorCode.NOT_YOUR_SEAT, f"座位号 {cmd.seat} 越界")
+    if room.seats[cmd.seat] is not None:
+        return [], Err(ErrorCode.SEAT_TAKEN, f"座位 {cmd.seat} 已被占用")
+    if not current.can_change_to(UserStatus.SITTING_IN):
+        return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} {current}→SITTING_IN 非法")
+    room.seats[cmd.seat] = Seat(nickname=nick, points=0)  # new_here=True(默认),买入后再 ready
+    room.users_in_room[nick] = UserStatus.SITTING_IN
+    msg = UserStatusChanged(nickname=nick, status=UserStatus.SITTING_IN, seat_position=cmd.seat)
+    return [Broadcast(room=work.room_name, msg=msg)], None
+
+
+def _buy_in(work: Work, cmd: BuyIn) -> ReduceResult:
+    # 全局积分 → 座位筹码(纯内存转账,user.md);失败丢工作副本即回滚(无需 BuyInFailed)。
+    # 校验:自己的座位 + 非局中(手内筹码已锁) + 正额 + 余额够。上下限随 gameconfig 收编后补(P8)。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
+    if not (0 <= cmd.seat < len(room.seats)):
+        return [], Err(ErrorCode.NOT_YOUR_SEAT, f"座位号 {cmd.seat} 越界")
+    seat = room.seats[cmd.seat]
+    if seat is None or seat.nickname != nick:
+        return [], Err(ErrorCode.NOT_YOUR_SEAT, f"座位 {cmd.seat} 不属于 {nick}")
+    if room.users_in_room[nick] is UserStatus.PLAYING:
+        return [], Err(ErrorCode.HAND_IN_PROGRESS, "手牌进行中不能买入(筹码已锁入本手)")
+    if cmd.amount <= 0:
+        return [], Err(ErrorCode.INVALID_BUY_IN, f"买入额须为正(amount={cmd.amount})")
+    user = work.users[nick]
+    if cmd.amount > user.points:
+        return [], Err(ErrorCode.INSUFFICIENT_POINTS, f"have={user.points} need={cmd.amount}")
+    user.points -= cmd.amount
+    seat.points += cmd.amount
+    persist = Persist(payload=PointsWrite(uid=user.uid, points=user.points))
+    msg = PlayerBoughtIn(nickname=nick, seat_position=cmd.seat, amount=cmd.amount, seat_points=seat.points)
+    return [Broadcast(room=work.room_name, msg=msg), persist], None
 
 
 def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
@@ -588,12 +653,19 @@ def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} 局中仅可请求 SITTING_OUT(当前 {new_status})")
 
     if new_status not in _SELF_STATUS_TARGETS:
-        return [], Err(ErrorCode.INTERNAL, f"SetUserStatus {current}→{new_status} 暂未实现(起身/入座随座位簇)")
+        return [], Err(ErrorCode.INTERNAL, f"SetUserStatus {current}→{new_status} 暂未实现(入座走 SitDown)")
     if not current.userself_can_change_to(new_status):
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} {current}→{new_status} 非法")
+    events: list[Event] = []
+    if new_status is UserStatus.WATCHING:
+        # 起身离座:腾座 + 退座位筹码回全局积分(user.md「腾座即退筹」第三出入口);非局中才到此(PLAYING 臂已拦)
+        pw = _release_seat(work, room, nick)
+        if pw is not None:
+            events.append(pw)
     room.users_in_room[nick] = new_status
-    msg = UserStatusChanged(nickname=nick, status=new_status, seat_position=_seat_of(room, nick))
-    return [Broadcast(room=work.room_name, msg=msg)], None
+    seat_idx = _seat_of(room, nick)  # 起身后座位已腾空 → None
+    events.append(Broadcast(room=work.room_name, msg=UserStatusChanged(nickname=nick, status=new_status, seat_position=seat_idx)))
+    return events, None
 
 
 def _seat_of(room: Room, nick: str) -> int | None:
