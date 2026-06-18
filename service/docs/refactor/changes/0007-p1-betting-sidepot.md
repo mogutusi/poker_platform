@@ -48,8 +48,19 @@
 3. **②.7 短 all-in 测试漏断言 `has_acted=True`** —— 补上,完整对齐 rules.md ② L126。
 （另把 `next_active_position` 注释里「街即关闭」的不精确措辞改准。)
 
+## push 前复审(第二轮多 agent 对抗式 + 人工:5 维 × 2 refute-by-default 核实)
+
+push 前又跑一轮:5 个维度(betting/sidepot/deck+纯度+规范/doc-sync/测试充分性)各一个 finder,每条候选交 2 个「默认反驳」核实者(规范字面 + 影响)双签才算确认。**9 条候选、1 条确认、8 条驳回**。58 测试仍全绿、core 纯度通过。
+
+确认并已修:
+
+1. **本篇 test 计数笔误**:上文「实际改了什么」原写 `test_betting.py(26)`,实测 22(`grep -c '^def test'`);3+22+9=34 与本篇「34」「总计 58」自洽,故 26 为笔误,改 22。
+
+8 条驳回均为**已正确代码上的测试加固建议**(核实者均给出反例轨迹证明代码符合 rules.md ②/③,非缺陷);其中三条留作后续 test-hardening(见待办)。
+
 ## 待办 / 下一步
 
 - P1(二):`rules/blinds.py` + 免盲投票状态。
 - P1(三):`core/reduce.py` 顶层 + 各 handler,串起三块规则 + deck + 工作副本。
 - 守恒/隐私断言在 reduce 落地时默认开(测试期)。
+- **测试加固(复审驳回项,代码已验证正确,非阻塞)**:① 重开测试断言 `last_raise_size` 的「增大」方向(现仅 ②.8 的不缩小方向有断言);② 奇数零头补 >2 赢家用例(`min(key=(seat-button)%seat_size)` 与赢家数无关、已验证正确);③ 非 all-in 短跟(`amount < last_bet < stack`)的 `Err` 臂补单测。
