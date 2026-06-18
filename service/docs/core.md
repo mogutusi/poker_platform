@@ -89,7 +89,7 @@ def reduce(work, cmd):
 1. **定庄**:`button_position` 推进到下一个 `READY_TO_PLAY` 座位。
 2. **排座**:把就座的 ready 玩家按「庄之后→庄」顺序排成 `players`,使 `players[0]=小盲`、`players[1]=大盲`(两人局特例:庄=小盲)。
 3. **建 Hand**:`hand_seq += 1`;`hand = Hand(status=PRE_FLOP, players, last_bet=2*small_blind, contributed={}, epoch=0, seq=room.hand_seq, start_time=cmd.started_at)`(`start_time` 是 shell 带入的墙钟值,core 不读时钟)。把每个 `Seat.points` 锁进 `Player.points`、并存 `Seat.in_game_points` 快照,`Seat.points=0`。
-4. **下盲**:小盲投 `small_blind`、大盲投 `2*small_blind`(含 dead blind 处理,见下);更新 `bet_amount` / `contributed`;归零筹码者置 `ALLIN`。
+4. **下盲**:小盲投 `small_blind`、大盲投 `2*small_blind`(含 dead blind 处理,见下);更新各自 `bet_amount`(本街投入;街结束才并入 `contributed`,见 [rules.md](rules.md) ②/③);归零筹码者置 `ALLIN`。
 5. **发牌**:洗牌(`random.SystemRandom`,不变量 1 允许;或用 `StartHand.deck` 重放),给每人发 2 张 `hole_cards`。
 6. **置 `PLAYING`**:参与者 UserStatus → `PLAYING`,`RoomStatus → HAND_STARTED`。
 7. **定行动者**:`acting_position` = 大盲下一位(两人局为小盲/庄),`epoch=0`。
