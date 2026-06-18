@@ -3,11 +3,21 @@
 # 成功 commit、失败/异常丢弃(见 core.md / storage.md)。本篇(0010)只落地 StartHand。
 
 from app.core.cards import Card
-from app.core.commands import Command, PlayerAction, StartHand
+from app.core.commands import (
+    Cleanup,
+    Command,
+    Disconnect,
+    LeaveRoom,
+    PlayerAction,
+    SetUserStatus,
+    StartHand,
+    Timeout,
+)
 from app.core.deck import BOARD_CARDS, evaluate, shuffled_deck
 from app.core.domain import Hand, Player, Room, Work
 from app.core.enums import (
     HandStatus,
+    PlayerActionType,
     PlayerStatus,
     RoomStatus,
     UserStatus,
@@ -24,9 +34,16 @@ from app.core.messages import (
     PlayerActed,
     PlayerView,
     ShowdownReveal,
+    UserLeft,
+    UserStatusChanged,
 )
-from app.core.records import HandRecordWrite, ParticipantWrite
+from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
 from app.core.rules import betting, blinds, sidepot
+
+# SetUserStatus 本簇支持的「就座内」目标状态(起身离座→WATCHING / 入座归后续座位簇,见 0014)
+_SELF_STATUS_TARGETS = frozenset(
+    {UserStatus.READY_TO_PLAY, UserStatus.SITTING_IN, UserStatus.SITTING_OUT}
+)
 
 ReduceResult = tuple[list[Event], Err | None]
 
@@ -38,6 +55,16 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _start_hand(work, cmd)
         case PlayerAction():
             return _player_action(work, cmd)
+        case Timeout():
+            return _timeout(work, cmd)
+        case LeaveRoom():
+            return _leave_room(work, cmd)
+        case Disconnect():
+            return _disconnect(work, cmd)
+        case Cleanup():
+            return _cleanup(work, cmd)
+        case SetUserStatus():
+            return _set_user_status(work, cmd)
         case _:
             # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
             # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
@@ -216,30 +243,51 @@ def _player_action(work: Work, cmd: PlayerAction) -> ReduceResult:
     err = betting.apply_action(hand, actor, cmd.action, cmd.bet_amount, big_blind)
     if err is not None:
         return [], err  # 违规动作:丢工作副本、world 不动(失败安全)
+    return _acted_events(work, hand, actor, cmd.action, big_blind), None
 
-    # 动作合法、已改 hand。先快照行动结果(街若关闭,settle_street 会清零 bet_amount),再推进。
-    acted_bet, acted_points, acted_status = actor.bet_amount, actor.points, actor.status
+
+def _acted_events(
+    work: Work, hand: Hand, actor: Player, action: PlayerActionType, big_blind: int
+) -> list[Event]:
+    # 行动者动作(自愿 PlayerAction / 超时默认 / 离桌 auto-fold)已落 hand 后的标准产出:
+    # 先快照行动结果(街若关闭 settle_street 会清零 bet_amount),再推进,产 Broadcast(PlayerActed) + 推进事件。
+    snapshot = (actor.bet_amount, actor.points, actor.status)
     follow = _advance(work, hand, big_blind)
-    acted = Broadcast(
+    return [_acted_broadcast(work, hand, actor, action, snapshot), *follow]
+
+
+def _acted_broadcast(
+    work: Work,
+    hand: Hand,
+    actor: Player,
+    action: PlayerActionType,
+    snapshot: tuple[int, int, PlayerStatus],
+) -> Broadcast:
+    # 把行动结果(快照于推进前)+ 推进后底池/行动者投影为 Broadcast(PlayerActed)。
+    bet_amount, points, status = snapshot
+    return Broadcast(
         room=work.room_name,
         msg=PlayerActed(
             seat_position=actor.seat_position,
             nickname=actor.nickname,
-            action=cmd.action,
-            bet_amount=acted_bet,
-            points=acted_points,
-            status=acted_status,
+            action=action,
+            bet_amount=bet_amount,
+            points=points,
+            status=status,
             last_bet=hand.last_bet,
             pot=_pot(hand),
             acting_position=hand.acting_position,
         ),
     )
-    return [acted, *follow], None
 
 
 def _advance(work: Work, hand: Hand, big_blind: int) -> list[Event]:
-    # 一次行动后的推进:本街关闭 → 结算分支;否则换下一个 ACTIVE 行动者(epoch+1 + TurnChanged)。
-    if betting.street_closed(hand):
+    # 一次行动后的推进:只剩一人未弃 / 本街关闭 → 结算分支;否则换下一个 ACTIVE 行动者(epoch+1 + TurnChanged)。
+    live = [p for p in hand.players if p.status is not PlayerStatus.FOLDED]
+    if len(live) == 1 or betting.street_closed(hand):
+        # len(live)==1:其余皆弃 → 无摊牌结束。显式判而非只靠 street_closed:残存者可能 has_acted=False、
+        # bet 未跟平 → street_closed 为假却已该结束。两条触发路径:① 离桌 auto-fold 在「本可 check」时也弃
+        # (rules.md ④);② 普通弃牌使存活者尚未行动(如 heads-up preflop SB 直接弃,BB 还没用选择权)。
         return _close_street(work, hand, big_blind)
     assert hand.acting_position is not None  # 未关 ⇒ 当前行动者存在(已在 _player_action 校验)
     hand.acting_position = betting.next_active_position(hand, hand.acting_position)
@@ -315,7 +363,8 @@ def _settle_and_end(work: Work, hand: Hand, *, reveal: bool) -> list[Event]:
 
 
 def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event]:
-    # 收尾:各 Player.points 还回 Seat、清锁筹、PLAYING→SITTING_IN;产 HandEnded + Persist + ClearAction。
+    # 收尾:各 Player.points 还回 Seat、清锁筹、PLAYING→SITTING_IN/SITTING_OUT;产 HandEnded + Persist;
+    # 最后驱逐本手 leaving(座位此时已含还回的剩余栈/赢得);ClearAction 停行动倒计时。
     assert work.room_name is not None
     room = work.room
     assert room is not None
@@ -326,11 +375,17 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
         initial = s.in_game_points  # 开局锁入快照
         s.points += p.points  # p.points 已含赢得 / 退还
         s.in_game_points = 0
+        # 手牌记录含全部参与者(离桌者也参与了本手)
         participants.append(
             ParticipantWrite(uid=work.users[p.nickname].uid, initial_points=initial, final_points=s.points)
         )
+        # UserStatus 收尾:离桌者状态不动(随后 _evict 移除);局中请求坐出者转 SITTING_OUT;其余 PLAYING→SITTING_IN
+        if p.nickname in room.leaving:
+            continue
         if room.users_in_room.get(p.nickname) is UserStatus.PLAYING:
-            room.users_in_room[p.nickname] = UserStatus.SITTING_IN
+            room.users_in_room[p.nickname] = (
+                UserStatus.SITTING_OUT if p.nickname in room.sitting_out_next else UserStatus.SITTING_IN
+            )
 
     record = HandRecordWrite(
         dedupe_key=f"{work.room_name}:{hand.seq}",
@@ -347,11 +402,15 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     hand.acting_position = None
     room.hand = None
     room.status = RoomStatus.PENDING_START
-    return [
-        Broadcast(room=work.room_name, msg=ended),
-        Persist(payload=record),
-        ClearAction(room=work.room_name),
-    ]
+
+    events: list[Event] = [Broadcast(room=work.room_name, msg=ended), Persist(payload=record)]
+    # 驱逐本手离桌者:退座位剩余筹码回全局积分 + 释座 + 移出(sorted 使产出顺序确定,便于断言)
+    for nick in sorted(room.leaving):
+        events += _evict(work, room, nick)
+    room.leaving = set()
+    room.sitting_out_next = set()
+    events.append(ClearAction(room=work.room_name))
+    return events
 
 
 # ── 纯计算 helper(发牌 / 位次 / 底池)──
@@ -399,3 +458,157 @@ def _pot(hand: Hand) -> int:
 
 def _by_nick(hand: Hand, nick: str) -> Player:
     return next(p for p in hand.players if p.nickname == nick)
+
+
+# ── 局中生命周期(Timeout / Disconnect / LeaveRoom / Cleanup / SetUserStatus)── rules.md ④ + timer.md
+def _timeout(work: Work, cmd: Timeout) -> ReduceResult:
+    # 行动超时:staleness(无手 / epoch 不符 / 行动者非 cmd.nick)→ 忽略(系统命令 origin=None,过期不报错);
+    # 仍是该回合该玩家 → 默认动作:能 check 则 check,否则 fold(timer.md「能 check 则 check,否则 fold」)。
+    room = work.room
+    if room is None or room.hand is None:
+        return [], None  # 不在房 / 无手牌 → 过期忽略
+    hand = room.hand
+    if hand.epoch != cmd.epoch:
+        return [], None  # 回合早已推进(epoch 不符)→ 过期忽略
+    pos = hand.acting_position
+    if pos is None or hand.players[pos].nickname != cmd.nick:
+        return [], None  # 行动者已变 → 过期忽略
+    actor = hand.players[pos]
+
+    big_blind = blinds.BIG_BLIND_MULTIPLE * room.small_blind
+    action = PlayerActionType.CHECK if actor.bet_amount == hand.last_bet else PlayerActionType.FOLD
+    err = betting.apply_action(hand, actor, action, None, big_blind)
+    assert err is None  # 默认动作必合法(check 当且仅当已跟平,否则 fold);非法即 bug
+    return _acted_events(work, hand, actor, action, big_blind), None
+
+
+def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
+    # ws 断开:在房则标 OFFLINE 保座(timer.md「断开 ≠ 离场」,清理等 Cleanup);在大厅则无 world 变化。
+    # 在局者仍是 Player,轮到他时由行动倒计时 _timeout 自动 fold(牌局不卡)。
+    room = work.room
+    if room is None or cmd.nick not in room.users_in_room:
+        return [], None  # 大厅断开:无 world 状态可改
+    current = room.users_in_room[cmd.nick]
+    if current is UserStatus.OFFLINE:
+        return [], None  # 已离线(顶替/重复 Disconnect)→ 幂等忽略
+    if not current.can_change_to(UserStatus.OFFLINE):
+        return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{cmd.nick} {current}→OFFLINE 非法")
+    room.users_in_room[cmd.nick] = UserStatus.OFFLINE
+    msg = UserStatusChanged(
+        nickname=cmd.nick, status=UserStatus.OFFLINE, seat_position=_seat_of(room, cmd.nick)
+    )
+    return [Broadcast(room=work.room_name, msg=msg)], None
+
+
+def _leave_room(work: Work, cmd: LeaveRoom) -> ReduceResult:
+    # 退房回大厅:在当前手内 → 标 leaving + 仍 ACTIVE 则即时 auto-fold,手尾结算后驱逐;
+    # 不在当前手(观战/坐出/两手之间)→ 立即驱逐。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间,无法 LeaveRoom")
+    return _begin_leave(work, room, nick), None
+
+
+def _cleanup(work: Work, cmd: Cleanup) -> ReduceResult:
+    # 占座到期清理:staleness——仅当仍 OFFLINE 才退筹释座(timer.md;已重连则忽略)。
+    room = work.room
+    if room is None or cmd.nick not in room.users_in_room:
+        return [], None  # 不在房 → 过期忽略
+    if room.users_in_room[cmd.nick] is not UserStatus.OFFLINE:
+        return [], None  # 已重连(非 OFFLINE)→ 忽略
+    return _begin_leave(work, room, cmd.nick), None
+
+
+def _begin_leave(work: Work, room: Room, nick: str) -> list[Event]:
+    # 离房(LeaveRoom 主动 / Cleanup 占座到期)统一处理:在当前手内则标 leaving、仍 ACTIVE 则即时 auto-fold
+    # (rules.md ④「即便能 check 也按弃」),手尾 _finalize_hand 结算后 _evict;不在当前手则立即 _evict。
+    hand = room.hand
+    player = _player_in_hand(hand, nick) if hand is not None else None
+    if player is None or hand is None:
+        return _evict(work, room, nick)  # 观战/坐出/两手之间:座位筹码未锁入,直接驱逐
+
+    room.leaving.add(nick)  # 在手内:延到手尾驱逐(已投池中筹码不能抽走,守恒)
+    if player.status is not PlayerStatus.ACTIVE:
+        return []  # FOLDED 已出局 / ALLIN 已全押(不能再 fold,仍可赢);手尾结算后 _evict
+
+    big_blind = blinds.BIG_BLIND_MULTIPLE * room.small_blind
+    is_acting = hand.acting_position is not None and hand.players[hand.acting_position] is player
+    player.status = PlayerStatus.FOLDED  # auto-fold:即便能 check 也按弃(他要走)
+    if is_acting:
+        return _acted_events(work, hand, player, PlayerActionType.FOLD, big_blind)  # 行动者:正常推进(含 fold-to-one 结束)
+
+    # 非行动者离桌:当前行动者继续、不推进 turn;仅当因此只剩 1 名未弃者才结束本手。
+    # 快照行动结果于结算前(_close_street 的 settle_street 会清零 bet_amount),与 _acted_events 同。
+    snapshot = (player.bet_amount, player.points, player.status)
+    live = [p for p in hand.players if p.status is not PlayerStatus.FOLDED]
+    if len(live) == 1:
+        follow = _close_street(work, hand, big_blind)
+        return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot), *follow]
+    return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot)]
+
+
+def _evict(work: Work, room: Room, nick: str) -> list[Event]:
+    # 驱逐离房者:退座位筹码回全局积分 → Persist(PointsWrite) → 释座 → 移出 users_in_room →
+    # del work.users[nick] → UserLeft(Broadcast 给留下者 + Personal 回执本人)。顺序守 user.md「退分 Persist 先于 del」。
+    events: list[Event] = []
+    seat_idx = _seat_of(room, nick)
+    if seat_idx is not None:
+        seat = room.seats[seat_idx]
+        assert seat is not None
+        user = work.users[nick]
+        user.points += seat.points  # 座位筹码退回全局积分(对局内流转此前已结算回 Seat.points)
+        seat.points = 0
+        room.seats[seat_idx] = None  # 释座
+        events.append(Persist(payload=PointsWrite(uid=user.uid, points=user.points)))
+    room.users_in_room.pop(nick, None)
+    del work.users[nick]  # 彻底离场回大厅;单房间约束 ⇒ 驱逐无歧义(user.md)
+    left = UserLeft(nickname=nick, seat_position=seat_idx)
+    # 离开者已不在 users_in_room ⇒ Broadcast 只到留下者;回执本人走 Personal(connection.md)
+    events.append(Broadcast(room=work.room_name, msg=left))
+    events.append(Personal(nick=nick, msg=left))
+    return events
+
+
+def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
+    # 本簇仅处理「就座内」状态切换(0014):局中坐出延到手尾 + 就座内 ready/sit-out 切换。
+    # 起身离座(→WATCHING)/ 入座 / 买入归后续座位簇(暂以 INTERNAL 占位,沿用 reduce case _ 约定)。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
+    current = room.users_in_room[nick]
+    new_status = cmd.status
+
+    if current is UserStatus.PLAYING:
+        # 局中:只接受「坐出」,延到手尾生效(rules.md ④);本手 PLAYING 不变、照常打完
+        if new_status is UserStatus.SITTING_OUT:
+            room.sitting_out_next.add(nick)
+            return [], None  # 意图已记;手尾 _finalize_hand 转 SITTING_OUT(无即时 wire 回执)
+        return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} 局中仅可请求 SITTING_OUT(当前 {new_status})")
+
+    if new_status not in _SELF_STATUS_TARGETS:
+        return [], Err(ErrorCode.INTERNAL, f"SetUserStatus {current}→{new_status} 暂未实现(起身/入座随座位簇)")
+    if not current.userself_can_change_to(new_status):
+        return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} {current}→{new_status} 非法")
+    room.users_in_room[nick] = new_status
+    msg = UserStatusChanged(nickname=nick, status=new_status, seat_position=_seat_of(room, nick))
+    return [Broadcast(room=work.room_name, msg=msg)], None
+
+
+def _seat_of(room: Room, nick: str) -> int | None:
+    # 返回 nick 占用的座位下标;未就座(大厅/观战)为 None。
+    for i, s in enumerate(room.seats):
+        if s is not None and s.nickname == nick:
+            return i
+    return None
+
+
+def _player_in_hand(hand: Hand | None, nick: str) -> Player | None:
+    # 返回 nick 在当前手内的 Player;不在本手(观战/坐出/两手之间)为 None。
+    if hand is None:
+        return None
+    for p in hand.players:
+        if p.nickname == nick:
+            return p
+    return None

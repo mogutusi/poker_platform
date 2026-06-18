@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 
 from app.core.cards import Card
-from app.core.enums import HandStatus, PlayerActionType, PlayerStatus
+from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, UserStatus
 from app.core.events import ServerMessage
 
 
@@ -80,3 +80,16 @@ class NickAmount:
 class HandEnded(ServerMessage):
     winnings: tuple[NickAmount, ...]  # 各赢家从子池赢得
     refunds: tuple[NickAmount, ...]  # 未叫注退还(及退化无主池退回)
+
+
+@dataclass(frozen=True)
+class UserStatusChanged(ServerMessage):
+    nickname: str  # 状态变更者
+    status: UserStatus  # 新 UserStatus(如 OFFLINE / SITTING_OUT / READY_TO_PLAY)
+    seat_position: int | None  # 占座者的座位号;未就座(大厅/观战)为 None
+
+
+@dataclass(frozen=True)
+class UserLeft(ServerMessage):
+    nickname: str  # 离房者;Broadcast 给留下者、Personal 回执给本人(见 connection.md/lobby.md)
+    seat_position: int | None  # 离开时释放的座位号;未就座者为 None

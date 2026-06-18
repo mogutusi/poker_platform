@@ -13,7 +13,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | 实体 | 职责 | 要点 |
 |---|---|---|
 | `World` | 内存权威:全部房间 + 全局用户表 | `users` 键为 nick,只装在房用户(大厅用户不进,见 [user.md](user.md)) |
-| `Room` | 一个牌桌的全部状态 | 定长 `seats`、`button_position`、`hand_seq`(手牌标识);`entry_vote`/`waive_entry_for` 见免盲投票、`leaving` 见局中离桌([rules.md](rules.md) ①④) |
+| `Room` | 一个牌桌的全部状态 | 定长 `seats`、`button_position`、`hand_seq`(手牌标识);`entry_vote`/`waive_entry_for` 见免盲投票、`leaving`(局中离桌待手尾驱逐)/`sitting_out_next`(局中请求坐出待手尾生效)见局中生命周期([rules.md](rules.md) ①④) |
 | `EntryVote` | 免盲投票进行态 | `approvals` 集合 + 任一 `rejected` 即失败([rules.md](rules.md) ①) |
 | `Seat` | 「在桌」的钱与身份,跨手牌存活 | `points`(桌上筹码)/`in_game_points`(锁入本手的快照)/`new_here`/`wait_for_big_blind`(入局方式) |
 | `Hand` | 一手牌的全部状态 | `players` 按行动序([0]=SB、[1]=BB);`contributed`(本手累计投入,旧名 pots);`last_bet`/`last_raise_size` 供下注规则;`epoch`(staleness)/`seq`(标识)/`start_time`(shell 盖、core 不读) |
@@ -126,7 +126,8 @@ def reduce(work, cmd):
 
 - **摊牌**:补齐未发的公共牌;产出 `Broadcast(HandShowDown)`——**这是底牌唯一的合法公开点**,消息显式携带未弃牌者的 `hole_cards`(不经默认隐藏的 Player 序列化)。
 - **分池**:`contributed` 算边池 + treys 定胜负(下节)。
-- **结算**:每个 `Player.points`(赢得的 + 剩余)还回 `Seat.points`,`Seat.in_game_points=0`;`PLAYING` 玩家 UserStatus → `SITTING_IN`。
+- **结算**:每个 `Player.points`(赢得的 + 剩余)还回 `Seat.points`,`Seat.in_game_points=0`;`PLAYING` 玩家 UserStatus → `SITTING_IN`(局中请求坐出者 `room.sitting_out_next` → `SITTING_OUT`;局中离桌者 `room.leaving` 不转状态、随后驱逐)。
+- **驱逐离桌者**:对 `room.leaving` 里每人,退其座位剩余筹码回全局积分(`Persist(PointsWrite)`)、释座、移出 `users_in_room` + `del world.users`,产 `Broadcast/Personal(UserLeft)`(见 [rules.md](rules.md) ④ / [user.md](user.md) / [lobby.md](lobby.md))。
 - **落库**:产出 `Persist(HandRecordWrite)`(事件写,追加),`dedupe_key = f"{room}:{hand.seq}"`(见「手牌标识」)。`start_time = hand.start_time`(开局带入的值);`end_time` 留空,由 shell 在派发该 `Persist` 时盖墙钟(core 不读时钟)。记录存**结果**(各 participant 的 `uid`(由 `work.users[player.nickname].uid` 取)+ `initial_points`/`final_points` + `final_pot`),**不含底牌**。
 - **收尾**:`room.hand=None`、`RoomStatus → PENDING_START`、产出 `ClearAction`(停行动倒计时)。
 

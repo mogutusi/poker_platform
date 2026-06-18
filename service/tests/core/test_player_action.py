@@ -149,6 +149,25 @@ def test_checks_advance_through_all_streets_to_showdown():
     assert sum(s.points for s in room.seats if s is not None) == 300  # 守恒(无人下注,平/分后总额不变)
 
 
+def test_headsup_sb_open_fold_ends_hand():
+    # heads-up 经 StartHand:SB(先行动)直接弃 → 只剩 BB。回归:BB has_acted=False 使 street_closed 为假,
+    # 全靠 _advance 的 len(live)==1 短路结束本手(否则旧逻辑会卡着叫唯一存活者行动)。
+    world = make_table(
+        {0: seat("A", 100, new_here=False), 1: seat("B", 100, new_here=False)}, button=0
+    )
+    world, _, err = run(world, StartHand(origin="A", seat=0, started_at=T0, deck=DECK))
+    assert err is None
+    sb = _acting_nick(world)  # heads-up:button=SB 先行动
+    world, events, err = run(world, PlayerAction(origin=sb, action=FOLD))  # SB 自愿开弃
+    assert err is None
+    room = _room(world)
+    assert room.hand is None and room.status is RoomStatus.PENDING_START  # 本手结束,不卡
+    assert all(not isinstance(e.msg, HandShowDown) for e in events if isinstance(e, Broadcast))
+    assert sum(s.points for s in room.seats if s is not None) == 200  # 守恒:BB 收下 SB 的盲注
+    bb_seat = 1 if sb == "A" else 0
+    assert room.seats[bb_seat].points == 101  # BB 净赢 1(SB 盲注),SB 余 99
+
+
 # ════════ 摊牌 + 边池结算(hand_world 直接驱动收尾动作,可控底牌)════════
 def test_showdown_single_pot_high_hand_wins():
     # 3 人各投 100 到 RIVER,最后一人 check → 摊牌;B 三条 K 独得 300

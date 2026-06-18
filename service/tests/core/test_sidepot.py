@@ -132,10 +132,34 @@ def test_conservation_across_shapes():
 
 # ── 退化:某子池无 eligible 时按本档退回 contributor,守住守恒 ──
 def test_degenerate_empty_eligible_refunds_contributors():
-    # A(live)投 50;B、C 都投 100 后弃 → 顶层 100 无未弃牌者
+    # A(live)投 50;B、C 都投 100 后弃 → 顶层 100 无未弃牌者(并列最高、非未叫注)
     contributed = {"A": 50, "B": 100, "C": 100}
     payout = _settle(contributed, {"A"}, {"A": 1})
-    # B、C 并列最高 → 无第 1 步退还;L50 池=150 → A;L100 池本应 100 无 eligible → 退 B、C 各 50
+    # B、C 并列最高 → 无第 1 步未叫注;L50 池=150 → A;L100 池本应 100 无 eligible 且非未叫注 → 退 B、C 各 50
     assert payout.total["A"] == 150
     assert payout.refunds.get("B") == 50 and payout.refunds.get("C") == 50
+    _assert_conserved(payout, contributed)
+
+
+# ── 测试 ③.9 弃牌的唯一最高投入者(0014 离桌/清理 auto-fold)→ 未叫注 forfeit 归 live,不退本人 ──
+def test_folded_lone_high_bettor_forfeits_uncalled_to_live():
+    # A 投 40(本手唯一最高,但 LeaveRoom auto-fold 折掉)、B 投 10 在局、C 投 10 弃
+    contributed = {"A": 40, "B": 10, "C": 10}
+    payout = _settle(contributed, {"B"}, {"B": 1})
+    # 第 1 步:A 唯一最高(40>10)但 A 不在 live → 未叫注 30 forfeit(不退 A)、A 降到 10;
+    # L10 池=30{B};死钱 30 归最高 live 子池 → B 独得 60。A/C 一无所得。
+    assert payout.total == {"B": 60}
+    assert "A" not in payout.refunds and "A" not in payout.winnings  # 离桌者未叫注未退回(forfeit)
+    _assert_conserved(payout, contributed)
+
+
+def test_folded_lone_high_bettor_mixed_with_unreachable_side_pot():
+    # A 投 40(弃,唯一最高)、B 投 30(弃)、C 投 20 在局:未叫注归 C;C 够不着的 20-30 档退回 A/B
+    contributed = {"A": 40, "B": 30, "C": 20}
+    payout = _settle(contributed, {"C"}, {"C": 1})
+    # 第 1 步:A 未叫注 10(40→30)forfeit;分层 {A:30,B:30,C:20}:
+    #   L20 池=60{C};L30 档(A,B,均弃)无 eligible 且非未叫注 → 退 A、B 各 10;死钱 10 归 L20 池 → C 得 70
+    assert payout.total["C"] == 70
+    assert payout.refunds.get("A") == 10 and payout.refunds.get("B") == 10
+    assert "A" not in payout.winnings  # A 的未叫注 forfeit、被匹配档退回(非赢取)
     _assert_conserved(payout, contributed)

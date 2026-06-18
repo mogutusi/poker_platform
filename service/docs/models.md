@@ -46,7 +46,7 @@
 
 ## 待定
 
-- **P1 临时出站载荷在 `core/messages.py`**:reduce 是首个事件产出者,但 wire(P6)未落地。0010 起在 `core/messages.py` 用**纯 frozen dataclass**(挂 [events.py](../app/core/events.py) 的 `ServerMessage` 占位基类)承载 reduce 投影出的语义快照,使 reduce 无 wire/codegen 也能纯单测。P6 wire 落地时由 Pydantic 可辨识联合 DTO **取代/对齐**——投影点集中在 reduce,替换面可控;隐私由构造保证(广播载荷无 `hole_cards`/`deck` 字段)。见 [changes/0010](refactor/changes/0010-p1-reduce-start-hand.md)。0011 同法新增 `core/records.py` 承载 **Persist 事件写载荷**(`HandRecordWrite`/`ParticipantWrite`,挂 [events.py](../app/core/events.py) 的 `PersistPayload`),与「出站消息」分文件;P4 对齐 ORM(见 [db.md](db.md)「Persist 接口」/[changes/0011](refactor/changes/0011-p1-player-action-showdown.md))。
+- **P1 临时出站载荷在 `core/messages.py`**:reduce 是首个事件产出者,但 wire(P6)未落地。0010 起在 `core/messages.py` 用**纯 frozen dataclass**(挂 [events.py](../app/core/events.py) 的 `ServerMessage` 占位基类)承载 reduce 投影出的语义快照,使 reduce 无 wire/codegen 也能纯单测。P6 wire 落地时由 Pydantic 可辨识联合 DTO **取代/对齐**——投影点集中在 reduce,替换面可控;隐私由构造保证(广播载荷无 `hole_cards`/`deck` 字段)。见 [changes/0010](refactor/changes/0010-p1-reduce-start-hand.md)。0011 同法新增 `core/records.py` 承载 **Persist 事件写载荷**(`HandRecordWrite`/`ParticipantWrite`,挂 [events.py](../app/core/events.py) 的 `PersistPayload`),与「出站消息」分文件;P4 对齐 ORM(见 [db.md](db.md)「Persist 接口」/[changes/0011](refactor/changes/0011-p1-player-action-showdown.md))。0014 补 `core/records.py` 的 **`PointsWrite`**(全局积分状态写,离桌/清理退分)+ `core/messages.py` 的 `UserLeft`/`UserStatusChanged`(同临时载荷约定,见 [changes/0014](refactor/changes/0014-p1-inhand-lifecycle.md))。
 - 具体 DTO / DB 字段在 .py(见 [wire.md](wire.md) / [db.md](db.md)),随实现定。
 - 现有 [handrecord](../app/handrecord/) 的 SQLModel 要对齐 `HandRecordWrite`(见 [rest.md](rest.md))。
 - 域模型与 wire DTO 各自的 .py 模块划分(命名/目录)随实现定。

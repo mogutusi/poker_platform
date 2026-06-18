@@ -68,7 +68,8 @@ class Room:
     hand_seq: int = 0  # 房间内手牌单调计数
     entry_vote: EntryVote | None = None  # 进行中的免盲投票
     waive_entry_for: set[str] = field(default_factory=set)  # 快照:下一手免费入局的 new_here 集合
-    leaving: set[str] = field(default_factory=set)  # 局中 LeaveRoom 已 auto-fold、待手尾驱逐
+    leaving: set[str] = field(default_factory=set)  # 局中 LeaveRoom/Cleanup 已标记、待手尾结算后驱逐
+    sitting_out_next: set[str] = field(default_factory=set)  # 局中请求 SITTING_OUT、延到手尾生效(留房、下手不发)
 
 
 @dataclass

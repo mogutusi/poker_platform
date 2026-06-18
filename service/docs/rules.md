@@ -182,7 +182,7 @@ def street_closed(hand) -> bool:
 
 输入:`contributed[nick]`(每人本手总投入,含弃牌者)、未弃牌集合 `live`、各 `live` 的牌力、`button_position`。
 
-**第 1 步 · 退还未叫注**:设最高投入者唯一且其投入 `h1` > 次高 `h2`,则 `(h1-h2)` 是没人跟的注 → **退回该玩家**(进其 `points`)、把它的 `contributed` 降到 `h2`。(只有单个最高者可能有未叫注。)
+**第 1 步 · 退还未叫注**:设最高投入者唯一且其投入 `h1` > 次高 `h2`,则 `(h1-h2)` 是没人跟的注 → 把它的 `contributed` 降到 `h2`,这笔差额的去向看该玩家是否在局:**未弃牌 → 退回该玩家**(进其 `points`);**已弃牌 → forfeit,不退本人**,作为「死钱」归并到最高 live 子池由仍在局者赢取(见下第 2 步)。(只有单个最高者可能有未叫注;弃牌的唯一最高投入者只出现在 [④](#-手牌进行中的离桌--坐出--断线) 离桌/清理 auto-fold 折掉高注者的情形——守「离桌不能把已投池中的注捞回」。)
 
 **第 2 步 · 分层削池**:对(退还后的)`contributed`:
 
@@ -204,7 +204,9 @@ for L in levels:
 - **奇数零头**给最接近庄家左手的赢家:`winners` 按 `(seat_position - button_position) % seat_size` 升序,第一个拿零头;
 - 奖金进 `Player.points`。
 
-> `eligible` 恒非空:每个 level 至少由一个未弃牌者(在该额度 all-in 或跟到的人)撑起。若实现中出现空 `eligible`(理论不应),把该子池按 `contributors` 原额退回,并落 ERROR(bug 信号)。
+> **空 `eligible` 子池(本档投入者全弃)**:正常下注里每个 level 至少由一个未弃牌者撑起,但 [④](#-手牌进行中的离桌--坐出--断线) 的 auto-fold(离桌/清理可折掉本可不弃者)会让某档投入者全弃。分两种,都不再视为 bug:
+> - **弃牌的唯一最高投入者的未叫注**(第 1 步已摘出的 `h1-h2`):forfeit,**归并到最高 live 子池**——在局者本就面对这笔注,该由其赢取。
+> - **各弃牌者互相匹配的边池**(并列最高全弃、或在局者投入够不着的高档):无 live 资格者能赢、在局者也够不着 → **按本档退回各 contributor**,守住守恒(这是合理退化,非 bug)。
 
 ## 结算与筹码守恒
 
@@ -249,6 +251,8 @@ for L in levels:
 | **主动 `LeaveRoom`** | **立即** auto-fold | 不留 | 本手结束 |
 
 两者共用"手尾结算 + 退筹释座"那套,区别只在触发与是否留座。
+
+> **实现机制(0014,reduce)**:局中标记落 `room.leaving`(离桌/清理待手尾驱逐)与 `room.sitting_out_next`(坐出待手尾转 `SITTING_OUT`);手结束 `_finalize_hand` 结算后才 `_evict`(退座位剩余筹码回全局积分 → 释座 → 移出 → `del users` → `UserLeft`)。**离桌/清理的 auto-fold 一律 fold(即便能 check)**,与超时默认动作「能 check 则 check,否则 fold」不同。ALLIN 者不能再 fold(只标 leaving、仍可赢、手尾带奖金被驱逐);**非行动者离桌**只即时 fold、不推进 turn(仅当因此只剩一人未弃才结束本手)。
 
 ## 决策(可改)
 

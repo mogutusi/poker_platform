@@ -39,7 +39,7 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 - reduce:若在座/在局,先按规则结算退筹(产出最后一笔 `Persist(PointsWrite)`);从 `room.users_in_room` 移除;**最后** `del world.users[nick]`;若房间已空再 `del world.rooms[room]`(动态房)。
 - 产出:`Personal(nick=离开者, UserLeft)`(回执给本人——他已不在成员名单/房可能已销毁,收不到 Broadcast)+ `Broadcast(room, UserLeft)`(给留下的人;房已销毁则 dispatch 自动跳过,见 [connection.md](connection.md))。
 - 用户回到大厅(连接还在,只是不在任何 world 房)。
-- 对局进行中离开:复用断线/清理那套(在手牌里则自动弃牌、手结束再真正释座),细节随 [timer.md](timer.md) 的 `Cleanup`/core 规则,见「待定」。
+- 对局进行中离开:复用断线/清理那套(在手牌里则自动弃牌、手结束再真正释座);core 规则已落地(见 [rules.md](rules.md) ④ / [changes/0014](refactor/changes/0014-p1-inhand-lifecycle.md):`room.leaving` 标记 + `_finalize_hand` 末 `_evict`)。
 
 **换房** = `LeaveRoom` 再 `JoinRoom`(单房间约束要求先离开当前房)。
 

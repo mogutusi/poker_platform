@@ -18,6 +18,13 @@ class ParticipantWrite:
 
 
 @dataclass(frozen=True)
+class PointsWrite(PersistPayload):
+    # 全局积分状态写(买入扣 / 离桌·清理退);按不可变 uid 落库,delayDB 同键覆盖只落最新(见 user.md/db.md)。
+    uid: int  # 不可变账号主键(= UserState.uid);落库按它,不按可变 nickname
+    points: int  # 该账号当前全局积分余额(全量快照值,非增量)
+
+
+@dataclass(frozen=True)
 class HandRecordWrite(PersistPayload):
     dedupe_key: str  # f"{room}:{hand.seq}";delayDB 幂等键(见 db.md / core.md 手牌标识)
     start_time: datetime  # 开局墙钟(shell 经 StartHand 带入,core 只携带、不读时钟)
