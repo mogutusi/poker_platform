@@ -95,6 +95,7 @@ poetry run alembic history               # 迁移历史
 
 ### 提交(commit)
 
+- **commit / push 前先复审(提交门槛)**:对照 [review.md](review.md) 逐维做对抗式自 review,确认项当场修(代码 + 同步文档),结论记进 [changes/](refactor/changes/) 的 `NNNN`「自 review」段。**绿测不等于可提交;无「自 review」段不 push。**
 - **提交信息一律全英文**(标题 + 正文 + trailer)。便于检索、跨环境一致,同 [log.md](log.md)「日志一律英文」。**标识符(类/函数/变量名)用英文,但代码注释用中文**(同设计文档语言,见 [coding_principle.md](coding_principle.md));提交信息仍全英文。
 - **提交信息引用变更记录编号**(见 [refactor/README.md](refactor/README.md) §5 的 `changes/NNNN-*.md`),让 commit ↔ 设计变更可追溯:
   ```
@@ -129,6 +130,7 @@ GitHub HTTPS 推送不能用账号密码,需下列之一(配一次,凭证缓存�
 ```bash
 git status                       # 看清改了什么再提交
 git add -p                       # 分块挑选,别无脑 git add .
+# review                         # 提交前对照 docs/review.md 逐维自检 + 回填 changes/NNNN「自 review」段(提交门槛)
 git commit -m "..."              # 信息引用 changes/NNNN
 git push                         # 默认:推到 develop(本地 develop 已跟踪 origin/develop)
 ```

@@ -115,6 +115,7 @@ service/app/
    - 回填当前变更记录:**实际改了哪些文件、做了什么、为什么、对设计文档/计划做了哪些修改、留下什么待办**(和开工前写的「打算」对照,差异也记)。
    - 回到 [TODO.md](TODO.md) **勾掉完成项 / 补新发现的项**;计划要调就调。
    - 若改了不变量或架构决策,确认**已同步更新对应 docs**,并在变更记录里点名是哪几篇。
+   - **push 前对照 [review.md](../review.md) 做对抗式自 review**:逐维(分层/文档同步/文档一致/数据模型/规范/测试/账本)核一遍,确认项当场修,结论记进本篇变更记录的「自 review」段——**无此段不 push;绿测不等于可提交**。
    - 提交代码(git 规约见 [dev.md](../dev.md)):一个工作单元一次/几次提交,提交信息引用变更记录编号。
 4. **测试纪律**:core 改动配 core 单测(参考 [testing.md](../testing.md));规则用例对齐 [rules.md](../rules.md) 编号。
 
@@ -129,4 +130,4 @@ service/app/
 - 三套表示:[models.md](../models.md) · wire 治理 [wire.md](../wire.md)
 - shell 装配:[connection.md](../connection.md) · [timer.md](../timer.md) · [error.md](../error.md)
 - 子系统:[lobby.md](../lobby.md) · [user.md](../user.md) · [messaging.md](../messaging.md) · [presence.md](../presence.md) · [rest.md](../rest.md) · [auth.md](../auth.md)
-- 工程:[config.md](../config.md) · [log.md](../log.md) · [dev.md](../dev.md) · [testing.md](../testing.md)
+- 工程:[config.md](../config.md) · [log.md](../log.md) · [dev.md](../dev.md) · [testing.md](../testing.md) · [review.md](../review.md)(提交前复审)

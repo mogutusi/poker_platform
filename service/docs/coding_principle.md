@@ -9,7 +9,7 @@
 3. [storage.md](storage.md) —— 内存权威 + 工作副本回滚 + delayDB(状态怎么活、怎么回滚、怎么落库)
 4. [core.md](core.md) —— 游戏状态机:域模型、命令全集、一手牌的 reduce;细则见 [rules.md](rules.md)(盲注/下注轮关闭/边池 + 测试)
 5. 按你要改的模块再读:[connection.md](connection.md)(连接管理与 shell 装配) · [lobby.md](lobby.md)(大厅与房间生命周期) · [messaging.md](messaging.md)(房聊与私信) · [presence.md](presence.md)(在线状态) · [rest.md](rest.md)(排行榜/历史/资料) · [wire.md](wire.md)(协议契约) · [models.md](models.md)(域/wire/DB 三套表示) · [timer.md](timer.md) · [error.md](error.md) · [config.md](config.md) · [log.md](log.md) · [user.md](user.md) · [db.md](db.md) · [auth.md](auth.md)
-6. 工程:[dev.md](dev.md)(Poetry/Alembic/环境) · [testing.md](testing.md)(测试策略)
+6. 工程:[dev.md](dev.md)(Poetry/Alembic/环境) · [testing.md](testing.md)(测试策略) · [review.md](review.md)(提交前复审 —— push 前必走)
 
 ## 核心模型(一句话)
 
@@ -45,6 +45,8 @@
 - **错误信息可定位**:`Err` 的 `detail` 带上下文(谁、哪个房间、什么状态),别只甩一句 "invalid"。
 
 ## 提交前自检
+
+> 下面是**硬规则速查**;push 前还须对照 [review.md](review.md) 做**完整对抗式复审**(分层/文档同步/文档一致/数据模型/规范/测试/账本 七维),结论记进 [changes/](refactor/changes/) 的 `NNNN`「自 review」段——**绿测不等于可提交**。
 
 - [ ] core 里没有 `await`/IO/`import fastapi|sqlalchemy`?
 - [ ] 改动的 `reduce` 只改工作副本,失败 `return [], Err(...)`,没用异常/事件表达错误?
