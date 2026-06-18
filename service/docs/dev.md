@@ -130,9 +130,10 @@ GitHub HTTPS 推送不能用账号密码,需下列之一(配一次,凭证缓存�
 git status                       # 看清改了什么再提交
 git add -p                       # 分块挑选,别无脑 git add .
 git commit -m "..."              # 信息引用 changes/NNNN
-git push -u origin refactor/p0-core-domain
-# 阶段完成:在 develop 上合并(或开 PR 评审)
+git push                         # 默认:推到 develop(本地 develop 已跟踪 origin/develop)
 ```
+
+> **默认就是上面这条**——直接在 `develop` 上提交并 `git push`(见「分支模型」:主干即 `develop`、单人线性开发,0001-0010 都这么落)。**仅**当按「分支模型 ②」要隔离/留 PR 时,才改走功能分支:`git switch -c refactor/<阶段>-<简述>` → 干活提交 → `git push -u origin refactor/<阶段>-<简述>` → 阶段完成 `git switch develop && git merge --no-ff <分支>` 合回,再 `git push` 推 `develop`。
 
 > 提交节奏:跟着 [refactor/README.md](refactor/README.md) 的「变更记录先行」走——先开 `changes/NNNN`,再写代码,完成后回填记录并提交,提交信息回指该记录。
 
