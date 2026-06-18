@@ -5,7 +5,7 @@
 **delayDB 是「内存权威 → DB」的滞后落库写通道。** `reduce` 改的是内存(经工作副本 commit),改动以 `Persist` 事件交给本通道,由 **PersistWriter**(全进程唯一 DB 写者)**周期批量**落库,异步追平 DB。core 不碰 DB,只产出 `Persist`;一切落库都在 shell。
 
 > 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;前置概念在那里。
-> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)。新实体按下文「两类写」归类即可接入,不新增通道。
+> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` + 状态写 `DMReadCursorWrite`,见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
 
 ## 两类写(接入新实体先归类)
 
@@ -135,12 +135,27 @@ class HandRecordWrite(BaseModel):
     end_time: datetime    # core 留空 → shell 在派发本 Persist 时盖墙钟(core 不读时钟)
     final_pot: int
     participants: list[ParticipantWrite]   # 每个含 uid / initial_points / final_points(uid = 不可变 User.id)
+
+# 事件写(追加)· 私信一条(见 messaging.md「私信:未读收件箱」)
+class DMWrite(BaseModel):
+    dedupe_key: str       # = msg_id,shell 生成(如 f"{from_uid}:{微秒}");幂等 INSERT
+    from_uid: int         # 发件人不可变 User.id(绝不用可变 nickname)
+    to_uid: int           # 收件人不可变 User.id
+    text: str             # 私信正文;不得带 hole_cards/deck(log.md 红线)
+    created_at: datetime  # shell 盖墙钟;既是展示时间,也是「未读/已读」比较与保留清理的排序键
+
+# 状态写(覆盖)· 已读游标:某收件人读某对端读到了几时
+class DMReadCursorWrite(BaseModel):
+    reader_uid: int          # 读者(收件人)User.id —— StateKey 之一
+    peer_uid: int            # 对端(发件人)User.id —— key=("dm_cursor", reader_uid, peer_uid)
+    read_through_ts: datetime # 读到此刻为止(含);未读 = 该对话 created_at > read_through_ts;后写覆盖前写(只留最新游标)
 ```
 
 > **墙钟由 shell 盖**:`end_time` 是手牌结束的真实时刻,但 core 不读时钟——它产出 `HandRecordWrite` 时 `end_time` 为空,由 dispatch(shell)盖上 `now()` 再进写缓冲。`start_time` 则是 core 从 `StartHand` 命令携带过来的值,同属外移(见 [core.md](core.md))。
 
 - payload 必须是**快照值**:core 产出 `Persist` 那一刻就是不可变值(int / 新构造的记录),不带 `world` 活引用(配合工作副本回滚,见不变量 7)。
 - **新增持久化实体** = 在状态写/事件写里选语义 + 给键,不另起炉灶、不加第三种通道(受「不过度解耦」约束)。
+- **私信两类写由 shell 直接 `put`,不经 core/`Persist`**:`PointsWrite`/`HandRecordWrite` 是 core 产 `Persist`、GameLoop.dispatch 代投;`DMWrite`/`DMReadCursorWrite` 则由 **shell 私信路由**直接 `put_append/put_state`(写缓冲的第二个生产者,见 [messaging.md](messaging.md))。两者都是快照值、都只经 PersistWriter 落库,故同列本接口。
 
 ## 配置(照 [config.md](config.md),不硬编码)
 
@@ -150,6 +165,8 @@ class GameConfig(BaseSettings):
     DB_FLUSH_MAX_BATCH: int   = Field(ge=1, le=10000)     # 超过提前 flush(可选)
     DB_WRITE_MAX_RETRY: int   = Field(ge=1, le=100)       # 毒丸阈值
     DB_DRAIN_TIMEOUT_MS: int  = Field(ge=500, le=60000)   # 关闭 drain 上限
+    DM_READ_RETENTION_SECONDS: int   = Field(ge=0, le=31536000)  # 已读私信保留多久后清(0=读后即删);未读不受限、一直保活
+    DM_CLEANUP_INTERVAL_SECONDS: int = Field(ge=10, le=86400)    # PersistWriter 跑私信保留清理的周期
 ```
 
 ```ini
@@ -158,6 +175,8 @@ DB_FLUSH_INTERVAL_MS=500
 DB_FLUSH_MAX_BATCH=500
 DB_WRITE_MAX_RETRY=10
 DB_DRAIN_TIMEOUT_MS=5000
+DM_READ_RETENTION_SECONDS=604800   # 已读私信留 7 天后清
+DM_CLEANUP_INTERVAL_SECONDS=3600   # 每小时跑一趟清理
 ```
 
 ## 与架构契约(必须守住)
@@ -174,4 +193,5 @@ DB_DRAIN_TIMEOUT_MS=5000
 - **覆盖 ≠ 丢一致性**:落的是内存权威**当前值**,DB 追平即正确;被覆盖的中间值本就无需持久化。把这点和「事件写绝不可覆盖」分清,是本模块唯一易错处。
 - **脱敏红线**:落库 payload **不得带 `hole_cards` / `deck`**(见 [log.md](log.md));手牌记录存**结果**(`initial_points`/`final_points`/`final_pot`),不是底牌。
 - **读写分离**:实时判定一律读内存;DB 只服务事后查询与崩溃后冷启动初值。
+- **私信是写缓冲的第二个生产者**:shell 私信路由 `put_append/put_state`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理**(删已读满期的行)也归 PersistWriter——DELETE 是 DB 写,不另起写者(守唯一写者),周期 `DM_CLEANUP_INTERVAL_SECONDS`、保留期 `DM_READ_RETENTION_SECONDS`。
 - **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 ERROR、drain 失败 CRITICAL。

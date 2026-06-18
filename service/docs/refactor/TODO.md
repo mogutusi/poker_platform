@@ -64,7 +64,7 @@
 
 - [ ] lobby:静态预置 `ROOMS`、`JoinRoom`/`LeaveRoom`、`GET /lobby/rooms`
 - [ ] REST:leaderboard / hands(分页游标)/ profile(改昵称仅大厅 + `conns.rename`)
-- [ ] messaging:房聊走 reduce、私聊走 shell 路由、限速在 shell
+- [ ] messaging:房聊走 reduce + **shell 内存环形缓冲**(`FetchRoomChat` 拉历史,不落库);私聊走 shell 路由 + **未读收件箱**(`DMWrite` 事件写 / `DMReadCursorWrite` 状态写 / 完整已读回执 / PersistWriter 保留清理);限速在 shell。设计见 [messaging.md](../messaging.md)「持久化与离线送达」+ changes/0012
 - [ ] presence:只读聚合 API
 
 ## P8 · 收尾
