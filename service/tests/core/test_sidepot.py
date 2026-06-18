@@ -78,6 +78,23 @@ def test_odd_chip_goes_to_closest_left_of_button():
     _assert_conserved(payout, contributed)
 
 
+# ── 测试 ③.5b 奇数零头 wrap-around(庄非 0,赢家座位号在庄之下)──
+def test_odd_chip_wraps_around_nonzero_button():
+    # button=座4;并列赢家 A=座1、B=座5。庄左最近 (seat-button)%seat_size:B=(5-4)%6=1 < A=(1-4)%6=3 → B 拿零头。
+    # 若漏了 % seat_size,plain(seat-button)会误判 A(-3<1)→ 本例钉死环绕取模。
+    contributed = {"A": 3, "B": 3, "C": 1}  # C 投 1 后弃,使低池金额为奇数
+    payout = _settle(
+        contributed,
+        {"A", "B"},
+        {"A": 1, "B": 1},  # A、B 并列最强
+        seat_of={"A": 1, "B": 5, "C": 3},
+        button=4,
+    )
+    assert payout.total["A"] == 3
+    assert payout.total["B"] == 4  # 零头 1 归更接近庄左的 B(座5),非座号更小的 A
+    _assert_conserved(payout, contributed)
+
+
 # ── 测试 ③.6 全 all-in 三档分池 ──
 def test_three_way_all_in_layers():
     contributed = {"A": 30, "B": 60, "C": 100}

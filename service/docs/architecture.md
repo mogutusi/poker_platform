@@ -181,7 +181,7 @@ wire 消息(`ServerMessage`/`ClientMessage`)**只在后端 Pydantic 写一份**,
 ## 测试
 
 - `reduce` 给定 `work + 命令序列`,断言改后的状态与产出的 `Event` 列表,无需 DB / WebSocket。
-- 边池、dead blind、all-in、断线重连、超时默认动作全部在 core 层单测覆盖。
+- 边池、入局付盲即玩/等大盲、all-in、断线重连、超时默认动作全部在 core 层单测覆盖。
 - shell 仅需少量集成测试验证队列接线与保序。
 
 ## 优缺点

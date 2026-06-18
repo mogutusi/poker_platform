@@ -89,7 +89,7 @@ def reduce(work, cmd):
 1. **定庄**:`button_position` 推进到下一个 `READY_TO_PLAY` 座位。
 2. **排座**:把就座的 ready 玩家按「庄之后→庄」顺序排成 `players`,使 `players[0]=小盲`、`players[1]=大盲`(两人局特例:庄=小盲)。
 3. **建 Hand**:`hand_seq += 1`;`hand = Hand(status=PRE_FLOP, players, last_bet=2*small_blind, contributed={}, epoch=0, seq=room.hand_seq, start_time=cmd.started_at)`(`start_time` 是 shell 带入的墙钟值,core 不读时钟)。把每个 `Seat.points` 锁进 `Player.points`、并存 `Seat.in_game_points` 快照,`Seat.points=0`。
-4. **下盲**:小盲投 `small_blind`、大盲投 `2*small_blind`(含 dead blind 处理,见下);更新各自 `bet_amount`(本街投入;街结束才并入 `contributed`,见 [rules.md](rules.md) ②/③);归零筹码者置 `ALLIN`。
+4. **下盲**:小盲投 `small_blind`、大盲投 `2*small_blind`(新玩家入局「付盲即玩 / 等大盲」见下);更新各自 `bet_amount`(本街投入;街结束才并入 `contributed`,见 [rules.md](rules.md) ②/③);归零筹码者置 `ALLIN`。
 5. **发牌**:洗牌(`random.SystemRandom`,不变量 1 允许;或用 `StartHand.deck` 重放),给每人发 2 张 `hole_cards`。
 6. **置 `PLAYING`**:参与者 UserStatus → `PLAYING`,`RoomStatus → HAND_STARTED`。
 7. **定行动者**:`acting_position` = 大盲下一位(两人局为小盲/庄),`epoch=0`。
@@ -102,7 +102,7 @@ def reduce(work, cmd):
 
 校验:有 `Hand`、`acting_position` 指向发起人、动作合法。三种动作:
 
-- **FOLD**:`last_bet>0` 才允许(否则该 check);置 `FOLDED`。
+- **FOLD**:仅当 `bet_amount < last_bet`(有注要跟才允许弃;无注该 check);置 `FOLDED`。
 - **CHECK**:仅当 `bet_amount == last_bet`(无人加注或已跟平)。
 - **BET**(下注/跟注/加注,合并为一个动作 + 金额):`amount` 是**本街目标总额**。校验不超过 `points+bet_amount`;等于则 `ALLIN`;`< last_bet` 仅允许 all-in;`> last_bet` 即加注、更新 `last_bet`。
 
@@ -178,7 +178,7 @@ treys 评估只在 core 内做纯计算(无 IO),合法。`Evaluator` 单例在 c
 
 ## 测试(core 可纯单测)
 
-给定 `world + 命令序列`,断言改后状态 + 产出的 `Event` 列表,无需 DB/WS。**必须覆盖**:边池(多档 all-in)、dead blind、大盲 preflop 选择权、单人未弃牌直接结束、全 all-in 跑完公共牌、超时默认动作(check/fold)、断线在自己回合被自动 fold、奇数池零头归属、重连恢复。
+给定 `world + 命令序列`,断言改后状态 + 产出的 `Event` 列表,无需 DB/WS。**必须覆盖**:边池(多档 all-in)、入局付盲即玩/等大盲、大盲 preflop 选择权、单人未弃牌直接结束、全 all-in 跑完公共牌、超时默认动作(check/fold)、断线在自己回合被自动 fold、奇数池零头归属、重连恢复。
 
 ## 待定 / 高风险
 

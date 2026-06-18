@@ -6,22 +6,22 @@
 
 按 [TODO.md](../TODO.md) P0,落地 core 的数据类型与工作副本读写 API。这是后续所有阶段的地基,**本阶段不含游戏规则**(规则是 P1)。
 
-环境:本机刚装 Poetry,先 `poetry install` 建 in-project `.venv`,并 `poetry add --group dev pytest pytest-asyncio`(见 [testing.md](../testing.md))。
+环境:本机刚装 Poetry,先 `poetry install` 建 in-project `.venv`,并 `poetry add --group dev pytest pytest-asyncio`(见 [testing.md](../../testing.md))。
 
 打算新建(目标布局见 [README.md](../README.md) §3):
 
-- `core/enums.py`:四套状态机 + `USER_STATUS_TRANSITIONS` 合法转移表(从 [pokertable/enums.py](../../app/pokertable/enums.py) 迁移)。
+- `core/enums.py`:四套状态机 + `USER_STATUS_TRANSITIONS` 合法转移表(从 [pokertable/enums.py](../../../app/pokertable/enums.py) 迁移)。
 - `core/cards.py`:`Card`(suit/rank)纯数据 + treys 串转换(`Deck`/`Evaluator` 是 P1 的 `deck.py`)。
 - `core/domain.py`:`World/Room/Hand/Player/Seat/UserState/EntryVote` dataclass。含 0001 钉死的新字段:`UserState.uid`、`Hand.epoch/seq/start_time/last_raise_size`、`Seat.in_game_points/new_here/wait_for_big_blind`、`Room.entry_vote/waive_entry_for`、`Player.has_acted`。
 - `core/commands.py`:Command 全集,统一 `origin: str | None`,**不带 room**(`JoinRoom(room, uid, loaded)` 例外)。
 - `core/events.py`:`Broadcast/Personal/Persist/TurnChanged/ClearAction`。
 - `core/errors.py`:`ErrorCode` 枚举 + `Err(code, detail)`。
-- `shell/world.py`:`World.checkout(cmd)`(按命令类型解析目标房,表见 [storage.md](../storage.md))+ `commit(work)`(房间增/删/替换 + users 表替换)。
+- `shell/world.py`:`World.checkout(cmd)`(按命令类型解析目标房,表见 [storage.md](../../storage.md))+ `commit(work)`(房间增/删/替换 + users 表替换)。
 - `tests/core/test_domain.py`、`tests/shell/test_world.py`:数据类型可构造 + checkout/commit 隔离与回滚。
 
 ## 设计决策(开工前定的)
 
-- **core 用 `@dataclass`(可变)**,不用 Pydantic:reduce 原地改工作副本,dataclass 更轻、`copy.deepcopy` 直接可用;wire 的 Pydantic DTO 是另一套(P6,见 [models.md](../models.md))。
+- **core 用 `@dataclass`(可变)**,不用 Pydantic:reduce 原地改工作副本,dataclass 更轻、`copy.deepcopy` 直接可用;wire 的 Pydantic DTO 是另一套(P6,见 [models.md](../../models.md))。
 - **core 不 import `gameconfig`**:域 dataclass 不烤死配置默认值(`small_blind`/`buy_in`/座位数由 shell/lobby 构造时传入)。守不变量 1 的精神:core 不依赖基础设施。
 - **`World.checkout/commit` 放 `shell/world.py`**:`checkout` 要读 `world.users` 解析房间(GameLoop 是唯一写者,允许),这是 shell 职责;core 的 reduce 只收 `work`。`Work` 工作副本容器也定义在这里。
 - 旧 `app/pokertable/` 暂留作参考(README §2),P0 不删。
@@ -60,4 +60,4 @@
 
 ## 待办 / 下一步
 
-- 进 P1:`core/deck.py` + `core/rules/` + `core/reduce.py` + `tests/core/` 穷举用例(对齐 [rules.md](../rules.md) 编号)。
+- 进 P1:`core/deck.py` + `core/rules/` + `core/reduce.py` + `tests/core/` 穷举用例(对齐 [rules.md](../../rules.md) 编号)。

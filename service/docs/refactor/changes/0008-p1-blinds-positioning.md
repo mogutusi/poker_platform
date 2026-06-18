@@ -4,9 +4,9 @@
 
 ## 背景 / 打算改什么
 
-P1(二)原计划把 `blinds.py` 一篇做完「定庄/盲位/heads-up + 入局付盲即玩/等大盲 + 免盲投票」(见 [rules.md](../rules.md) ①、[TODO.md](../TODO.md))。开工前按 [README §0](../README.md) 质疑这一拆分,把它**拆成两步**:
+P1(二)原计划把 `blinds.py` 一篇做完「定庄/盲位/heads-up + 入局付盲即玩/等大盲 + 免盲投票」(见 [rules.md](../../rules.md) ①、[TODO.md](../TODO.md))。开工前按 [README §0](../README.md) 质疑这一拆分,把它**拆成两步**:
 
-- **定庄/盲位/排座/下盲**(rules.md ①.1-①.5)是**纯定位数学**:与 reduce 无耦合、可独立穷举单测、且 `_start_hand`(见 [core.md](../core.md) §1)必然原样调用——核心稳定面。**本篇(0008)只落地这块。**
+- **定庄/盲位/排座/下盲**(rules.md ①.1-①.5)是**纯定位数学**:与 reduce 无耦合、可独立穷举单测、且 `_start_hand`(见 [core.md](../../core.md) §1)必然原样调用——核心稳定面。**本篇(0008)只落地这块。**
 - **入局/防躲盲**(①.6-①.11)与**免盲投票**(①.12-①.15)是**跨手状态 + 命令状态机**:eligibility 读 `Seat.new_here`/`wait_for_big_blind`/`Room.waive_entry_for`(由 reduce 跨手维护),「等大盲」语义还与定位互锁;免盲投票是 `OpenFreeEntryVote`/`VoteFreeEntry` 驱动的 `EntryVote` 状态机 + `waive_entry_for` 快照。在 reduce(`_start_hand` + 投票 handler)缺位时单独把它们落地 = 在真空里定接口、易返工(正是 0007 当时把 blinds deferred 的「编排纠缠」原因)。**留到与 reduce 合篇。**
 
 接缝很干净:定位函数把「本手在局的座位集合 `eligible`」当**入参**收,「谁在局」由 reduce 的 eligibility 算(后续),定位本身不关心怎么算出来的。

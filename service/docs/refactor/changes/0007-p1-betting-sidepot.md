@@ -4,7 +4,7 @@
 
 ## 背景 / 打算改什么
 
-进入 P1(core 规则,见 [TODO.md](../TODO.md))。P1 是重构主力,且最易出钱(积分)错。按 [rules.md](../rules.md) §定位「**先按本文写穷举测试,再写实现**」,本篇**只**落地三块**纯函数、零编排依赖**的规则数学,把 money-critical 的部分先用穷举测试钉死:
+进入 P1(core 规则,见 [TODO.md](../TODO.md))。P1 是重构主力,且最易出钱(积分)错。按 [rules.md](../../rules.md) §定位「**先按本文写穷举测试,再写实现**」,本篇**只**落地三块**纯函数、零编排依赖**的规则数学,把 money-critical 的部分先用穷举测试钉死:
 
 - `core/deck.py`:`random.SystemRandom` 洗牌(不变量 1 允许)+ treys `Evaluator` 单例;`evaluate(board, hole)`(分数越小越强)。`treys` 已是依赖,无需改 pyproject。
 - `core/rules/betting.py`:rules.md **②** —— 三动作校验(FOLD/CHECK/BET)、min-raise/重开、短 all-in 不重开、`street_closed` 谓词(`has_acted`+ 跟平)、街结算(`bet_amount`→`contributed`、重置)、`next_active_position`。

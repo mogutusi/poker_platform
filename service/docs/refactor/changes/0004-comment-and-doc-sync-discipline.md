@@ -15,12 +15,12 @@ P0 review(0003)交付后,用户提出三条:
 ### 点 1:字段注释
 
 - 给 `app/core/` 全部 dataclass 字段、枚举成员补了行内含义注释(`domain.py`/`enums.py`/`commands.py`/`events.py`/`errors.py`/`cards.py`),`shell/world.py` 的 `Work` 同理。
-- 与 0002 的「注释克制」**不矛盾,是澄清边界**:禁的是**文件开头复述文档的大段 docstring**;要的是**字段级的「这是什么」**。两条一起写进 [coding_principle.md](../coding_principle.md)「通用规范」+「提交前自检」。
+- 与 0002 的「注释克制」**不矛盾,是澄清边界**:禁的是**文件开头复述文档的大段 docstring**;要的是**字段级的「这是什么」**。两条一起写进 [coding_principle.md](../../coding_principle.md)「通用规范」+「提交前自检」。
 - 更新 memory `code-comment-style`(原本只说"少注释",现补全这个区分)。
 
 ### 点 2:文档必须与代码一致(双向同步)
 
-- 把规则写进 [coding_principle.md](../coding_principle.md):**实现采用了与设计文档不同的签名/字段/结构/命名,必须在同一次改动里同步对应设计文档**;"文档≠已落地代码"是缺陷不是待办。
+- 把规则写进 [coding_principle.md](../../coding_principle.md):**实现采用了与设计文档不同的签名/字段/结构/命名,必须在同一次改动里同步对应设计文档**;"文档≠已落地代码"是缺陷不是待办。
 - **修了 0003 遗留的真实不一致**:0003 把 `checkout`/`commit` 做成 `shell/world.py` 模块函数(而非文档伪码的 `World.checkout()` 方法)却**留着文档没改**,还在 0003 里错误地写了"设计文档本轮无需改"。本次纠正:
   - `architecture.md` GameLoop 伪码:`self.world.checkout(cmd)`→`checkout(self.world, cmd)`、`commit` 同理,并加一句为何是模块函数(World 是 core dataclass,挂方法破坏分层)。
   - `storage.md`:主循环伪码 + `checkout`/`commit` 小节标题改成模块函数签名,补 `Work(room_name/room/users)` 形状。
