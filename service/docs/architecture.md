@@ -157,7 +157,7 @@ else:   commit(world, work);  for ev in events: dispatch(ev)   # ④ 成功:装�
 wire 消息(`ServerMessage`/`ClientMessage`)**只在后端 Pydantic 写一份**,前端 TS 类型**自动生成,绝不手写第二份**(现有 [frontend/src/types/poker.ts](../../frontend/src/types/poker.ts) 的 `chips`/`phase` 已和后端 enum 漂移,就是反例)。
 
 - **每条消息带 `type` 字面量**,构成可辨识联合(discriminated union),Pydantic 与 TS 1:1 对应。
-- **后端 Pydantic = 唯一事实源**;TS 经 codegen 产出(`pydantic2ts`,REST 走 OpenAPI + `openapi-typescript`)。
+- **后端 Pydantic = 唯一事实源**;TS 经 codegen 产出(ws 消息走自包含 Python 生成器 [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py),**无 node**;REST 走 OpenAPI + `openapi-typescript`,P7)。治理与缘由见 [wire.md](wire.md)。
 - **生成步骤进 CI / pre-commit**;前端只消费生成产物,禁止手写/手改。
 - 多语言文案不在协议里:后端只回机器可读 `code`(见 [error.md](error.md)),文案由前端按 `code` 映射。
 

@@ -11,7 +11,7 @@
 沿用本项目已确立的模式(别另起炉灶):
 
 1. **值只写在 `poker.env`**(是唯一事实来源)。
-2. **用 pydantic-settings 声明类型**,见 [gameconfig.py](../app/pokertable/gameconfig.py)。关键约定:**字段不写代码内默认值** → 缺了就启动即报错,从源头杜绝「代码里偷偷藏了个默认 15」。
+2. **用 pydantic-settings 声明类型**(目标落点 [app/gameconfig.py](../app/gameconfig.py))。关键约定:**字段不写代码内默认值** → 缺了就启动即报错,从源头杜绝「代码里偷偷藏了个默认 15」。
 3. **业务代码引用 `gameconfig.XXX`**,永远不写字面量。
 
 ```python
@@ -33,12 +33,14 @@ TIMER_TICK_MS=500
 
 ```python
 # 业务代码 —— 只引用,不内联
-from app.pokertable.gameconfig import gameconfig
+from app import gameconfig
 class Timer:
     TICK = gameconfig.TIMER_TICK_MS / 1000
 ```
 
 > 这把 [timer.md](timer.md) 的 `ACTION_TIMEOUT` / `LIVENESS_TIMEOUT` / `TICK`、[db.md](db.md) 的 `DB_FLUSH_*`、[log.md](log.md) 的 `LOG_*` 全部收编为配置项。
+
+> **当前状态(D 阶段,见 [changes/0018](refactor/changes/0018-d-dev-shell.md)/[0019](refactor/changes/0019-doc-sync-followup.md))**:[app/gameconfig.py](../app/gameconfig.py) 已建,但**暂用带默认值的具名常量**(import 不依赖 env,dev 脚手架友好),尚未做成上面的 `pydantic-settings + poker.env + 无默认 + Field 边界`。本节描述的是 **P8「配置收编」的目标形态**;届时把这些常量改为 env 驱动、去掉代码默认、补 `poker.env(.example)`。它满足本规范的「具名 / 集中 / 不散落字面量」一半,缺的是「env 单一事实源 + 无默认」那一半。旧 [app/pokertable/gameconfig.py](../app/pokertable/gameconfig.py) 是被取代的原型物(绑不存在的 `poker.env`、import 即崩),勿用。
 
 ## 新增一个可调参数 = 改三处,只有一处是「值」
 

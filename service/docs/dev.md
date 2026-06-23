@@ -7,7 +7,7 @@
 | 文件 | 谁读 | 装什么 |
 |---|---|---|
 | `service/.env` | [app/config.py](../app/config.py) 的 `Settings`(`load_dotenv`) | `DATABASE_URL`、`JWT_SECRET`、token 过期等**基础设施** |
-| `service/app/pokertable/poker.env` | [gameconfig.py](../app/pokertable/gameconfig.py) 的 `GameConfig` | 盲注/买入/超时/delayDB/日志等**游戏可调参数**(见 [config.md](config.md)) |
+| `service/app/poker.env`(P8) | [app/gameconfig.py](../app/gameconfig.py) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**当前 D 阶段**:`app/gameconfig.py` 用带默认值的常量、暂不读 env;P8「配置收编」时补 `poker.env(.example)`。旧 `app/pokertable/gameconfig.py` 是被取代的原型物 |
 
 - `.env` / `poker.env` **都不进 git**(含密钥);各配一个 `*.example` 提交。
 - **Alembic 也读 `.env` 的 `DATABASE_URL`**:[alembic/env.py](../alembic/env.py) 用 `settings.DATABASE_URL` 覆盖 `alembic.ini` 里的占位值(`sqlalchemy.url = inenvpy` 是假值,被代码覆盖)。所以迁移连的库 = 应用连的库,统一在 `.env`。
