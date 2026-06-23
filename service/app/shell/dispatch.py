@@ -1,0 +1,75 @@
+# dispatch:事件 → 物理落点(见 connection.md「dispatch」)。GameLoop commit 后**同步**派发:
+# 只 put_nowait(Sender 队列)/ 调本地快设施(Timer),不 await(守不变量 3)。错误回发同此处。
+
+import asyncio
+import logging
+
+from app.core.commands import Command, Disconnect
+from app.core.domain import World
+from app.core.errors import Err
+from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
+from app.shell.connection import Connection, ConnectionManager
+from app.shell.persist import WriteBuffer
+from app.shell.timer import Timer
+from app.wire.server import ErrorMessage, ServerMessage
+
+log = logging.getLogger(__name__)
+
+
+class Dispatcher:
+    def __init__(
+        self,
+        world: World,
+        conns: ConnectionManager,
+        persist: WriteBuffer,
+        timer: Timer,
+        inbox: "asyncio.Queue[Command]",
+    ) -> None:
+        self.world = world
+        self.conns = conns
+        self.persist = persist
+        self.timer = timer
+        self.inbox = inbox
+
+    def dispatch(self, ev: Event) -> None:
+        match ev:
+            case Broadcast(room=r, msg=m):
+                room = self.world.rooms.get(r)  # reduce 可能刚销毁该房(最后一人离开)→ 跳过
+                if room is None:
+                    return
+                for nick in room.users_in_room:  # 逻辑成员 → 按 nick 取连接(OFFLINE/无连接者跳过)
+                    conn = self.conns.get(nick)
+                    if conn is not None:
+                        self._enqueue(conn, m)
+            case Personal(nick=n, msg=m):  # 底牌 / StateSnapshot / 离开者回执,按 nick 私发
+                conn = self.conns.get(n)
+                if conn is not None:
+                    self._enqueue(conn, m)
+            case Persist(payload=p):
+                self.persist.put(p)
+            case TurnChanged(room=r, acting_nick=n, epoch=e):  # B 组:同步调 Timer(倒计时长 Timer 自取配置)
+                self.timer.on_turn_changed(r, n, e)
+            case ClearAction(room=r):
+                self.timer.clear_action(r)
+
+    def send_error(self, cmd: Command, err: Err) -> None:
+        # 业务失败:Err → ErrorMessage 回发**发起连接**(cmd.origin),不广播;系统命令(origin=None)只落日志。
+        if cmd.origin is None:
+            log.warning("system cmd %s failed: %s %s", type(cmd).__name__, err.code, err.detail)
+            return
+        conn = self.conns.get(cmd.origin)
+        if conn is not None:
+            self._enqueue(conn, ErrorMessage.from_err(err))
+
+    def _enqueue(self, conn: Connection, msg: ServerMessage) -> None:
+        try:
+            conn.outbound.put_nowait(msg)
+        except asyncio.QueueFull:  # ≤20 人正常不会满;满 = 该连接 Sender 卡死(慢客户端)
+            log.warning("slow client dropped nick=%s", conn.nick)
+            self._drop_connection(conn)
+
+    def _drop_connection(self, conn: Connection) -> None:
+        # 慢客户端:停路由到它(unregister)+ 投 Disconnect 标 OFFLINE;客户端重连靠 StateSnapshot 补回(P1 余项)。
+        # ws 物理关闭由其 Sender/Receiver 下次错误兜(dispatch 不 await,不在此 close)。
+        self.conns.unregister(conn)
+        self.inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))

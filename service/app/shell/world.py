@@ -1,3 +1,7 @@
+# world:GameLoop 工作副本的 checkout / commit(见 storage.md)。
+# checkout(world, cmd):解析目标房 + 深拷贝(目标房 + users 表)→ Work;reduce 只改副本。
+# commit(world, work):成功时把副本装回 world(替换引用,含房间增/删/替换 + users 表替换);失败不 commit = 回滚。
+
 import copy
 
 from app.core.commands import (

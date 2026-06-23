@@ -7,6 +7,7 @@ from app.core.commands import (
     BuyIn,
     Cleanup,
     Command,
+    Connect,
     Disconnect,
     LeaveRoom,
     PlayerAction,
@@ -63,6 +64,8 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _timeout(work, cmd)
         case LeaveRoom():
             return _leave_room(work, cmd)
+        case Connect():
+            return _connect(work, cmd)
         case Disconnect():
             return _disconnect(work, cmd)
         case Cleanup():
@@ -497,6 +500,13 @@ def _timeout(work: Work, cmd: Timeout) -> ReduceResult:
     err = betting.apply_action(hand, actor, action, None, big_blind)
     assert err is None  # 默认动作必合法(check 当且仅当已跟平,否则 fold);非法即 bug
     return _acted_events(work, hand, actor, action, big_blind), None
+
+
+def _connect(work: Work, cmd: Connect) -> ReduceResult:
+    # 最小接入(0018 dev):预置用户已在房(WATCHING),core 无事可做 → no-op。
+    # 重连恢复(OFFLINE→在线 + 座位态还原)与 Personal(StateSnapshot) 是延后的 P1 余项
+    # (「JoinRoom + Connect + StateSnapshot」,见 refactor/TODO);此处不展开,避免半成品。
+    return [], None
 
 
 def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:

@@ -48,16 +48,17 @@
 
 > 串起已实现的 reduce,让前端连真端点跑通已落地流。**国密信道(原 P5)最后替换本层明文握手/帧**;明文端点标 `dev-only`、绝不上线。
 
-- [ ] `shell/gameloop.py`:`inbox` 串行 → checkout → reduce → commit/discard → dispatch(只 `put_nowait`;异常归一 `Err(INTERNAL)`)
-- [ ] `shell/dispatch.py`:`Broadcast`(按 world 房成员 + conns;容错销毁房)/`Personal`/`Persist`(交桩)/`TurnChanged`·`ClearAction`(调 Timer)
-- [ ] `shell/connection.py`:`ConnectionManager`(register/unregister/is_current/get/顶替)+ `Connection`(**明文 outbound,无 `SecureChannel`**)
-- [ ] `shell/receiver.py`:**dev 明文握手**(`?nick=`/最简 session,**无 MAC/加密**,标 dev-only)→ 登记(顶替)→ 起 Sender → `Connect` → 收帧 `parse` → `Command` 盖 `origin` → inbox;每帧 `heartbeat`;退出条件 `Disconnect`
-- [ ] `shell/sender.py`:per-connection outbound → `ws.send`(明文 JSON `model_dump_json`),严格保序;队列满丢连 + `Disconnect`
-- [ ] `shell/timer.py`:`_action`(room 键)+ `_liveness`(nick 键);`Timeout`/`Cleanup` 投 inbox;staleness 由 reduce 兜(`epoch`/`OFFLINE`)
-- [ ] `shell/persist.py` 桩:最小 `WriteBuffer`(内存/日志,先不接 DB;P4 换双缓冲 + PersistWriter + ORM)
-- [ ] `shell/lifespan.py` 最小:预置 `ROOMS`、起 GameLoop/Timer、挂 dev ws 端点
-- [ ] `tests/shell/`:工作副本回滚(失败 world 未动)、dispatch 路由、顶替身份判定
-- [ ] 冒烟:前端连 dev 端点 → sit/buyin/ready/start/action → 看 `HandStarted`/`HoleCards`/`PlayerActed`/`HandShowDown` 广播
+- [x] `shell/gameloop.py`:`inbox` 串行 → checkout → reduce → commit/discard → dispatch(只 `put_nowait`;异常归一 `Err(INTERNAL)`)— 0018(`handle()` 抽出供同步测试)
+- [x] `shell/dispatch.py`:`Broadcast`(按 world 房成员 + conns;容错销毁房)/`Personal`/`Persist`(交桩)/`TurnChanged`·`ClearAction`(调 Timer)+ `send_error`(Err→origin)— 0018
+- [x] `shell/connection.py`:`ConnectionManager`(register/unregister/is_current/get/顶替)+ `Connection`(**明文 outbound,无 `SecureChannel`**)— 0018
+- [x] `shell/receiver.py`:**dev 明文握手**(`?nick=`,**无 MAC/加密**,dev-only)→ 登记(顶替)→ 起 Sender → `Connect` → 收帧 `parse`→`Command` 盖 `origin`+`now`→inbox;每帧 `heartbeat`;退出 `is_current` 才投 `Disconnect`;解析失败回 `INVALID_MESSAGE` — 0018
+- [x] `shell/sender.py`:per-connection outbound → `ws.send_text`(明文 JSON `model_dump_json`),严格保序 — 0018(队列满丢连在 dispatch._enqueue)
+- [x] `shell/timer.py`:`_action`(room 键)+ `_liveness`(nick 键);`Timeout`/`Cleanup` 投 inbox;staleness 由 reduce 兜;单调时钟 `time.monotonic` — 0018(`tick()` 抽出供测试)
+- [x] `shell/persist.py` 桩:最小 `WriteBuffer`(内存 list,`put`/`snapshot`;先不接 DB;P4 换双缓冲 + PersistWriter + ORM)— 0018
+- [x] `shell/lifespan.py` 最小:`build_dev_world` 预置 dev 房 + dev 用户、起 GameLoop/Timer、挂 dev ws 端点 `/dev/ws?nick=` — 0018(+ `app/gameconfig.py` 带默认值的可调参数)
+- [x] `tests/shell/`:工作副本回滚 + dispatch 路由 + 顶替身份判定 + Timer 触发/epoch + Sender 保序 + 异步端到端(26 测试,共 177)— 0018
+- [x] 冒烟:命令穿 GameLoop → reduce → commit → dispatch → 各连接 outbound;sit/buyin/ready/start/action → `HandStarted`/`HoleCards`(私发)/`PlayerActed`/`HandEnded` 广播分流 — 0018(fake-ws,sync + async 两版)
+- 注:`Connect` 加最小 no-op reduce 臂(避免 INTERNAL);进房 `JoinRoom` + 重连 `StateSnapshot` 仍是延后的 **P1 余项**(dev 预置用户绕开,见 changes/0018 决策 2/3)
 
 ## P1 余项(继续,每项**补该模块协议切片** + 重 codegen)
 

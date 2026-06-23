@@ -100,7 +100,7 @@ def dispatch(self, ev: Event) -> None:
                 self._enqueue(c, m)
         case Persist(payload=p):
             self.persist.put(p)                      # 写缓冲,见 db.md(put_state/put_append)
-        case TurnChanged(room=r, epoch=e, acting_nick=n):
+        case TurnChanged(room=r, acting_nick=n, epoch=e):   # 字段序同 events.py 的 TurnChanged 数据类
             self.timer.on_turn_changed(r, n, e)   # B 组:同步调 Timer;倒计时长由 Timer 读 gameconfig.ACTION_TIMEOUT,不随事件带
         case ClearAction(room=r):
             self.timer.clear_action(r)
