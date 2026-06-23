@@ -114,6 +114,12 @@ export interface PlayerBoughtIn {
   seat_points: number;
 }
 
+export interface ChatMessage {
+  type: "chat_message";
+  from_nick: string;
+  text: string;
+}
+
 export interface FreeEntryVoteUpdated {
   type: "free_entry_vote_updated";
   candidates: string[];
@@ -167,6 +173,11 @@ export interface PlayerAction {
   bet_amount?: number | null;
 }
 
+export interface RoomChat {
+  type: "room_chat";
+  text: string;
+}
+
 export interface OpenFreeEntryVote {
   type: "open_free_entry_vote";
 }
@@ -188,6 +199,7 @@ export type ServerMessage =
   | UserStatusChanged
   | UserLeft
   | PlayerBoughtIn
+  | ChatMessage
   | FreeEntryVoteUpdated
   | FreeEntryVoteClosed
   | ErrorMessage;
@@ -199,5 +211,6 @@ export type ClientMessage =
   | LeaveRoom
   | StartHand
   | PlayerAction
+  | RoomChat
   | OpenFreeEntryVote
   | VoteFreeEntry;

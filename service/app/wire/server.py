@@ -118,6 +118,12 @@ class PlayerBoughtIn(ServerMessage):
     seat_points: int  # 买入后座位的可用筹码(快照)
 
 
+class ChatMessage(ServerMessage):
+    type: Literal["chat_message"] = "chat_message"
+    from_nick: str  # 发言者(取连接绑定身份,不信报文自报)
+    text: str  # 聊天正文;不含游戏隐私(hole_cards/deck),结构上无此字段(messaging.md 脱敏红线)
+
+
 class FreeEntryVoteUpdated(ServerMessage):
     type: Literal["free_entry_vote_updated"] = "free_entry_vote_updated"
     candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
@@ -153,6 +159,7 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     UserStatusChanged,
     UserLeft,
     PlayerBoughtIn,
+    ChatMessage,
     FreeEntryVoteUpdated,
     FreeEntryVoteClosed,
     ErrorMessage,

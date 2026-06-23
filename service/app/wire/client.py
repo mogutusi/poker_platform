@@ -53,6 +53,11 @@ class PlayerAction(ClientMessage):
     bet_amount: int | None = None  # 本街目标总额(BET 时必填;数值合法性由 core betting 校验)
 
 
+class RoomChat(ClientMessage):
+    type: Literal["room_chat"] = "room_chat"
+    text: str  # 房间聊天正文(目标房由 world.users[origin].room 推定;非空/长度/限速由 shell 防护)
+
+
 class OpenFreeEntryVote(ClientMessage):
     type: Literal["open_free_entry_vote"] = "open_free_entry_vote"
     # 无参数:为当前 new_here 玩家开一次免盲投票(候选/投票人由房间状态推定,见 rules.md ①)
@@ -71,12 +76,15 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     LeaveRoom,
     StartHand,
     PlayerAction,
+    RoomChat,
     OpenFreeEntryVote,
     VoteFreeEntry,
 )
 
 _ClientMessageUnion = Annotated[
-    Union[SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, OpenFreeEntryVote, VoteFreeEntry],
+    Union[
+        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry
+    ],
     Field(discriminator="type"),
 ]
 _ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(_ClientMessageUnion)
@@ -103,6 +111,8 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
             return commands.StartHand(origin=origin, seat=msg.seat, started_at=now)
         case PlayerAction():
             return commands.PlayerAction(origin=origin, action=msg.action, bet_amount=msg.bet_amount)
+        case RoomChat():
+            return commands.RoomChat(origin=origin, text=msg.text)
         case OpenFreeEntryVote():
             return commands.OpenFreeEntryVote(origin=origin)
         case VoteFreeEntry():

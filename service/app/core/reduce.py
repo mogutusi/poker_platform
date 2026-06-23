@@ -13,6 +13,7 @@ from app.core.commands import (
     LeaveRoom,
     OpenFreeEntryVote,
     PlayerAction,
+    RoomChat,
     SetUserStatus,
     SitDown,
     StartHand,
@@ -32,6 +33,7 @@ from app.core.errors import Err, ErrorCode
 from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
 from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
 from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadcast/Personal 的 msg
+    ChatMessage,
     FreeEntryVoteClosed,
     FreeEntryVoteUpdated,
     HandEnded,
@@ -85,6 +87,8 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _open_free_entry_vote(work, cmd)
         case VoteFreeEntry():
             return _vote_free_entry(work, cmd)
+        case RoomChat():
+            return _room_chat(work, cmd)
         case _:
             # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
             # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
@@ -759,6 +763,17 @@ def _maybe_resolve_entry_vote(work: Work, room: Room) -> list[Event]:
     if room.entry_vote is None:
         return []
     return _finish_entry_vote(work, room) or []
+
+
+# ── 房间聊天(RoomChat)── messaging.md §房间聊天:只读命令,产 Broadcast(ChatMessage)
+def _room_chat(work: Work, cmd: RoomChat) -> ReduceResult:
+    # 只读:不改任何游戏状态(messaging.md 契约 7),仅校验发送者在房 → 广播给全房(派发按 users_in_room,含观战者)。
+    # 文本非空/长度/限速归 shell 文本防护(同限速,见 messaging.md),core 只认「在不在房」这一游戏判据。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间,无法房聊")
+    return [Broadcast(room=work.room_name, msg=ChatMessage(from_nick=nick, text=cmd.text))], None
 
 
 def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:

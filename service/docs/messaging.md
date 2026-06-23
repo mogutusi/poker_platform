@@ -16,11 +16,11 @@
 ## 房间聊天(走 reduce)
 
 - **命令** `RoomChat(text)`(`origin` = 发件人 nick):目标房 = `world.users[origin].room`(命令不带 room,见 [lobby.md](lobby.md))。
-- **reduce**:校验发送者在房内(`nick in world.users`)、`text` 非空且 ≤ 上限;**不改任何游戏状态**;产出 `Broadcast(room, ChatMessage{from_nick, text})`。
+- **reduce**:只校验发送者在房内(`nick in world.rooms[room].users_in_room`);**不改任何游戏状态**;产出 `Broadcast(room, ChatMessage{from_nick, text})`。**文本校验(非空 + 长度)归 shell 文本防护**(与限速同处,见下「限速」)——让 core 保持零配置、纯只读,只认「在不在房」这一游戏判据(决策见 [changes/0021](refactor/changes/0021-p1-room-chat.md))。
 - **派发**:dispatch 按 `world.rooms[room].users_in_room` 发给全房(含观战者),OFFLINE 跳过(见 [connection.md](connection.md))。
 - **读写性质**:房聊是**只读命令**(不改 world),可走 [storage.md](storage.md) 的 `uRead` 只读路径、免深拷;即便走默认深拷也无害(产出 events、commit 一个内容相同的副本),本规模随意。
 - **顺序**:经 GameLoop 串行,所以房聊与牌局事件**有确定全局顺序**,各客户端看到的次序一致(房聊走 reduce 的额外好处)。
-- **限速**:在 **shell**(Receiver 收到 `RoomChat` 先过令牌桶,超了直接丢 + 回 `Err`),**不让刷屏占 GameLoop**;阈值进 [config.md](config.md)。
+- **文本防护 + 限速**:在 **shell**(Receiver 收到 `RoomChat` 先做文本校验「非空 + `text ≤ ROOM_CHAT_MAX_TEXT_LEN`」+ 过令牌桶,超了直接丢 + 回 `Err`),**不让刷屏 / 超长文本占 GameLoop**;阈值进 [config.md](config.md)。非空/长度与限速同属「文本/滥用防护」,集中在进 reduce 之前一处,reduce 不重复校验(随 shell 硬化落地;当前 reduce 已只读、shell 防护待补)。
 
 ## 私聊(shell 路由,不进 GameLoop)
 

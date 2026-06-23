@@ -42,6 +42,7 @@ def _broadcast_samples() -> list[S.ServerMessage]:
         S.PlayerBoughtIn(nickname="A", seat_position=0, amount=64, seat_points=64),
         S.FreeEntryVoteUpdated(candidates=("D",), voters=("A", "B"), approvals=("A",)),
         S.FreeEntryVoteClosed(passed=True, waived=("D",)),
+        S.ChatMessage(from_nick="A", text="nh"),
         S.ErrorMessage.from_err(Err(ErrorCode.NOT_YOUR_TURN, "non-A turn")),
     ]
 
@@ -92,6 +93,7 @@ def test_parse_and_to_command_maps_every_client_message():
          commands.PlayerAction(origin="A", action=PlayerActionType.BET, bet_amount=10)),
         ('{"type":"player_action","action":"check"}',
          commands.PlayerAction(origin="A", action=PlayerActionType.CHECK, bet_amount=None)),
+        ('{"type":"room_chat","text":"nice hand"}', commands.RoomChat(origin="A", text="nice hand")),
         ('{"type":"open_free_entry_vote"}', commands.OpenFreeEntryVote(origin="A")),
         ('{"type":"vote_free_entry","approve":true}', commands.VoteFreeEntry(origin="A", approve=True)),
         ('{"type":"vote_free_entry","approve":false}', commands.VoteFreeEntry(origin="A", approve=False)),
@@ -121,6 +123,7 @@ def test_client_registry_covered_by_to_command():
         C.LeaveRoom: C.LeaveRoom(),
         C.StartHand: C.StartHand(seat=0),
         C.PlayerAction: C.PlayerAction(action=PlayerActionType.CHECK),
+        C.RoomChat: C.RoomChat(text="hi"),
         C.OpenFreeEntryVote: C.OpenFreeEntryVote(),
         C.VoteFreeEntry: C.VoteFreeEntry(approve=True),
     }
