@@ -1,6 +1,7 @@
 # core 游戏状态机:reduce(work, cmd) -> (events, err)。
 # 纯同步、不 await、不碰 IO/DB、不读墙钟(不变量 1);改的是 GameLoop 给的工作副本,
-# 成功 commit、失败/异常丢弃(见 core.md / storage.md)。本篇(0010)只落地 StartHand。
+# 成功 commit、失败/异常丢弃(见 core.md / storage.md)。命令簇逐次落地(见 refactor/changes/),
+# 顶层 match 已实现的臂见 reduce();未实现命令落 case _ 的 INTERNAL 占位。
 
 from app.core.cards import Card
 from app.core.commands import (
@@ -10,14 +11,16 @@ from app.core.commands import (
     Connect,
     Disconnect,
     LeaveRoom,
+    OpenFreeEntryVote,
     PlayerAction,
     SetUserStatus,
     SitDown,
     StartHand,
     Timeout,
+    VoteFreeEntry,
 )
 from app.core.deck import BOARD_CARDS, evaluate, shuffled_deck
-from app.core.domain import Hand, Player, Room, Seat, Work
+from app.core.domain import EntryVote, Hand, Player, Room, Seat, Work
 from app.core.enums import (
     HandStatus,
     PlayerActionType,
@@ -29,6 +32,8 @@ from app.core.errors import Err, ErrorCode
 from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
 from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
 from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadcast/Personal 的 msg
+    FreeEntryVoteClosed,
+    FreeEntryVoteUpdated,
     HandEnded,
     HandShowDown,
     HandStarted,
@@ -76,6 +81,10 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _sit_down(work, cmd)
         case BuyIn():
             return _buy_in(work, cmd)
+        case OpenFreeEntryVote():
+            return _open_free_entry_vote(work, cmd)
+        case VoteFreeEntry():
+            return _vote_free_entry(work, cmd)
         case _:
             # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
             # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
@@ -156,6 +165,7 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
         dealt_seat.new_here = False
         dealt_seat.wait_for_big_blind = False
     room.waive_entry_for = set()
+    room.entry_vote = None  # 阵容已定:未通过的免盲投票随开局作废(rules.md ① 行 75「没投到不算免」),不跨手悬挂
     room.button_position = button
     room.status = RoomStatus.HAND_STARTED
     room.hand = hand
@@ -553,7 +563,8 @@ def _begin_leave(work: Work, room: Room, nick: str) -> list[Event]:
     hand = room.hand
     player = _player_in_hand(hand, nick) if hand is not None else None
     if player is None or hand is None:
-        return _evict(work, room, nick)  # 观战/坐出/两手之间:座位筹码未锁入,直接驱逐
+        # 观战/坐出/两手之间:座位筹码未锁入,直接驱逐;离场者若是投票人则重算免盲投票(rules.md ①.15)
+        return _evict(work, room, nick) + _maybe_resolve_entry_vote(work, room)
 
     room.leaving.add(nick)  # 在手内:延到手尾驱逐(已投池中筹码不能抽走,守恒)
     if player.status is not PlayerStatus.ACTIVE:
@@ -654,6 +665,102 @@ def _buy_in(work: Work, cmd: BuyIn) -> ReduceResult:
     return [Broadcast(room=work.room_name, msg=msg), persist], None
 
 
+# ── 免盲投票(OpenFreeEntryVote / VoteFreeEntry)── rules.md ① 行 65-96(①.12-15)
+def _open_free_entry_vote(work: Work, cmd: OpenFreeEntryVote) -> ReduceResult:
+    # 为当前 new_here 玩家开一次免盲投票。门槛:在房 + 有候选 + 有合格投票人(后者兼挡真空通过,见决策 3/5);
+    # 已有进行中投票则幂等 no-op(不重置已有 approvals,防反复开票刷票)。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间,无法开免盲投票")
+    if room.entry_vote is not None:
+        return [], None  # 已有投票进行中 → 幂等忽略,保留现有 approvals
+    candidates = _free_entry_candidates(room)
+    voters = _voters(room)
+    if not candidates or not voters:
+        return [], Err(
+            ErrorCode.CANNOT_OPEN_VOTE, f"无可免盲候选或无合格投票人(candidates={len(candidates)} voters={len(voters)})"
+        )
+    # 冻结候选:approver 的同意只针对开票这批 new_here。后来就座者不在 vote.candidates → 不蹭车;
+    # 原候选离场 → 票失对象(见 _finish_entry_vote)。否则旧 approvals 会被复用去免一个无人投过的新候选(防躲盲)。
+    room.entry_vote = EntryVote(candidates=frozenset(candidates))
+    msg = FreeEntryVoteUpdated(candidates=tuple(sorted(candidates)), voters=tuple(sorted(voters)), approvals=())
+    return [Broadcast(room=work.room_name, msg=msg)], None
+
+
+def _vote_free_entry(work: Work, cmd: VoteFreeEntry) -> ReduceResult:
+    # 合格投票人表态:reject 即失败清空;approve 累加后若全票(非空)则通过快照,否则广播进度。
+    room = work.room
+    nick = cmd.origin
+    if room is None or nick is None or nick not in room.users_in_room:
+        return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
+    vote = room.entry_vote
+    if vote is None:
+        return [], Err(ErrorCode.NO_VOTE_IN_PROGRESS, f"{nick} 投票但当前无进行中免盲投票")
+    if nick not in _voters(room):
+        return [], Err(ErrorCode.NOT_A_VOTER, f"{nick} 非合格投票人(须已入局且 READY_TO_PLAY)")
+    if cmd.approve:
+        vote.approvals.add(nick)
+    else:
+        vote.rejected = True  # 一票否决(rules.md ① 行 73)
+    closed = _finish_entry_vote(work, room)
+    if closed is not None:
+        return closed, None
+    # 未终结 → 广播当前进度(候选取「开票冻结集 ∩ 仍在的 new_here」;赞成只算仍合格投票人,剔除已离场的陈旧 approval)
+    voters = _voters(room)
+    msg = FreeEntryVoteUpdated(
+        candidates=tuple(sorted(vote.candidates & _free_entry_candidates(room))),
+        voters=tuple(sorted(voters)),
+        approvals=tuple(sorted(vote.approvals & voters)),
+    )
+    return [Broadcast(room=work.room_name, msg=msg)], None
+
+
+def _voters(room: Room) -> set[str]:
+    # 合格投票人(rules.md ① 行 69):已入局(非 new_here)且 READY_TO_PLAY 的座位——其 EV 受「放人免费进来」影响。
+    return {
+        s.nickname
+        for s in room.seats
+        if s is not None
+        and not s.new_here
+        and room.users_in_room.get(s.nickname) is UserStatus.READY_TO_PLAY
+    }
+
+
+def _free_entry_candidates(room: Room) -> set[str]:
+    # 受这次入局盲影响的新玩家 = 当前 new_here 座位;通过时快照进 waive_entry_for(rules.md ① / ①.14 防蹭车)。
+    return {s.nickname for s in room.seats if s is not None and s.new_here}
+
+
+def _finish_entry_vote(work: Work, room: Room) -> list[Event] | None:
+    # 投票终结判定:rejected → 失败;候选全离场(冻结集已无在场 new_here)→ 票失对象、失败;
+    # voters 非空且全 approve → 通过(免掉仍在的原候选)。三者皆清空 entry_vote;未终结返 None(供静默重算)。
+    vote = room.entry_vote
+    assert vote is not None
+    if vote.rejected:
+        room.entry_vote = None
+        return [Broadcast(room=work.room_name, msg=FreeEntryVoteClosed(passed=False, waived=()))]
+    waived = vote.candidates & _free_entry_candidates(room)  # 冻结候选 ∩ 仍在的 new_here(离场者剔除、后来者不入)
+    if not waived:
+        # 原候选全离场 / 已被 StartHand 消费 → 投票失去对象,失败清空(与开票门槛对称,不产无意义 passed=True)
+        room.entry_vote = None
+        return [Broadcast(room=work.room_name, msg=FreeEntryVoteClosed(passed=False, waived=()))]
+    voters = _voters(room)
+    # 真空守门(决策 3):voters 非空才可能通过——否则 ∅⊆approvals 会瞬间「全票」误免;bootstrap 本就免费、无需投票。
+    if voters and voters <= vote.approvals:
+        room.waive_entry_for |= waived  # 免掉仍在的原候选(union,不覆盖既有快照);_start_hand 消费并清空
+        room.entry_vote = None
+        return [Broadcast(room=work.room_name, msg=FreeEntryVoteClosed(passed=True, waived=tuple(sorted(waived))))]
+    return None
+
+
+def _maybe_resolve_entry_vote(work: Work, room: Room) -> list[Event]:
+    # 投票人集合缩小(离场/坐出/起身)后重算(rules.md ①.15):仅当因此达成全票才通过(产 Closed),否则不产事件。
+    if room.entry_vote is None:
+        return []
+    return _finish_entry_vote(work, room) or []
+
+
 def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
     # 本簇仅处理「就座内」状态切换(0014):局中坐出延到手尾 + 就座内 ready/sit-out 切换。
     # 起身离座(→WATCHING)/ 入座 / 买入归后续座位簇(暂以 INTERNAL 占位,沿用 reduce case _ 约定)。
@@ -684,6 +791,8 @@ def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
     room.users_in_room[nick] = new_status
     seat_idx = _seat_of(room, nick)  # 起身后座位已腾空 → None
     events.append(Broadcast(room=work.room_name, msg=UserStatusChanged(nickname=nick, status=new_status, seat_position=seat_idx)))
+    # 该转移可能改变投票人集合(如 voter 坐出/起身退出投票)→ 重算免盲投票(rules.md ①.15)
+    events += _maybe_resolve_entry_vote(work, room)
     return events, None
 
 

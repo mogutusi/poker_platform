@@ -40,6 +40,8 @@ def _broadcast_samples() -> list[S.ServerMessage]:
         S.UserStatusChanged(nickname="A", status=UserStatus.SITTING_IN, seat_position=0),
         S.UserLeft(nickname="A", seat_position=0),
         S.PlayerBoughtIn(nickname="A", seat_position=0, amount=64, seat_points=64),
+        S.FreeEntryVoteUpdated(candidates=("D",), voters=("A", "B"), approvals=("A",)),
+        S.FreeEntryVoteClosed(passed=True, waived=("D",)),
         S.ErrorMessage.from_err(Err(ErrorCode.NOT_YOUR_TURN, "non-A turn")),
     ]
 
@@ -90,6 +92,9 @@ def test_parse_and_to_command_maps_every_client_message():
          commands.PlayerAction(origin="A", action=PlayerActionType.BET, bet_amount=10)),
         ('{"type":"player_action","action":"check"}',
          commands.PlayerAction(origin="A", action=PlayerActionType.CHECK, bet_amount=None)),
+        ('{"type":"open_free_entry_vote"}', commands.OpenFreeEntryVote(origin="A")),
+        ('{"type":"vote_free_entry","approve":true}', commands.VoteFreeEntry(origin="A", approve=True)),
+        ('{"type":"vote_free_entry","approve":false}', commands.VoteFreeEntry(origin="A", approve=False)),
     ]
     for raw, expected in cases:
         msg = C.parse(raw)
@@ -116,6 +121,8 @@ def test_client_registry_covered_by_to_command():
         C.LeaveRoom: C.LeaveRoom(),
         C.StartHand: C.StartHand(seat=0),
         C.PlayerAction: C.PlayerAction(action=PlayerActionType.CHECK),
+        C.OpenFreeEntryVote: C.OpenFreeEntryVote(),
+        C.VoteFreeEntry: C.VoteFreeEntry(approve=True),
     }
     assert set(samples) == set(C.CLIENT_MESSAGES)  # 防新增报文漏测
     for msg in samples.values():

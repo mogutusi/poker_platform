@@ -52,6 +52,7 @@ class Seat:
 
 @dataclass
 class EntryVote:
+    candidates: frozenset[str]  # 开票时冻结的 new_here 候选;同意只针对这批人——后来就座者不蹭、原候选离场则票失对象(rules.md ①)
     approvals: set[str] = field(default_factory=set)  # 已 approve 的投票人 nick
     rejected: bool = False  # 任一 reject 即失败
 

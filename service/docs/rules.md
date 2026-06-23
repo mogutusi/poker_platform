@@ -76,6 +76,17 @@
 - **不算躲盲**:免盲是全票自愿让利(consensual),不是钻空子。`waive_entry_for` 用**快照集合**,防"投票通过后才坐下"的人蹭免费。
 - **bootstrap 时本就免费**(开桌第一手无盲注结构),不需要投票。
 
+**实现细节(0020,reduce)**:
+
+- **开票门槛**:`OpenFreeEntryVote` 仅要求发起人在房(开票者**不必是投票人**,新人可自己请求);**无 `new_here` 候选或无合格投票人** → `Err(CANNOT_OPEN_VOTE)`;**已有投票进行中** → 幂等 no-op(不重置已有 `approvals`,防反复开票刷票)。
+- **真空守门**:通过判据是「`voters` **非空** 且 `live_candidates` **非空** 且 `voters ⊆ approvals`」——`voters` 非空不能省(否则 `∅ ⊆ approvals` 真空为真会瞬间误免、绕过盲注结构);`live_candidates` 非空也不能省(否则无候选时仍会判 `passed=True`、广播一个无对象的「通过」),与开票门槛「无候选 → CANNOT_OPEN_VOTE」对称。
+- **候选侧失效(approver 的同意只针对开票那批人)**:`EntryVote.candidates` 在**开票时冻结**;`approvals` 是对**这批候选**的同意,绝不复用到后来的新候选。结算时 `waived = vote.candidates ∩ 当前 new_here`——
+  - **中途坐下的新人不蹭车**:开票后才就座的 `new_here` 不在 `vote.candidates`,通过也不免他(他要免得另开一票)。这比「只防投票通过后才坐下」(快照在 `waive_entry_for`)更早一层,堵住「开票后、通过前」坐下的窗口。
+  - **原候选离场则票失对象**:冻结候选全部离场 / 被开局消费(`new_here` 清掉)后 `live_candidates` 为空 → 投票按失败清空,不留孤儿票被陈旧 `approvals` 复用去免一个无人投过的新候选(防躲盲)。
+  - **开局作废残票**:`StartHand` 在清 `waive_entry_for` 处一并 `room.entry_vote = None`——阵容发牌即定,未通过的投票随开局作废(rules.md 行 75「没投到不算免」),不跨手悬挂。
+- **重算触发**(①.15「投票人集合重算」):投票人**离场**(`LeaveRoom`/`Cleanup`)或**就座内状态变更**(如投票人坐出/起身退出投票人集合)后重算,因此达成全票则通过。`voters` 每次实时重算(不缓存),故断线者(`OFFLINE` ≠ `READY_TO_PLAY`)在下一结算点自然不计;不为断线单独触发通过。
+- **wire**:出站 `FreeEntryVoteUpdated`(开票/进度)与 `FreeEntryVoteClosed`(终结,带 `waived` 快照),广播全房(投票态是公开信息);字段清单见 `app/wire/server.py`。
+
 ## 测试 ①
 
 1. **3 人定位**:button=座 0 → SB=座 1、BB=座 2、UTG(首行动)=座 0(button)。

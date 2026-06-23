@@ -17,7 +17,7 @@ export type PlayerActionType = "fold" | "bet" | "check";
 
 export type UserStatus = "watching" | "offline" | "sitting_in" | "ready_to_play" | "sitting_out" | "playing";
 
-export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "INVALID_MESSAGE";
+export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE";
 
 // ── value objects ──
 
@@ -114,6 +114,19 @@ export interface PlayerBoughtIn {
   seat_points: number;
 }
 
+export interface FreeEntryVoteUpdated {
+  type: "free_entry_vote_updated";
+  candidates: string[];
+  voters: string[];
+  approvals: string[];
+}
+
+export interface FreeEntryVoteClosed {
+  type: "free_entry_vote_closed";
+  passed: boolean;
+  waived: string[];
+}
+
 export interface ErrorMessage {
   type: "error";
   code: ErrorCode;
@@ -154,6 +167,15 @@ export interface PlayerAction {
   bet_amount?: number | null;
 }
 
+export interface OpenFreeEntryVote {
+  type: "open_free_entry_vote";
+}
+
+export interface VoteFreeEntry {
+  type: "vote_free_entry";
+  approve: boolean;
+}
+
 // ── discriminated unions ──
 
 export type ServerMessage =
@@ -166,6 +188,8 @@ export type ServerMessage =
   | UserStatusChanged
   | UserLeft
   | PlayerBoughtIn
+  | FreeEntryVoteUpdated
+  | FreeEntryVoteClosed
   | ErrorMessage;
 
 export type ClientMessage =
@@ -174,4 +198,6 @@ export type ClientMessage =
   | SetUserStatus
   | LeaveRoom
   | StartHand
-  | PlayerAction;
+  | PlayerAction
+  | OpenFreeEntryVote
+  | VoteFreeEntry;

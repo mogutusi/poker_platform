@@ -40,7 +40,7 @@ class ErrorCode(str, Enum):
     INTERNAL = "INTERNAL"
     # …随业务补充;后续做成配置。**权威清单以 app/core/errors.py 的 ErrorCode 为准**,本块是示意
     # (实现已含 NOT_IN_ROOM/SEAT_TAKEN/NOT_YOUR_SEAT/INVALID_STATUS_TRANSITION/HAND_IN_PROGRESS/
-    #  ILLEGAL_ACTION/NOT_ENOUGH_PLAYERS/NO_VOTE_IN_PROGRESS/NOT_A_VOTER/INVALID_BUY_IN/INVALID_MESSAGE 等)
+    #  ILLEGAL_ACTION/NOT_ENOUGH_PLAYERS/NO_VOTE_IN_PROGRESS/NOT_A_VOTER/CANNOT_OPEN_VOTE/INVALID_BUY_IN/INVALID_MESSAGE 等)
 
 # ② Err —— 纯错误值:「出了什么错」,不含收件人。core↔GameLoop 间传递,不进队列
 @dataclass(frozen=True)

@@ -38,6 +38,8 @@
 | `start_hand` | `seat` | 开新一手(房内 ≥2 人 ready 时) |
 | `player_action` | `action, bet_amount?` | `fold` / `check` / `bet`;**`bet` 时 `bet_amount`=本街目标总额** |
 | `leave_room` | — | 退房(局中则自动弃牌,手尾结算后离座) |
+| `open_free_entry_vote` | — | 为当前新玩家开一次免盲投票(有新人 + 有合格投票人时;否则回 `error`) |
+| `vote_free_entry` | `approve` | 对免盲投票表态;**全体投票人 approve 才免**、任一 `false` 即失败 |
 
 发送:`ws.send(JSON.stringify(msg))`。非法报文/字段后端回 `error`。
 
@@ -58,6 +60,8 @@
 | `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
 | `player_bought_in` | `nickname`/`seat_position`/`amount`/`seat_points` | 谁买入、座位新筹码 |
+| `free_entry_vote_updated` | `candidates`/`voters`/`approvals` | 免盲投票当前态(开票=`approvals` 空,逐票累加);给投票人显示进度/提示 |
+| `free_entry_vote_closed` | `passed`/`waived` | 投票终结:`passed=true` 时 `waived` 为本手免费入局者快照,失败为空 |
 | `error` | `code`(`ErrorCode`)、`detail?` | 见 §6 |
 
 > **`acting_position` 是 `players[]` 的下标,不是座位号**:`hand_started.players` 按行动序排(`[0]`=小盲、`[1]`=大盲)。"轮到谁"= `players[acting_position]`,它的座位是 `.seat_position`。`acting_position` 为 `null` 表示无人可行动(手已结束/全 all-in)。
@@ -96,11 +100,11 @@
 
 ## 8. 现在有 / 还没有(增量交付)
 
-**已交付(本批)**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)+ 上面所有 `ServerMessage`。
+**已交付**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**+ 上面所有其它 `ServerMessage`。
 
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
 - **进房 `join_room` + 整桌快照 `state_snapshot`**:新进房 / 重连时一次性补全当前桌面(座位/筹码/已发公共牌/底池/轮到谁/你自己的底牌)。**这是你做"刷新即对齐"和重连的关键**——暂缺,先用上面的增量事件流搭状态机。
-- 大厅房间列表(REST)、聊天、免盲投票、房配置(设盲注/买入额)。
+- 大厅房间列表(REST)、聊天、房配置(设盲注/买入额)。
 
 ## 9. 怎么连(Phase D · 即将)
 

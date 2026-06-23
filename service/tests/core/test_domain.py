@@ -54,7 +54,8 @@ def test_card_is_hashable_and_value_equal():
 
 
 def test_entry_vote_defaults():
-    vote = EntryVote()
+    vote = EntryVote(candidates=frozenset({"D"}))  # candidates 开票时冻结(必填),approvals/rejected 有默认
+    assert vote.candidates == frozenset({"D"})
     assert vote.approvals == set()
     assert vote.rejected is False
 

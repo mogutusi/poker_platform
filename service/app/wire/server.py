@@ -118,6 +118,19 @@ class PlayerBoughtIn(ServerMessage):
     seat_points: int  # 买入后座位的可用筹码(快照)
 
 
+class FreeEntryVoteUpdated(ServerMessage):
+    type: Literal["free_entry_vote_updated"] = "free_entry_vote_updated"
+    candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
+    voters: tuple[str, ...]  # 合格投票人 nick(已入局且 READY_TO_PLAY;全票通过才免)
+    approvals: tuple[str, ...]  # 当前已 approve 的投票人(开票为空,逐票累加)
+
+
+class FreeEntryVoteClosed(ServerMessage):
+    type: Literal["free_entry_vote_closed"] = "free_entry_vote_closed"
+    passed: bool  # True=全票通过、False=被否决 / 失败
+    waived: tuple[str, ...]  # 通过时本手免费入局的玩家快照;失败为空
+
+
 class ErrorMessage(ServerMessage):
     type: Literal["error"] = "error"
     code: ErrorCode  # 机器可读码;前端据它映射本地化文案(wire.md 契约 #6:只回 code)
@@ -140,5 +153,7 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     UserStatusChanged,
     UserLeft,
     PlayerBoughtIn,
+    FreeEntryVoteUpdated,
+    FreeEntryVoteClosed,
     ErrorMessage,
 )

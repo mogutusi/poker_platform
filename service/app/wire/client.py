@@ -53,6 +53,16 @@ class PlayerAction(ClientMessage):
     bet_amount: int | None = None  # 本街目标总额(BET 时必填;数值合法性由 core betting 校验)
 
 
+class OpenFreeEntryVote(ClientMessage):
+    type: Literal["open_free_entry_vote"] = "open_free_entry_vote"
+    # 无参数:为当前 new_here 玩家开一次免盲投票(候选/投票人由房间状态推定,见 rules.md ①)
+
+
+class VoteFreeEntry(ClientMessage):
+    type: Literal["vote_free_entry"] = "vote_free_entry"
+    approve: bool  # 该投票人对免盲的表态(全票 approve 才免;任一 reject 即失败)
+
+
 # codegen 注册表 + parse 可辨识联合的成员(scripts/gen_wire_ts.py 据此生成);新增报文须登记。
 CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
@@ -61,10 +71,12 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     LeaveRoom,
     StartHand,
     PlayerAction,
+    OpenFreeEntryVote,
+    VoteFreeEntry,
 )
 
 _ClientMessageUnion = Annotated[
-    Union[SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction],
+    Union[SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, OpenFreeEntryVote, VoteFreeEntry],
     Field(discriminator="type"),
 ]
 _ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(_ClientMessageUnion)
@@ -91,4 +103,8 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
             return commands.StartHand(origin=origin, seat=msg.seat, started_at=now)
         case PlayerAction():
             return commands.PlayerAction(origin=origin, action=msg.action, bet_amount=msg.bet_amount)
+        case OpenFreeEntryVote():
+            return commands.OpenFreeEntryVote(origin=origin)
+        case VoteFreeEntry():
+            return commands.VoteFreeEntry(origin=origin, approve=msg.approve)
     raise AssertionError(f"unmapped client message: {type(msg).__name__}")  # 不可达:CLIENT_MESSAGES 穷尽
