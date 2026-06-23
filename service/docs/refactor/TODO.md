@@ -7,6 +7,14 @@
 
 ---
 
+## 执行顺序(0016 重排:前端解锁前置)
+
+> 前端要联调 → **wire 协议 + 明文 dev 端点前置**;**国密加密信道(原 P5)推到最后**;**协议按模块增量交付**(每落一个模块补该模块的 wire 切片 + 重 codegen)。详见 [changes/0016](changes/0016-replan-wire-first.md)。**只动顺序,不动架构/不变量。**
+
+执行序:**P0 ✓ → P1(主体 ✓,余项随后)→ W(wire 首批协议)→ D(最小明文 dev shell + 端点)→ P1 余项 +各模块(每项补协议切片)→ 硬化(delayDB / 背压 / 重连)→ 日志 / 配置收编 → 国密安全信道(最后)→ 收尾**。
+
+---
+
 ## P0 · 基线(数据类型 + 工作副本 API)
 
 - [x] `core/enums.py`:四套状态枚举 + `USER_STATUS_TRANSITIONS` 合法转移表(从现 [enums.py](../../app/pokertable/enums.py) 迁移) — 0002
@@ -25,59 +33,65 @@
 - [~] `core/reduce.py`:顶层 `match` + 各 helper(开局/动作/推进/摊牌/结束/连接/断线/超时/清理/买入/入座/状态/聊天/投票)— 0010 落地 `_start_hand`(开局);0011 落地 `_player_action` + 街推进/摊牌/边池结算/手牌记录(`core/records.py`)+ born-all-in runout(接住 0010 §6);0014 落地局中生命周期(rules.md ④):`_timeout`(超时默认动作)/`_leave_room`(局中 auto-fold + 手尾 `_evict` / 局外即时驱逐)/`_disconnect`(标 OFFLINE 保座)/`_cleanup`(staleness 退筹释座)/`_set_user_status`(局中坐出延手尾 + 就座内 ready/sit-out 切换)+ `_finalize_hand` 驱逐整合 + 抽取 `_acted_events`;0015 落地就座/买入:`_sit_down`(观战→就座 new_here)/`_buy_in`(全局→座位 + PointsWrite)/起身(`SetUserStatus`→WATCHING 腾座退筹,补 0014 占位)+ 抽取 `_release_seat`;**进房载入/重连(`JoinRoom`/`Connect`+`StateSnapshot`)/房配置(`SetSmallBlind`/`SetBuyIn`+买入上下限,随 P8 配置收编)/聊天/投票簇待后续**
 - [~] `tests/core/`:按 [rules.md](../rules.md) 编号转穷举单测;守恒 + 隐私断言默认开 — 0007 落地 ②/③ 穷举(deck/betting/sidepot 34 测试,共 58);0008 落地 ① 定位/下盲穷举(blinds 7 测试,共 65);0010 落地 ① 开局 reduce 集成(test_start_hand 22 测试,共 88;含自 review 修复:bootstrap 看整桌/防躲盲、短牌堆守 Err、事件顺序/分支可分辨断言);0011 落地 `_player_action` 编排集成(test_player_action 12 测试 + born-all-in 改判,共 100;动作校验臂/街内换人/preflop 大盲选择权/多街推进/摊牌+边池还座/无摊牌结束/all-in 跑公共牌/守恒/隐私);0014 落地局中生命周期集成(test_timeout 6 + test_leave_sitout 21 + sidepot/player_action 补 3,共 130;超时默认 check/fold + staleness、局中离桌即时 fold + 手尾驱逐、坐出延手尾、断线 OFFLINE 保座、Cleanup staleness、ALLIN 离桌带奖金、弃牌唯一最高者未叫注 forfeit、heads-up SB 开弃回归;守恒 + 隐私);0015 落地就座/买入(test_seat_buyin 14,共 144;观战→就座 new_here、全局↔座位转账守恒、起身腾座退筹、各错误臂含负额/越界);等大盲/投票/连接重连集成待后续
 
-## P2 · shell 骨架
+## W · wire 首批协议(前端解锁,增量第 1 批)— 详见 [changes/0016](changes/0016-replan-wire-first.md)
 
-- [ ] `shell/gameloop.py`:`inbox` 串行 → checkout → reduce → commit/discard → dispatch(只 `put_nowait`)
-- [ ] `shell/dispatch.py`:Event 路由(Broadcast 容错销毁房;B 组同步调 Timer)
-- [ ] `tests/shell/`:工作副本回滚(失败 world 未动)、跨命令隔离
+> 已设计/已落地的消息 + 命令 → Pydantic 单一事实源 + codegen TS。reduce 直接产 wire DTO(core 可 import wire DTO,见 [models.md](../models.md)/[README §3](README.md)),收编 `core/messages.py`;`core/records.py` 的 Persist 载荷不上 wire,保留。治理见 [wire.md](../wire.md),旧 [wsm_schemas.py](../../app/pokertable/wsm_schemas.py) 作参考。
 
-## P3 · 连接层
+- [ ] `app/wire/server.py`:`ServerMessage` 可辨识联合(升级 `core/messages.py` 全集为 Pydantic:`type` 字面量/扁平/snake_case/core enums):`HandStarted`/`HoleCards`/`HandStatusChanged`/`PlayerActed`/`HandShowDown`/`HandEnded`/`UserStatusChanged`/`UserLeft`/`PlayerBoughtIn` + `ErrorMessage`(由 `Err` 转);隐私 `field_serializer`(底牌/牌堆默认隐藏,仅 `HoleCards`/`HandShowDown` 显式)
+- [ ] `app/wire/client.py`:`ClientMessage` 可辨识联合 = 已落地命令报文(身份不进报文):`SitDown`/`BuyIn`/`SetUserStatus`/`LeaveRoom`/`StartHand`/`PlayerAction` + `parse`(client→`Command`,Receiver 盖 `origin=nick`)
+- [ ] reduce 投影改产 `app/wire` DTO,删 `core/messages.py`;`tests/core/*` 改 import(字段同名,`isinstance`/`hasattr` 隐私断言照旧)
+- [ ] codegen:`pydantic2ts` → `frontend/src/types/wire.gen.ts`(只读产物);脚本进 `service/` + pre-commit/CI 钩子(改 .py 不重生成即红)
+- [ ] 前端:删手写 `frontend/src/types/poker.ts`,改 import `wire.gen.ts`
+- [ ] 协议指南:消息流时序 + dev 连接握手(明文)+ 错误码用法(并入 [wire.md](../wire.md)/[connection.md](../connection.md) 或薄页),指向生成产物
 
-- [ ] `shell/connection.py`:`ConnectionManager`(register/unregister/is_current/get/rename)、`Connection`、`SecureChannel`
-- [ ] `shell/receiver.py`:握手鉴权 → 登记(顶替)→ 起 Sender → `Connect` → 收帧循环 → 退出清理
-- [ ] `shell/sender.py`:per-connection 出站,严格保序,慢客户端丢连
-- [ ] `shell/timer.py`:`_action`(room 键)+ `_liveness`(nick 键)、staleness 由 reduce 兜
-- [ ] `tests/shell/`:顶替身份判定、重连 `StateSnapshot`、队列满丢连
+## D · 最小明文 dev shell + 端点(前端真连联调)— 无加密,临时脚手架
 
-## P4 · delayDB + DB 模型
+> 串起已实现的 reduce,让前端连真端点跑通已落地流。**国密信道(原 P5)最后替换本层明文握手/帧**;明文端点标 `dev-only`、绝不上线。
 
-- [ ] `shell/persist.py`:`WriteBuffer`(双缓冲 swap)+ `PersistWriter`(先 swap 后 await)+ `to_orm`
-- [ ] `db/` 模型:`User`(加 uid/salt/rounds/K_user 字段)、`HandRecord` 对齐 `HandRecordWrite`(uid/initial/final/pot)
-- [ ] Alembic 迁移:密码哈希 `salt$rounds$digest`、K_user 双钥、手牌记录对齐(见 [dev.md](../dev.md))
-- [ ] `tests/shell/`:覆盖/追加/回灌「更新者优先」/drain
+- [ ] `shell/gameloop.py`:`inbox` 串行 → checkout → reduce → commit/discard → dispatch(只 `put_nowait`;异常归一 `Err(INTERNAL)`)
+- [ ] `shell/dispatch.py`:`Broadcast`(按 world 房成员 + conns;容错销毁房)/`Personal`/`Persist`(交桩)/`TurnChanged`·`ClearAction`(调 Timer)
+- [ ] `shell/connection.py`:`ConnectionManager`(register/unregister/is_current/get/顶替)+ `Connection`(**明文 outbound,无 `SecureChannel`**)
+- [ ] `shell/receiver.py`:**dev 明文握手**(`?nick=`/最简 session,**无 MAC/加密**,标 dev-only)→ 登记(顶替)→ 起 Sender → `Connect` → 收帧 `parse` → `Command` 盖 `origin` → inbox;每帧 `heartbeat`;退出条件 `Disconnect`
+- [ ] `shell/sender.py`:per-connection outbound → `ws.send`(明文 JSON `model_dump_json`),严格保序;队列满丢连 + `Disconnect`
+- [ ] `shell/timer.py`:`_action`(room 键)+ `_liveness`(nick 键);`Timeout`/`Cleanup` 投 inbox;staleness 由 reduce 兜(`epoch`/`OFFLINE`)
+- [ ] `shell/persist.py` 桩:最小 `WriteBuffer`(内存/日志,先不接 DB;P4 换双缓冲 + PersistWriter + ORM)
+- [ ] `shell/lifespan.py` 最小:预置 `ROOMS`、起 GameLoop/Timer、挂 dev ws 端点
+- [ ] `tests/shell/`:工作副本回滚(失败 world 未动)、dispatch 路由、顶替身份判定
+- [ ] 冒烟:前端连 dev 端点 → sit/buyin/ready/start/action → 看 `HandStarted`/`HoleCards`/`PlayerActed`/`HandShowDown` 广播
 
-## P5 · 鉴权信道
+## P1 余项(继续,每项**补该模块协议切片** + 重 codegen)
+
+- [ ] 免盲投票(rules.md ①.12-15):`OpenFreeEntryVote`/`VoteFreeEntry` + `room.entry_vote` 结算 + `waive_entry_for` 快照 → 补 wire 投票报文
+- [ ] 等大盲再入局时机(rules.md ①.7-10):`_start_hand` 中 BB 路过 `wait_for_big_blind` 座位免费入局 + 躲盲被堵(换座/退房/坐出再回算 new_here)
+- [ ] `JoinRoom` + `Connect` + `StateSnapshot`:进房载入 `world.users` + 重连恢复 + **整桌快照报文设计**(座位/筹码/button/board/pot/acting/自己底牌)→ 补 wire `JoinRoom`/`StateSnapshot`/`UserJoined`
+- [ ] `RoomChat` + `ChatMessage`(房聊走 reduce);`SetSmallBlind`/`SetBuyIn`(随配置收编接 `gameconfig` 上下限)
+
+## 硬化 / 子系统(每模块补协议切片)
+
+- [ ] P4 delayDB:`shell/persist.py` 双缓冲 swap + `PersistWriter`(先 swap 后 await)+ `to_orm`;`db/` 模型(`User` 加 uid/salt/rounds/K_user、`HandRecord` 对齐 `HandRecordWrite`)+ Alembic 迁移;回灌「更新者优先」/drain 测试
+- [ ] shell 硬化:背压(inbox/outbound 上限 + 队列满丢连)、顶替/重连 `StateSnapshot`、`tests/shell/`
+- [ ] P7 lobby/REST/messaging:`GET /lobby/rooms`、leaderboard/hands(游标)/profile(改昵称仅大厅)、房聊环形缓冲 + 私聊未读收件箱(见 [messaging.md](../messaging.md) + changes/0012)、presence 只读;REST 走 `openapi-typescript`
+- [ ] 日志:GameLoop 边界审计 + 脱敏红线(底牌/密钥不进日志)
+- [ ] 配置收编:可调参数进 `gameconfig`(买入上下限/超时/盲注上下限…),`poker.env` + `*.example` 同步
+
+## P5 · 国密安全信道(**最后做**,替换 D 的明文层)
 
 - [ ] 密码哈希:`salt$rounds$digest` + `compare_digest` + 数据迁移脚本
 - [ ] 登录握手:`/user/login` SM4 护住密码、返回 session + JWT
-- [ ] 逐帧加密:`SecureChannel` 入站「先验 seq → 验 MAC → 才解密」、出站加密
+- [ ] 逐帧加密:`SecureChannel` 入站「先验 seq → 验 MAC → 才解密」、出站加密(替换 Receiver/Sender 的 dev 明文帧)
 - [ ] `K_user` 双钥 + 每周轮换任务 + 版本/宽限
 - [ ] `tests/crypto/`:MAC 拒伪 / seq 拒重放 / 先验后解 / IV 不复用
 
-## P6 · wire codegen
-
-- [ ] `wire/`:`ClientMessage`/`ServerMessage` 可辨识联合(`type` 字面量、扁平、snake_case)、隐私 `field_serializer` 隐藏底牌
-- [ ] codegen:`pydantic2ts` + `openapi-typescript`,产物给前端;进 CI / pre-commit
-- [ ] 前端:删手写 `types/poker.ts`,改用生成产物 + 实现加密帧
-
-## P7 · 大厅 / 查询 / 聊天
-
-- [ ] lobby:静态预置 `ROOMS`、`JoinRoom`/`LeaveRoom`、`GET /lobby/rooms`
-- [ ] REST:leaderboard / hands(分页游标)/ profile(改昵称仅大厅 + `conns.rename`)
-- [ ] messaging:房聊走 reduce + **shell 内存环形缓冲**(`FetchRoomChat` 拉历史,不落库);私聊走 shell 路由 + **未读收件箱**(`DMWrite` 事件写 / `DMReadCursorWrite` 状态写 / 完整已读回执 / PersistWriter 保留清理);限速在 shell。设计见 [messaging.md](../messaging.md)「持久化与离线送达」+ changes/0012
-- [ ] presence:只读聚合 API
-
 ## P8 · 收尾
 
-- [ ] `shell/lifespan.py`:启动正序 / 关闭反序 drain(超 `DB_DRAIN_TIMEOUT_MS` 落 CRITICAL)
-- [ ] 日志:GameLoop 边界审计 + 脱敏红线(底牌/密钥不进日志)
-- [ ] 配置收编:所有可调参数进 `gameconfig`,`poker.env` + `*.example` 同步
-- [ ] 前端联调 + 端到端冒烟
+- [ ] `shell/lifespan.py` drain:关闭反序 drain(超 `DB_DRAIN_TIMEOUT_MS` 落 CRITICAL)
+- [ ] 端到端冒烟:前端 ↔ 后端(先明文 dev、后国密)走通一手牌全程
 
 ---
 
 ## 持续项(随时回看)
 
+- [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))
 - [ ] 文档与实现漂移时**改文档**并在 changes/ 记录
 - [ ] 新增可调参数 → 进 `gameconfig` + env + example(不留裸字面量)
 - [ ] 新增持久化实体 → 归「状态写 / 事件写」,不新开通道
