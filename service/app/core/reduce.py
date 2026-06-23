@@ -10,6 +10,7 @@ from app.core.commands import (
     Command,
     Connect,
     Disconnect,
+    JoinRoom,
     LeaveRoom,
     OpenFreeEntryVote,
     PlayerAction,
@@ -21,7 +22,7 @@ from app.core.commands import (
     VoteFreeEntry,
 )
 from app.core.deck import BOARD_CARDS, evaluate, shuffled_deck
-from app.core.domain import EntryVote, Hand, Player, Room, Seat, Work
+from app.core.domain import EntryVote, Hand, Player, Room, Seat, UserState, Work
 from app.core.enums import (
     HandStatus,
     PlayerActionType,
@@ -45,7 +46,10 @@ from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadc
     PlayerActed,
     PlayerBoughtIn,
     PlayerView,
+    SeatView,
     ShowdownReveal,
+    StateSnapshot,
+    UserJoined,
     UserLeft,
     UserStatusChanged,
 )
@@ -63,6 +67,8 @@ ReduceResult = tuple[list[Event], Err | None]
 def reduce(work: Work, cmd: Command) -> ReduceResult:
     # 顶层按命令类型分发;每个 handler:先校验(返回 Err)→ 改工作副本 → 产出 events。
     match cmd:
+        case JoinRoom():
+            return _join_room(work, cmd)
         case StartHand():
             return _start_hand(work, cmd)
         case PlayerAction():
@@ -517,10 +523,94 @@ def _timeout(work: Work, cmd: Timeout) -> ReduceResult:
 
 
 def _connect(work: Work, cmd: Connect) -> ReduceResult:
-    # 最小接入(0018 dev):预置用户已在房(WATCHING),core 无事可做 → no-op。
-    # 重连恢复(OFFLINE→在线 + 座位态还原)与 Personal(StateSnapshot) 是延后的 P1 余项
-    # (「JoinRoom + Connect + StateSnapshot」,见 refactor/TODO);此处不展开,避免半成品。
-    return [], None
+    # 接入大厅(连接绑 nick,不绑房间)。纯大厅用户(不在 world.users)→ core 无事;
+    # 已在某房且 OFFLINE → 重连:恢复在线 + 私发 StateSnapshot 对齐;在线(预置 WATCHING / 重复 Connect)→ 幂等忽略。
+    room = work.room
+    nick = cmd.nick
+    if room is None or nick not in room.users_in_room:
+        return [], None  # 纯大厅接入:进房 + 载入积分走 JoinRoom(lobby.md / user.md),core 此处无事
+    if room.users_in_room[nick] is not UserStatus.OFFLINE:
+        return [], None  # 已在线(非重连)→ 不重发快照
+    # 重连:OFFLINE → 按 world 真相恢复状态(座位/筹码在 OFFLINE 期间保留),私发整桌快照
+    restored = _reconnect_status(room, nick)
+    room.users_in_room[nick] = restored
+    snap = _state_snapshot(room, work.room_name, for_nick=nick)
+    changed = UserStatusChanged(nickname=nick, status=restored, seat_position=_seat_of(room, nick))
+    return [Broadcast(room=work.room_name, msg=changed), Personal(nick=nick, msg=snap)], None
+
+
+def _reconnect_status(room: Room, nick: str) -> UserStatus:
+    # 重连恢复目标状态(不存断线前状态,从 world 推断):在进行中手牌(是其 Player)→ PLAYING;
+    # 有座但不在手 → SITTING_IN(需重新 ready);无座 → WATCHING。皆是合法 OFFLINE→* 转移(见 enums)。
+    if room.hand is not None and any(p.nickname == nick for p in room.hand.players):
+        return UserStatus.PLAYING
+    if _seat_of(room, nick) is not None:
+        return UserStatus.SITTING_IN
+    return UserStatus.WATCHING
+
+
+# ── 进房(JoinRoom)── lobby.md / user.md:大厅 → 房间,装入 world.users 为 WATCHING + 私发快照
+def _join_room(work: Work, cmd: JoinRoom) -> ReduceResult:
+    # uid/loaded 由 shell 读 DB 带入(user.md);校验房存在 + 单房间约束;装 UserState + WATCHING;
+    # 产 Broadcast(UserJoined) 给全房 + Personal(StateSnapshot) 给进房者(观战 → 无自有底牌)。
+    room = work.room
+    nick = cmd.origin
+    room_name = work.room_name
+    if nick is None:
+        return [], Err(ErrorCode.INTERNAL, "JoinRoom 缺 origin")
+    if room is None or room_name is None:
+        return [], Err(ErrorCode.NO_SUCH_ROOM, f"无此房间 {cmd.room}")
+    if nick in work.users:
+        return [], Err(ErrorCode.ALREADY_IN_ROOM, f"{nick} 已在房间 {work.users[nick].room},先 LeaveRoom")
+    # ROOM_FULL 暂不强制(v1:不限观战;座位可用性由 SitDown 的 SEAT_TAKEN 兜,见 lobby.md / changes/0022)
+    work.users[nick] = UserState(uid=cmd.uid, nickname=nick, points=cmd.loaded, room=room_name)
+    room.users_in_room[nick] = UserStatus.WATCHING
+    snap = _state_snapshot(room, room_name, for_nick=nick)  # 进房者观战 → your_hole_cards=None
+    return [
+        Broadcast(room=room_name, msg=UserJoined(nickname=nick)),
+        Personal(nick=nick, msg=snap),
+    ], None
+
+
+def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> StateSnapshot:
+    # 整桌当前态投影(逐收件人):seats 仅已占座(各带 chips/status);watchers 无座者;进行中手牌投影 board/pot/players;
+    # your_hole_cards 仅收件人自己的底牌(他人底牌结构性缺位,见 wire.md 隐私)。快照值,不持域活引用(不变量 7)。
+    assert room_name is not None  # 进房/重连必有目标房
+    hand = room.hand
+    in_hand: dict[str, Player] = {p.nickname: p for p in hand.players} if hand is not None else {}
+    seats = tuple(
+        SeatView(
+            seat_position=i,
+            nickname=s.nickname,
+            status=room.users_in_room.get(s.nickname, UserStatus.SITTING_IN),
+            points=in_hand[s.nickname].points if s.nickname in in_hand else s.points,
+            new_here=s.new_here,
+        )
+        for i, s in enumerate(room.seats)
+        if s is not None
+    )
+    seated = {s.nickname for s in room.seats if s is not None}
+    watchers = tuple(sorted(n for n in room.users_in_room if n not in seated))
+    big_blind = blinds.BIG_BLIND_MULTIPLE * room.small_blind
+    if hand is None:
+        return StateSnapshot(
+            room=room_name, max_seats=len(room.seats), button_position=room.button_position,
+            small_blind=room.small_blind, big_blind=big_blind, room_status=room.status,
+            seats=seats, watchers=watchers, hand_status=None, board=(), pot=0,
+            acting_position=None, players=(), your_hole_cards=None,
+        )
+    players = tuple(
+        PlayerView(seat_position=p.seat_position, nickname=p.nickname, points=p.points,
+                   bet_amount=p.bet_amount, status=p.status)
+        for p in hand.players
+    )
+    own = in_hand[for_nick].hole_cards if for_nick in in_hand else None
+    return StateSnapshot(
+        room=room_name, max_seats=len(room.seats), button_position=room.button_position,
+        small_blind=room.small_blind, big_blind=big_blind, room_status=room.status,
+        seats=seats, watchers=watchers, hand_status=hand.status, board=tuple(_board(hand)),
+        pot=_pot(hand), acting_position=hand.acting_position, players=players, your_hole_cards=own,
+    )
 
 
 def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:

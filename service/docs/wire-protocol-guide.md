@@ -8,7 +8,7 @@
 
 - **只 import,绝不手改**(改了下次 codegen 覆盖;后端有漂移守门测试,源码改了不重生成会红)。
 - 旧的手写 `src/types/poker.ts` 是 **UI mockup 聚合类型 + 本地 mock 牌局逻辑**,不是协议——协议一律改用 `wire.gen.ts`。
-- 里面有:enums(`UserStatus`/`HandStatus`/`PlayerStatus`/`PlayerActionType`/`CardRank`/`CardSuit`/`ErrorCode`)、值对象(`Card`/`PlayerView`/`ShowdownReveal`/`NickAmount`)、`ServerMessage` 联合(你收)、`ClientMessage` 联合(你发)。
+- 里面有:enums(`UserStatus`/`HandStatus`/`PlayerStatus`/`PlayerActionType`/`RoomStatus`/`CardRank`/`CardSuit`/`ErrorCode`)、值对象(`Card`/`PlayerView`/`SeatView`/`ShowdownReveal`/`NickAmount`)、`ServerMessage` 联合(你收)、`ClientMessage` 联合(你发)。
 
 ## 2. 通信形状(几条铁律)
 
@@ -58,8 +58,10 @@
 | `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`acting_position` | 某人动作 + 推进后底池/下一行动位 |
 | `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
 | `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
-| `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身 |
+| `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身/重连 |
+| `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
+| `state_snapshot` | `seats`(仅已占座,各带 `seat_position`)/`max_seats`/`watchers`/`button_position`/`board`/`pot`/`acting_position`/`players`(行动序,不含底牌)/`your_hole_cards`(只你自己,在手才有)… | **私发**:进房/重连一次性对齐整桌;空座由 `max_seats` 渲染 |
 | `player_bought_in` | `nickname`/`seat_position`/`amount`/`seat_points` | 谁买入、座位新筹码 |
 | `free_entry_vote_updated` | `candidates`/`voters`/`approvals` | 免盲投票当前态(开票=`approvals` 空,逐票累加);给投票人显示进度/提示 |
 | `free_entry_vote_closed` | `passed`/`waived` | 投票终结:`passed=true` 时 `waived` 为本手免费入局者快照,失败为空 |
@@ -98,14 +100,14 @@
 ## 7. 隐私(前端无需特别处理,但要知道)
 
 - **别人的底牌永远不出现在广播里**(`ServerMessage` 广播类报文**结构上就没有** `hole_cards` 字段)。
-- 你只在两处拿到底牌:`hole_cards`(**你自己**,私发)、`hand_show_down.reveals`(摊牌时未弃牌者)。据此渲染:平时只翻自己的牌,摊牌才翻对手。
+- 你只在三处拿到底牌(全是「你自己 / 摊牌揭示」,绝无他人未摊的牌):`hole_cards`(**你自己**,私发)、`hand_show_down.reveals`(摊牌时未弃牌者)、`state_snapshot.your_hole_cards`(进房/重连私发,只含**你自己**的牌,在手才有否则 `null`)。据此渲染:平时只翻自己的牌,摊牌才翻对手。
 
 ## 8. 现在有 / 还没有(增量交付)
 
-**已交付**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**+ 上面所有其它 `ServerMessage`。
+**已交付**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot` + 进房通知 `user_joined`**(重连即由后端 `Connect` 私发 `state_snapshot`;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- **进房 `join_room` + 整桌快照 `state_snapshot`**:新进房 / 重连时一次性补全当前桌面(座位/筹码/已发公共牌/底池/轮到谁/你自己的底牌)。**这是你做"刷新即对齐"和重连的关键**——暂缺,先用上面的增量事件流搭状态机。
+- **进房 client 报文 `join_room{room}`**:`state_snapshot` 本身已交付(重连经后端 `Connect` 私发,可据它「刷新即对齐」),但**主动从大厅进房的 `join_room` 报文 + 后端读账号 `uid`/积分** 随真 DB 集成落地(当前 dev 端点用预置用户绕开,无大厅入房流)。
 - 大厅房间列表(REST)、私聊(`direct_message`)、房配置(设盲注/买入额)。
 
 ## 9. 怎么连(Phase D · 即将)

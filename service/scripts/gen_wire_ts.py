@@ -26,10 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # service/ 根,使
 from pydantic import BaseModel
 
 from app.core.cards import Card, CardRank, CardSuit
-from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, UserStatus
+from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.wire.client import CLIENT_MESSAGES
-from app.wire.server import NickAmount, PlayerView, ServerMessage, ShowdownReveal, SERVER_MESSAGES
+from app.wire.server import NickAmount, PlayerView, SeatView, ServerMessage, ShowdownReveal, SERVER_MESSAGES
 
 # 产物路径(相对本脚本:service/scripts/ → ../../frontend/src/types/wire.gen.ts)
 OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "wire.gen.ts"
@@ -43,9 +43,10 @@ _ENUM_ORDER: list[type[enum.Enum]] = [
     HandStatus,
     PlayerActionType,
     UserStatus,
+    RoomStatus,
     ErrorCode,
 ]
-_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount]
+_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount, SeatView]
 
 _HEADER = """\
 // ⚠️ GENERATED — DO NOT EDIT BY HAND.
@@ -81,7 +82,9 @@ def _ts_type(ann: object) -> str:
     if origin is tuple:
         args = get_args(ann)
         if len(args) == 2 and args[1] is Ellipsis:  # tuple[T, ...] → T[]
-            return _ts_type(args[0]) + "[]"
+            inner = _ts_type(args[0])
+            # 并集元素须加括号:(X | null)[] 而非 X | null[](后缀 [] 优先级高于 |,会误解析为 X | (null[]))
+            return (f"({inner})" if " | " in inner else inner) + "[]"
         return "[" + ", ".join(_ts_type(a) for a in args) + "]"  # tuple[A, B] → [A, B]
     if ann is int:
         return "number"

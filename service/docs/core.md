@@ -40,7 +40,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 
 | Command | origin | 来源 | 语义 |
 |---|---|---|---|
-| `JoinRoom(room, uid, loaded)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;校验房间存在/未满/未在别房,装入 `world.users`(见 [lobby.md](lobby.md)) |
+| `JoinRoom(room, uid, loaded)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;校验房间存在(`NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(0022);client 报文 + Receiver 读 DB 随真 DB 集成 |
 | `LeaveRoom()` | nick | wire | 退分离桌,回大厅;驱逐出 `world.users` |
 | `SitDown(seat)` | nick | wire | 观战→入座 |
 | `BuyIn(seat, amount)` | nick | wire | 全局积分→座位筹码 |
@@ -164,7 +164,8 @@ treys 评估只在 core 内做纯计算(无 IO),合法。`Evaluator` 单例在 c
 | 买入/离桌/起身 | `Broadcast(...)` + `Persist(PointsWrite)` | — |
 | 免盲投票 | `Broadcast(FreeEntryVoteUpdated/Closed)`(开票/进度/终结;见 [rules.md](rules.md) ①) | — |
 | 房间聊天 | `Broadcast(ChatMessage)`(只读命令,不改状态;见 [messaging.md](messaging.md)) | — |
-| 接入/重连 | `Personal(StateSnapshot)`(私发全量桌面快照) | — |
+| 进房(JoinRoom) | `Broadcast(UserJoined)` + `Personal(StateSnapshot)`(装 `world.users`、见 [lobby.md](lobby.md)) | — |
+| 重连(Connect) | `Broadcast(UserStatusChanged)` + `Personal(StateSnapshot)`(OFFLINE→恢复,见 [connection.md](connection.md)) | — |
 
 `Broadcast`/`Personal` 的 payload 是 wire `ServerMessage`;`Persist` 是 delayDB 结构。两者都带快照值,不持 `world` 活引用(不变量 7,由工作副本天然保证)。
 
@@ -177,7 +178,7 @@ treys 评估只在 core 内做纯计算(无 IO),合法。`Evaluator` 单例在 c
 3. **底牌/牌堆隐私**:除 `Personal(HoleCards)` 与摊牌的 `HandShowDown` 外,任何事件/日志/落库都不含 `hole_cards`/`deck`。
 4. **行动唯一**:每房间至多一个 `acting_position`;`epoch` 单调,过期 `Timeout` 必被 staleness 挡掉。
 5. **先校验后改**为好习惯;正确性兜底是工作副本 discard。
-6. **一个用户只在一个房间**:`UserState.room` 记其所在房间;`Connect` 到另一个房间时 reduce 拒掉(`ALREADY_IN_ROOM`)。这保证全局积分的载入/驱逐无歧义(见 [user.md](user.md))。
+6. **一个用户只在一个房间**:`UserState.room` 记其所在房间;已在某房者 `JoinRoom` 到别房(已在 `world.users`)被 reduce 拒掉(`ALREADY_IN_ROOM`,要先 `LeaveRoom`)。这保证全局积分的载入/驱逐无歧义(见 [user.md](user.md))。
 
 ## 测试(core 可纯单测)
 

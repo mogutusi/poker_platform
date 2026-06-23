@@ -17,6 +17,8 @@ export type PlayerActionType = "fold" | "bet" | "check";
 
 export type UserStatus = "watching" | "offline" | "sitting_in" | "ready_to_play" | "sitting_out" | "playing";
 
+export type RoomStatus = "pending_start" | "hand_started";
+
 export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE";
 
 // ── value objects ──
@@ -43,6 +45,14 @@ export interface ShowdownReveal {
 export interface NickAmount {
   nickname: string;
   amount: number;
+}
+
+export interface SeatView {
+  seat_position: number;
+  nickname: string;
+  status: UserStatus;
+  points: number;
+  new_here: boolean;
 }
 
 // ── server → client messages ──
@@ -100,6 +110,11 @@ export interface UserStatusChanged {
   seat_position: number | null;
 }
 
+export interface UserJoined {
+  type: "user_joined";
+  nickname: string;
+}
+
 export interface UserLeft {
   type: "user_left";
   nickname: string;
@@ -112,6 +127,24 @@ export interface PlayerBoughtIn {
   seat_position: number;
   amount: number;
   seat_points: number;
+}
+
+export interface StateSnapshot {
+  type: "state_snapshot";
+  room: string;
+  max_seats: number;
+  button_position: number;
+  small_blind: number;
+  big_blind: number;
+  room_status: RoomStatus;
+  seats: SeatView[];
+  watchers: string[];
+  hand_status: HandStatus | null;
+  board: Card[];
+  pot: number;
+  acting_position: number | null;
+  players: PlayerView[];
+  your_hole_cards: [Card, Card] | null;
 }
 
 export interface ChatMessage {
@@ -197,8 +230,10 @@ export type ServerMessage =
   | HandShowDown
   | HandEnded
   | UserStatusChanged
+  | UserJoined
   | UserLeft
   | PlayerBoughtIn
+  | StateSnapshot
   | ChatMessage
   | FreeEntryVoteUpdated
   | FreeEntryVoteClosed

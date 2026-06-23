@@ -13,7 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from app.core.cards import Card
-from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, UserStatus
+from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import Err, ErrorCode
 
 
@@ -46,6 +46,14 @@ class ShowdownReveal(_Frozen):
 class NickAmount(_Frozen):
     nickname: str  # 收款者
     amount: int  # 金额(赢得 / 退还)
+
+
+class SeatView(_Frozen):
+    seat_position: int  # 座位号
+    nickname: str  # 占座者
+    status: UserStatus  # 该占座者在房状态(SITTING_IN/READY_TO_PLAY/PLAYING/SITTING_OUT/OFFLINE)
+    points: int  # 当前可用筹码:在手时=本手剩余 Player.points,不在手时=Seat.points(seats 为「筹码后手」单一源)
+    new_here: bool  # 下一手是否需付盲入局(防躲盲;见 rules.md ①)
 
 
 # ── 出站消息(各带 `type` 字面量;字段平铺、snake_case、强类型)──
@@ -104,6 +112,11 @@ class UserStatusChanged(ServerMessage):
     seat_position: int | None  # 占座者的座位号;未就座(大厅/观战)为 None
 
 
+class UserJoined(ServerMessage):
+    type: Literal["user_joined"] = "user_joined"
+    nickname: str  # 新进房者(进房即 WATCHING 观战;Broadcast 给全房,见 lobby.md)
+
+
 class UserLeft(ServerMessage):
     type: Literal["user_left"] = "user_left"
     nickname: str  # 离房者;Broadcast 给留下者、Personal 回执给本人(见 connection.md/lobby.md)
@@ -116,6 +129,26 @@ class PlayerBoughtIn(ServerMessage):
     seat_position: int  # 充值的座位号
     amount: int  # 本次从全局积分转入的额度
     seat_points: int  # 买入后座位的可用筹码(快照)
+
+
+class StateSnapshot(ServerMessage):
+    # 进房/重连私发(Personal):一次性对齐整桌当前态。逐收件人构造——your_hole_cards 仅自己的底牌,
+    # 在手玩家投影为 players(PlayerView 结构上无 hole_cards ⇒ 他人底牌不泄露,见 wire.md 隐私)。
+    type: Literal["state_snapshot"] = "state_snapshot"
+    room: str  # 房间名
+    max_seats: int  # 座位总数(渲染空位:seats 只列已占座,各带 seat_position)
+    button_position: int  # 庄家座位
+    small_blind: int  # 小盲额
+    big_blind: int  # 大盲额(= 2×小盲)
+    room_status: RoomStatus  # PENDING_START / HAND_STARTED
+    seats: tuple[SeatView, ...]  # 仅已占座位(各带 seat_position;空座由 max_seats 推)
+    watchers: tuple[str, ...]  # 在房观战者(无座位)nick
+    hand_status: HandStatus | None  # 进行中手牌的街;无手为 None
+    board: tuple[Card, ...]  # 已发公共牌;无手为空
+    pot: int  # 总底池(contributed + 各人本街 bet_amount);无手为 0
+    acting_position: int | None  # players 下标:当前行动者;无手/无人可行动为 None
+    players: tuple[PlayerView, ...]  # 行动序在手玩家(不含底牌);无手为空
+    your_hole_cards: tuple[Card, Card] | None  # 收件人自己的底牌(仅其在手时);他人底牌结构性缺位
 
 
 class ChatMessage(ServerMessage):
@@ -157,8 +190,10 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     HandShowDown,
     HandEnded,
     UserStatusChanged,
+    UserJoined,
     UserLeft,
     PlayerBoughtIn,
+    StateSnapshot,
     ChatMessage,
     FreeEntryVoteUpdated,
     FreeEntryVoteClosed,

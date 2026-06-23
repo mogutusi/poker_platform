@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from app.core import commands
 from app.core.cards import Card, CardRank, CardSuit
-from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, UserStatus
+from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import Err, ErrorCode
 from app.wire import client as C
 from app.wire import server as S
@@ -38,6 +38,7 @@ def _broadcast_samples() -> list[S.ServerMessage]:
                       status=PlayerStatus.ACTIVE, last_bet=2, pot=3, acting_position=1),
         S.HandEnded(winnings=(S.NickAmount(nickname="A", amount=3),), refunds=()),
         S.UserStatusChanged(nickname="A", status=UserStatus.SITTING_IN, seat_position=0),
+        S.UserJoined(nickname="C"),
         S.UserLeft(nickname="A", seat_position=0),
         S.PlayerBoughtIn(nickname="A", seat_position=0, amount=64, seat_points=64),
         S.FreeEntryVoteUpdated(candidates=("D",), voters=("A", "B"), approvals=("A",)),
@@ -65,6 +66,24 @@ def test_reveal_dtos_carry_cards():
         reveals=(S.ShowdownReveal(seat_position=0, nickname="A", hole_cards=(_A, _K)),),
     )
     assert "hole_cards" in _all_strings(sd.model_dump(mode="json"))
+
+
+def test_state_snapshot_carries_only_own_cards_not_others_or_deck():
+    # StateSnapshot 私发收件人:含 your_hole_cards(自己的),但 players 结构上无 hole_cards、无 deck。
+    snap = S.StateSnapshot(
+        room="r1", max_seats=6, button_position=0, small_blind=1, big_blind=2,
+        room_status=RoomStatus.HAND_STARTED,
+        seats=(S.SeatView(seat_position=0, nickname="A", status=UserStatus.PLAYING, points=50, new_here=False),),
+        watchers=("C",),
+        hand_status=HandStatus.FLOP, board=(_A,), pot=20, acting_position=0,
+        players=(S.PlayerView(seat_position=0, nickname="A", points=50, bet_amount=0, status=PlayerStatus.ACTIVE),),
+        your_hole_cards=(_A, _K),
+    )
+    keys = _all_strings(snap.model_dump(mode="json"))
+    assert "your_hole_cards" in keys  # 自己的底牌显式携带
+    assert "hole_cards" not in keys  # 无他人底牌字段(players 结构上无)
+    assert "deck" not in keys  # 牌堆不入快照
+    assert snap.model_copy(update={"your_hole_cards": None}).model_dump(mode="json")["your_hole_cards"] is None
 
 
 def test_card_serializes_to_rank_suit_shortcodes():

@@ -29,10 +29,10 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 **`JoinRoom(room, uid, loaded)`**(大厅 → 房间):
 
 - shell:用户在大厅选某房 → Receiver 从 DB 读该 nick 的 `uid` + `points` → 投 `JoinRoom(room, uid, loaded=points)`。
-- reduce 校验:房间存在;未满;**nick 不在 `world.users`**(单房间约束——已在别房要先 `LeaveRoom`)。
+- reduce 校验:房间存在(`NO_SUCH_ROOM`);**nick 不在 `world.users`**(单房间约束 `ALREADY_IN_ROOM`——已在别房要先 `LeaveRoom`)。
 - reduce 改副本:装 `UserState(uid, nickname=nick, room=R, points=loaded)` 进 `world.users`;加进 `room.users_in_room` 为 `WATCHING`。
-- 产出:`Broadcast(room, UserJoined)` + `Personal(StateSnapshot)`(整桌当前态)。
-- 失败码:`NO_SUCH_ROOM` / `ROOM_FULL` / `ALREADY_IN_ROOM`。
+- 产出:`Broadcast(room, UserJoined)` + `Personal(StateSnapshot)`(整桌当前态)。core 已落地(0022 `_join_room`);**client `join_room{room}` 报文 + Receiver 读 DB 富化 `uid`/`loaded` 随真 DB 集成**(dev 无 DB,见 [changes/0022](refactor/changes/0022-p1-join-room-state-snapshot.md))。
+- **`ROOM_FULL` v1 暂不强制**:≤20 在线、房极少下「满」非真实约束,且「满桌不可观战」是有损 UX 的武断规则;故 v1 不限观战(座位可用性由 `SitDown` 的 `SEAT_TAKEN` 兜),`ErrorCode.ROOM_FULL` 保留待引入容量上限。失败码现为 `NO_SUCH_ROOM` / `ALREADY_IN_ROOM`(见 [changes/0022](refactor/changes/0022-p1-join-room-state-snapshot.md) 决策 5)。
 
 **`LeaveRoom()`**(房间 → 大厅):
 

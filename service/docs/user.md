@@ -79,11 +79,11 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 
 ## 单房间约束(一个用户只在一个房间)
 
-`UserState` 是**全局**的(键是 nick,跨房间唯一),但全局积分的载入与驱逐都绑在房间事件上(`Connect` 载入、`Cleanup`/`LeaveRoom` 驱逐)。若允许一个用户同时在多个房间,这些房间各自的 `Cleanup` 都看不到全貌——一个房间的清理会把别的房间还在用的全局积分误删,载入决策也会乱。
+`UserState` 是**全局**的(键是 nick,跨房间唯一),但全局积分的载入与驱逐都绑在房间事件上(`JoinRoom` 载入、`Cleanup`/`LeaveRoom` 驱逐)。若允许一个用户同时在多个房间,这些房间各自的 `Cleanup` 都看不到全貌——一个房间的清理会把别的房间还在用的全局积分误删,载入决策也会乱。
 
 所以**规定:一个用户同一时刻只在一个房间**,落在 `UserState.room`:
 
-- `Connect` 到 `UserState.room` 之外的房间 → reduce 直接拒(`ALREADY_IN_ROOM`),前端先离开当前房间再进下一个。
+- `JoinRoom` 到已在 `world.users`(即已在某房)的用户 → reduce 直接拒(`ALREADY_IN_ROOM`),前端先 `LeaveRoom` 再进下一个。`Connect` 不带 room、不参与此判定(它只接入大厅 / 重连恢复,见 [connection.md](connection.md))。
 - 于是该用户的彻底离场**只有一个来源**(它所在房间的 `Cleanup`/`LeaveRoom`),驱逐 `del work.users[nick]` 无歧义,也不必引用计数。
 
 > 这条约束是当前规模下的简化(对应 [architecture.md](architecture.md) 不变量 9)。日后真要支持"一人多房"再改成 refcount 驱逐,但本规模无必要。
@@ -96,12 +96,12 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 
 ## 与架构契约(必须守住)
 
-1. **DB 读只在 shell,经 `Connect` 命令把数据带进 core**;core 内绝不 `await` DB / `import sqlalchemy`。
+1. **DB 读只在 shell,经 `JoinRoom` 命令把数据带进 core**(`uid`/`loaded`;重连的 `Connect` 不重载,见「生命周期」);core 内绝不 `await` DB / `import sqlalchemy`。
 2. **载入决策在 reduce**(判 `nick` 是否已在 `work.users`),shell 不读 `world`;**绝不重载已在内存的实体**。
 3. **改积分只改工作副本**(GameLoop 已深拷贝 `users` 表),失败丢弃即回滚,无需用户专用机制。
 4. **积分校验先于修改**(好习惯),`Persist` 带快照值。
 5. **全局积分只在买入(借记)/ 腾座——离桌·清理·起身(贷记)变动**,对局内流转走房间内积分,不落 DB。
-6. **一个用户只在一个房间**(`UserState.room`):`Connect` 到别房即拒,驱逐无歧义、不必引用计数。
+6. **一个用户只在一个房间**(`UserState.room`):`JoinRoom` 到别房(已在 `world.users`)即拒,驱逐无歧义、不必引用计数。
 
 ## 注意点
 

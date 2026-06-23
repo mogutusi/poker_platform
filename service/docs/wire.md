@@ -41,8 +41,8 @@
 
 ## 隐私红线(wire 上)
 
-- **`hole_cards` / `deck` 默认不出现在任何 `ServerMessage` 序列化里**。当前机制是**结构性缺位**:广播类 DTO **根本没有**这些字段(字段不存在 ⇒ `model_dump` 无从泄露),比 `field_serializer` 默认隐藏更强、更简(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。`field_serializer` 留给未来确需「内部持牌、序列化按视角隐藏」的 DTO(如他人视角 `StateSnapshot`,尚未落地)。
-- **底牌只在三处显式公开**:`Personal(HoleCards)` 发本人、`Broadcast(HandShowDown)` 摊牌揭示未弃牌者、`Personal(StateSnapshot)` 里**只含自己的**底牌。这几处的 DTO **显式携带**底牌字段(`HoleCards.cards`/`ShowdownReveal.hole_cards`),其余 DTO 结构上无此字段。
+- **`hole_cards` / `deck` 默认不出现在任何 `ServerMessage` 序列化里**。当前机制是**结构性缺位**:广播类 DTO **根本没有**这些字段(字段不存在 ⇒ `model_dump` 无从泄露),比 `field_serializer` 默认隐藏更强、更简(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。**`StateSnapshot`(0022 已落地)亦走结构性**——它由 reduce **逐收件人**构造,`your_hole_cards` 只装收件人自己的底牌,在手玩家投影为 `players`(`PlayerView` 结构上**无** `hole_cards`),故他人底牌无从泄露,**无需 `field_serializer`**。`field_serializer` 至今未用(若未来出现「一个 DTO 内部持全牌、按视角序列化裁剪」才需要)。
+- **底牌只在三处显式公开**:`Personal(HoleCards)` 发本人、`Broadcast(HandShowDown)` 摊牌揭示未弃牌者、`Personal(StateSnapshot.your_hole_cards)` 只含收件人自己的底牌。这几处的 DTO **显式携带**底牌字段(`HoleCards.cards`/`ShowdownReveal.hole_cards`/`StateSnapshot.your_hole_cards`),其余 DTO 结构上无此字段。
 - 对应 [core.md](core.md) 不变量 3:底牌/牌堆隐私是 core 把关、wire 兜底,**两层都不能漏**。
 
 ## 文案不进协议
@@ -78,5 +78,5 @@
 ## 待定 / 在代码里(不在本文)
 
 - **具体消息清单**:`ClientMessage`/`ServerMessage` **首批已落** [app/wire/](../app/wire/)(0017:server 9 消息 + `ErrorMessage`、client 6 报文);各字段写在 .py、随实现增量补(每落一个模块补该模块切片,见 [changes/0016](refactor/changes/0016-replan-wire-first.md))。
-- **`StateSnapshot` 的精确字段**:随域模型定,在 .py;本文只约定其**职责 + 隐私**(快照含自己底牌),尚未落地。`HandShowDown` 已落(`board` + `reveals`)。
+- **`StateSnapshot`**:**已落地(0022)**,字段见 [app/wire/server.py](../app/wire/server.py)(`seats`/`watchers`/`button_position`/`board`/`pot`/`acting_position`/`players`/`your_hole_cards`…);隐私 = 结构性 + `your_hole_cards`(见上「隐私红线」)。由 reduce `_connect`(重连)/`_join_room`(进房)逐收件人投影。`HandShowDown` 已落(`board` + `reveals`)。
 - **REST 的 `openapi-typescript`**:待 P7;ws 消息的 codegen 已落(自包含 Python 生成器,见上)。

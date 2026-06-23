@@ -126,7 +126,7 @@ def _enqueue(self, conn: Connection, msg) -> None:
 1. **握手鉴权**(详见 [auth.md](auth.md)):`ws connect ?sid=<session_id>`(**不带 room_id**)→ 按 `session_id` 查会话表得 `nick`/`token` → 派生密钥建 `SecureChannel`。**第一帧 MAC 验过 = 证明持有 token**。鉴权失败:ws 关闭码拒掉,**绝不建 `Connection`**。
 2. **登记**:建 `Connection(nick=…)` → `old = conns.register(conn)`。`old` 非空 = **顶替**(见下):关 `old.ws`、cancel `old.sender_task`,**不投 `Disconnect`**。
 3. **起 Sender**:`conn.sender_task = create_task(sender_loop(conn))`。
-4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 判断——若 `nick` 已在 `world.users`(说明它正在某房、之前 OFFLINE)→ 这是**重连**:恢复在线 + 私发 `Personal(StateSnapshot)` 对齐其所在房;否则(纯大厅用户)→ core 无事可做。**积分不在此载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
+4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 判断(0022 `_connect`)——若 `nick` 已在 `world.users` 且为 `OFFLINE`(正在某房、之前断线)→ 这是**重连**:恢复在线 + 私发 `Personal(StateSnapshot)` 对齐其所在房;在线(预置 / 重复 `Connect`)→ 幂等 no-op、不重发快照;纯大厅用户(不在 `world.users`)→ core 无事可做。**恢复到的状态按 world 推断,不存断线前状态**(`_disconnect` 已用 `OFFLINE` 覆盖):在进行中手牌(是其 `Player`)→ `PLAYING`、有座但不在手 → `SITTING_IN`(需重新 ready)、无座 → `WATCHING`(皆合法 `OFFLINE→*` 转移)。**积分不在此载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
 5. **收帧循环**:`while: 收帧 → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`JoinRoom`/`LeaveRoom`/游戏动作/房聊都在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room)。每收一帧 `timer.heartbeat(nick)` 续命(见 [timer.md](timer.md))。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。
 6. **退出清理**(ws 断 / 异常):
    - `conns.unregister(conn)`(只删自己,顶替场景自动跳过)。
