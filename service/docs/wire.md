@@ -15,10 +15,10 @@
   唯一真源                         前端只消费,禁止手写/手改
 ```
 
-- **ws 消息**(`ClientMessage`/`ServerMessage`):Pydantic 模型 →(`pydantic2ts`)→ TS 可辨识联合。
-- **REST**(查手牌/余额):FastAPI 出 OpenAPI →(`openapi-typescript`)→ TS。
-- **生成步骤进 CI / pre-commit**:改了 .py 不重新生成 → CI 红。前端改动只能改 .py 再生成,不碰产物。
-- **.py 落点**:wire 模型集中在一个协议模块(取代旧 [wsm_schemas.py](../app/pokertable/wsm_schemas.py)),与域模型(core 的 `World`/`Hand`/…)**物理分开**——域模型是 core 权威状态,wire DTO 是对外报文,两者独立演进(见「wire DTO ≠ 域模型」)。
+- **ws 消息**(`ClientMessage`/`ServerMessage`):Pydantic 模型 → TS 可辨识联合。生成器是**自包含 Python 脚本** [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py)(内省 `model_fields` 直接吐扁平 TS),**不依赖 node**——本机无 node,`pydantic2ts` 不可运行,故自实现(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。
+- **REST**(查手牌/余额):FastAPI 出 OpenAPI →(`openapi-typescript`)→ TS(待 P7)。
+- **生成步骤进 CI / pre-commit**:改了 .py 不重新生成 → CI 红。当前由 [tests/wire/test_codegen_uptodate.py](../tests/wire/test_codegen_uptodate.py) 在 `pytest` 里逐字节比对兜住(无 node 也能守门);`gen_wire_ts.py --check` 同义供 pre-commit。前端改动只能改 .py 再生成,不碰产物。
+- **.py 落点**:wire 模型集中在 [app/wire/](../app/wire/)(`server.py`/`client.py`,取代旧 [wsm_schemas.py](../app/pokertable/wsm_schemas.py)),与域模型(core 的 `World`/`Hand`/…)**物理分开**——域模型是 core 权威状态,wire DTO 是对外报文,两者独立演进(见「wire DTO ≠ 域模型」)。
 
 ## 每条消息必须遵守的形状(约定,非清单)
 
@@ -39,13 +39,14 @@
 
 ## 隐私红线(wire 上)
 
-- **`hole_cards` / `deck` 默认不出现在任何 `ServerMessage` 序列化里**。用 Pydantic `field_serializer` 把它们设成默认隐藏(`model_dump(mode="json")` 出来已抹掉),同 [log.md](log.md) 的脱敏来源。
-- **底牌只在三处显式公开**:`Personal(HoleCards)` 发本人、`Broadcast(HandShowDown)` 摊牌揭示未弃牌者、`Personal(StateSnapshot)` 里**只含自己的**底牌。这几处的消息**显式携带**底牌字段(不走默认隐藏),其余一律隐藏。
+- **`hole_cards` / `deck` 默认不出现在任何 `ServerMessage` 序列化里**。当前机制是**结构性缺位**:广播类 DTO **根本没有**这些字段(字段不存在 ⇒ `model_dump` 无从泄露),比 `field_serializer` 默认隐藏更强、更简(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。`field_serializer` 留给未来确需「内部持牌、序列化按视角隐藏」的 DTO(如他人视角 `StateSnapshot`,尚未落地)。
+- **底牌只在三处显式公开**:`Personal(HoleCards)` 发本人、`Broadcast(HandShowDown)` 摊牌揭示未弃牌者、`Personal(StateSnapshot)` 里**只含自己的**底牌。这几处的 DTO **显式携带**底牌字段(`HoleCards.cards`/`ShowdownReveal.hole_cards`),其余 DTO 结构上无此字段。
 - 对应 [core.md](core.md) 不变量 3:底牌/牌堆隐私是 core 把关、wire 兜底,**两层都不能漏**。
 
 ## 文案不进协议
 
-- wire 只回**机器可读 `code`**(`ErrorCode` 等,见 [error.md](error.md));面向玩家的中文/多语言文案**由前端按 `code` 映射**,不进报文。
+- wire 只回**机器可读 `code`**(`ErrorMessage.code: ErrorCode`,见 [error.md](error.md));面向玩家的中文/多语言文案**由前端按 `code` 映射**,不进报文。
+- `ErrorMessage` 另带 `detail: str`(= `Err.detail`):**开发上下文**(谁/哪个座位/什么状态),非面向玩家的本地化文案,供日志/调试;前端**按 `code` 渲染**,不直显 `detail`。
 - 这让协议与文案解耦:加一种语言只改前端文案表,不动 .py、不重生成。
 
 ## wire DTO ≠ 域模型
@@ -74,6 +75,6 @@
 
 ## 待定 / 在代码里(不在本文)
 
-- **具体消息清单**:`ClientMessage`/`ServerMessage` 全集、各字段——**写在 .py**,随 core 域模型敲定(**未写**)。
-- **`StateSnapshot` / `HandShowDown` 的精确字段**:随域模型定,在 .py;本文只约定其**职责 + 隐私**(快照含自己底牌、摊牌揭示未弃牌者),不列字段。
-- **codegen 脚本接 CI / pre-commit**:工具选 `pydantic2ts` + `openapi-typescript`(见上),脚本与钩子随实现补。
+- **具体消息清单**:`ClientMessage`/`ServerMessage` **首批已落** [app/wire/](../app/wire/)(0017:server 9 消息 + `ErrorMessage`、client 6 报文);各字段写在 .py、随实现增量补(每落一个模块补该模块切片,见 [changes/0016](refactor/changes/0016-replan-wire-first.md))。
+- **`StateSnapshot` 的精确字段**:随域模型定,在 .py;本文只约定其**职责 + 隐私**(快照含自己底牌),尚未落地。`HandShowDown` 已落(`board` + `reveals`)。
+- **REST 的 `openapi-typescript`**:待 P7;ws 消息的 codegen 已落(自包含 Python 生成器,见上)。

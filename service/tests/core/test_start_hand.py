@@ -12,7 +12,7 @@ from app.core.enums import HandStatus, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, ClearAction, Personal, Persist, TurnChanged
 from app.core.commands import StartHand
-from app.core.messages import HandStarted, HandStatusChanged, HoleCards
+from app.wire.server import HandStarted, HandStatusChanged, HoleCards
 from tests.builders import DECK, T0, make_table, run, seat
 
 SB = 1

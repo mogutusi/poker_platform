@@ -7,7 +7,7 @@ staleness(无手 / epoch 不符 / 行动者已变)→ 忽略(系统命令 origin
 from app.core.commands import Timeout
 from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus
 from app.core.events import Broadcast, ClearAction, Persist, TurnChanged
-from app.core.messages import HandEnded, PlayerActed
+from app.wire.server import HandEnded, PlayerActed
 from tests.builders import card, hand_world, make_table, player, run, seat
 
 BOARD = (card("Ah"), card("Kd"), card("Qc"), card("2s"), card("7h"))

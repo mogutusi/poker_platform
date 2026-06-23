@@ -37,12 +37,12 @@
 
 > 已设计/已落地的消息 + 命令 → Pydantic 单一事实源 + codegen TS。reduce 直接产 wire DTO(core 可 import wire DTO,见 [models.md](../models.md)/[README §3](README.md)),收编 `core/messages.py`;`core/records.py` 的 Persist 载荷不上 wire,保留。治理见 [wire.md](../wire.md),旧 [wsm_schemas.py](../../app/pokertable/wsm_schemas.py) 作参考。
 
-- [ ] `app/wire/server.py`:`ServerMessage` 可辨识联合(升级 `core/messages.py` 全集为 Pydantic:`type` 字面量/扁平/snake_case/core enums):`HandStarted`/`HoleCards`/`HandStatusChanged`/`PlayerActed`/`HandShowDown`/`HandEnded`/`UserStatusChanged`/`UserLeft`/`PlayerBoughtIn` + `ErrorMessage`(由 `Err` 转);隐私 `field_serializer`(底牌/牌堆默认隐藏,仅 `HoleCards`/`HandShowDown` 显式)
-- [ ] `app/wire/client.py`:`ClientMessage` 可辨识联合 = 已落地命令报文(身份不进报文):`SitDown`/`BuyIn`/`SetUserStatus`/`LeaveRoom`/`StartHand`/`PlayerAction` + `parse`(client→`Command`,Receiver 盖 `origin=nick`)
-- [ ] reduce 投影改产 `app/wire` DTO,删 `core/messages.py`;`tests/core/*` 改 import(字段同名,`isinstance`/`hasattr` 隐私断言照旧)
-- [ ] codegen:`pydantic2ts` → `frontend/src/types/wire.gen.ts`(只读产物);脚本进 `service/` + pre-commit/CI 钩子(改 .py 不重生成即红)
-- [ ] 前端:删手写 `frontend/src/types/poker.ts`,改 import `wire.gen.ts`
-- [ ] 协议指南:消息流时序 + dev 连接握手(明文)+ 错误码用法(并入 [wire.md](../wire.md)/[connection.md](../connection.md) 或薄页),指向生成产物
+- [x] `app/wire/server.py`:`ServerMessage` 可辨识联合(`core/messages.py` 全集升级为 Pydantic:`type` 字面量/扁平/snake_case/core enums):`HandStarted`/`HoleCards`/`HandStatusChanged`/`PlayerActed`/`HandShowDown`/`HandEnded`/`UserStatusChanged`/`UserLeft`/`PlayerBoughtIn` + `ErrorMessage.from_err` — 0017(隐私=结构性缺位,非 field_serializer;见 0017 决策 2)
+- [x] `app/wire/client.py`:`ClientMessage` 可辨识联合 = 已落地命令报文(身份不进报文):`SitDown`/`BuyIn`/`SetUserStatus`/`LeaveRoom`/`StartHand`/`PlayerAction` + `parse`(JSON→`ClientMessage`)+ `to_command(msg,origin,now)`(Receiver 盖 `origin=nick`、shell 盖 `now` 墙钟)— 0017
+- [x] reduce 投影改产 `app/wire` DTO,删 `core/messages.py`;`tests/core/*` 改 import(字段同名;三处位置构造改关键字)— 0017
+- [x] codegen:**自包含 Python 生成器** `scripts/gen_wire_ts.py`(无 node;`pydantic2ts` 不可用)→ `frontend/src/types/wire.gen.ts`(只读产物);漂移守门 `tests/wire/test_codegen_uptodate.py` 骑 `pytest` 门槛 + `--check` 供 pre-commit — 0017(见 0017 决策 3/4)
+- [ ] 前端消费 wire.gen.ts(**延后,随前端 WS client 集成**):0017 已生成 `wire.gen.ts` 解锁前端按真类型写 WS client;但 `frontend/src/types/poker.ts` 是 **UI mockup 聚合类型 + 本地 mock 牌局逻辑**(非协议类型),且本批无 `Player`/`StateSnapshot` wire 类型——此刻删它只会破坏 mockup 无替代。删 poker.ts + 改组件归「前端 WS client + StateSnapshot」单元(见 0017 决策 8)
+- [ ] 协议指南:消息流时序 + dev 连接握手(明文)+ 错误码用法(治理 [wire.md](../wire.md) 已更新;时序/握手薄页随 **D 阶段** dev 端点落)
 
 ## D · 最小明文 dev shell + 端点(前端真连联调)— 无加密,临时脚手架
 

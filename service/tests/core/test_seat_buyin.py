@@ -9,7 +9,7 @@ from app.core.domain import UserState
 from app.core.enums import HandStatus, PlayerStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, Persist
-from app.core.messages import PlayerBoughtIn, UserStatusChanged
+from app.wire.server import PlayerBoughtIn, UserStatusChanged
 from app.core.records import PointsWrite
 from tests.builders import hand_world, make_table, make_world, player, room_with, run, seat
 

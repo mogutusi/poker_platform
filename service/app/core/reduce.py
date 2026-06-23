@@ -26,7 +26,8 @@ from app.core.enums import (
 )
 from app.core.errors import Err, ErrorCode
 from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
-from app.core.messages import (
+from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
+from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadcast/Personal 的 msg
     HandEnded,
     HandShowDown,
     HandStarted,
@@ -40,7 +41,6 @@ from app.core.messages import (
     UserLeft,
     UserStatusChanged,
 )
-from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
 from app.core.rules import betting, blinds, sidepot
 
 # SetUserStatus 玩家可主动发起的目标状态:就座内 ready/sit-out 切换 + 起身离座(→WATCHING)。
@@ -213,7 +213,14 @@ def _start_hand_events(
     # 投影为出站载荷(快照值,无活引用);顺序按 core.md §事件:HandStarted → HoleCards* → HandStatusChanged → TurnChanged
     assert room_name is not None  # 开局必有目标房
     views = tuple(
-        PlayerView(p.seat_position, p.nickname, p.points, p.bet_amount, p.status) for p in hand.players
+        PlayerView(
+            seat_position=p.seat_position,
+            nickname=p.nickname,
+            points=p.points,
+            bet_amount=p.bet_amount,
+            status=p.status,
+        )
+        for p in hand.players
     )
     started = HandStarted(
         hand_seq=hand.seq,
@@ -347,7 +354,9 @@ def _settle_and_end(work: Work, hand: Hand, *, reveal: bool) -> list[Event]:
         for p in live:
             assert p.hole_cards is not None  # 在局者开局已发底牌
             strength[p.nickname] = evaluate(board, p.hole_cards)
-            reveals.append(ShowdownReveal(p.seat_position, p.nickname, p.hole_cards))
+            reveals.append(
+                ShowdownReveal(seat_position=p.seat_position, nickname=p.nickname, hole_cards=p.hole_cards)
+            )
         hand.status = HandStatus.SHOWDOWN
         events.append(
             Broadcast(room=work.room_name, msg=HandShowDown(board=tuple(board), reveals=tuple(reveals)))
@@ -402,8 +411,8 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
         participants=tuple(participants),
     )
     ended = HandEnded(
-        winnings=tuple(NickAmount(n, a) for n, a in payout.winnings.items()),
-        refunds=tuple(NickAmount(n, a) for n, a in payout.refunds.items()),
+        winnings=tuple(NickAmount(nickname=n, amount=a) for n, a in payout.winnings.items()),
+        refunds=tuple(NickAmount(nickname=n, amount=a) for n, a in payout.refunds.items()),
     )
 
     hand.status = HandStatus.ENDING

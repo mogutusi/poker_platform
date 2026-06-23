@@ -10,7 +10,7 @@ from app.core.commands import PlayerAction, StartHand
 from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, ClearAction, Persist, TurnChanged
-from app.core.messages import HandEnded, HandShowDown, HandStarted, HandStatusChanged, PlayerActed
+from app.wire.server import HandEnded, HandShowDown, HandStarted, HandStatusChanged, PlayerActed
 from app.core.records import HandRecordWrite
 from tests.builders import DECK, T0, card, hand_world, make_table, player, run, seat
 

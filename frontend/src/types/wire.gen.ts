@@ -1,0 +1,177 @@
+// ⚠️ GENERATED — DO NOT EDIT BY HAND.
+// Source of truth: service/app/wire/{server,client}.py (Pydantic).
+// Regenerate: cd service && python scripts/gen_wire_ts.py
+// Drift is guarded by tests/wire/test_codegen_uptodate.py (pytest goes red on stale output).
+
+// ── enums ──
+
+export type CardSuit = "h" | "d" | "c" | "s";
+
+export type CardRank = "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "T" | "J" | "Q" | "K" | "A";
+
+export type PlayerStatus = "active" | "folded" | "allin";
+
+export type HandStatus = "pre_flop" | "flop" | "turn" | "river" | "showdown" | "ending";
+
+export type PlayerActionType = "fold" | "bet" | "check";
+
+export type UserStatus = "watching" | "offline" | "sitting_in" | "ready_to_play" | "sitting_out" | "playing";
+
+export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER";
+
+// ── value objects ──
+
+export interface Card {
+  rank: CardRank;
+  suit: CardSuit;
+}
+
+export interface PlayerView {
+  seat_position: number;
+  nickname: string;
+  points: number;
+  bet_amount: number;
+  status: PlayerStatus;
+}
+
+export interface ShowdownReveal {
+  seat_position: number;
+  nickname: string;
+  hole_cards: [Card, Card];
+}
+
+export interface NickAmount {
+  nickname: string;
+  amount: number;
+}
+
+// ── server → client messages ──
+
+export interface HandStarted {
+  type: "hand_started";
+  hand_seq: number;
+  button_position: number;
+  small_blind: number;
+  big_blind: number;
+  players: PlayerView[];
+  acting_position: number | null;
+}
+
+export interface HoleCards {
+  type: "hole_cards";
+  cards: [Card, Card];
+}
+
+export interface HandStatusChanged {
+  type: "hand_status_changed";
+  status: HandStatus;
+  board: Card[];
+}
+
+export interface PlayerActed {
+  type: "player_acted";
+  seat_position: number;
+  nickname: string;
+  action: PlayerActionType;
+  bet_amount: number;
+  points: number;
+  status: PlayerStatus;
+  last_bet: number;
+  pot: number;
+  acting_position: number | null;
+}
+
+export interface HandShowDown {
+  type: "hand_show_down";
+  board: Card[];
+  reveals: ShowdownReveal[];
+}
+
+export interface HandEnded {
+  type: "hand_ended";
+  winnings: NickAmount[];
+  refunds: NickAmount[];
+}
+
+export interface UserStatusChanged {
+  type: "user_status_changed";
+  nickname: string;
+  status: UserStatus;
+  seat_position: number | null;
+}
+
+export interface UserLeft {
+  type: "user_left";
+  nickname: string;
+  seat_position: number | null;
+}
+
+export interface PlayerBoughtIn {
+  type: "player_bought_in";
+  nickname: string;
+  seat_position: number;
+  amount: number;
+  seat_points: number;
+}
+
+export interface ErrorMessage {
+  type: "error";
+  code: ErrorCode;
+  detail?: string;
+}
+
+// ── client → server messages ──
+
+export interface SitDown {
+  type: "sit_down";
+  seat: number;
+}
+
+export interface BuyIn {
+  type: "buy_in";
+  seat: number;
+  amount: number;
+}
+
+export interface SetUserStatus {
+  type: "set_user_status";
+  status: UserStatus;
+  seat?: number | null;
+}
+
+export interface LeaveRoom {
+  type: "leave_room";
+}
+
+export interface StartHand {
+  type: "start_hand";
+  seat: number;
+}
+
+export interface PlayerAction {
+  type: "player_action";
+  action: PlayerActionType;
+  bet_amount?: number | null;
+}
+
+// ── discriminated unions ──
+
+export type ServerMessage =
+  | HandStarted
+  | HoleCards
+  | HandStatusChanged
+  | PlayerActed
+  | HandShowDown
+  | HandEnded
+  | UserStatusChanged
+  | UserLeft
+  | PlayerBoughtIn
+  | ErrorMessage;
+
+export type ClientMessage =
+  | SitDown
+  | BuyIn
+  | SetUserStatus
+  | LeaveRoom
+  | StartHand
+  | PlayerAction;

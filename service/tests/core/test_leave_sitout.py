@@ -8,7 +8,7 @@ from app.core.commands import Cleanup, Disconnect, LeaveRoom, PlayerAction, SetU
 from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, ClearAction, Personal, Persist, TurnChanged
-from app.core.messages import HandEnded, HandShowDown, PlayerActed, UserLeft, UserStatusChanged
+from app.wire.server import HandEnded, HandShowDown, PlayerActed, UserLeft, UserStatusChanged
 from app.core.records import PointsWrite
 from app.core.domain import UserState
 from tests.builders import (

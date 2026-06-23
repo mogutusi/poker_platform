@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 
-
-class ServerMessage:
-    """wire 出站消息基类(P6 落地)。"""
+from app.wire.server import ServerMessage  # core 可 import wire DTO(models.md);Broadcast/Personal 的 msg 类型
 
 
 class PersistPayload:
