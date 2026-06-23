@@ -6,6 +6,8 @@
 
 所以本文只定**协议怎么治理**:单一事实源 + codegen 管线、每条消息必须遵守的**形状约定**、隐私红线、与 `Command`/`Event` 的对应、演进规则。**字段长什么样去看 .py**,本文一个字段都不写。
 
+> **前端「怎么用」** → [wire-protocol-guide.md](wire-protocol-guide.md)(收发消息目录 / 一手牌时序 / 错误码用法 / 现有与待补)。本文管治理,那篇教用法;字段清单一律以生成的 `wire.gen.ts` 为准。
+
 > 前置:[architecture.md](architecture.md) 的「五种数据类型」(wire 在其中的位置)、[auth.md](auth.md)(wire 明文是加密帧里的载荷)、[error.md](error.md)(`ErrorMessage`)。
 
 ## 单一事实源 + codegen 管线

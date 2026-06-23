@@ -1,0 +1,109 @@
+# wire 协议·前端对接指南
+
+> 给前端的「怎么用」手册。治理规则见 [wire.md](wire.md)(单一事实源/演进);**字段清单永远以生成的 TS 为准,不在本文重复**(重复必漂移)。本批协议覆盖**已落地模块**(座位/买入/状态/开局/动作/摊牌/结束/离开 + 错误);其余随后端模块增量补(见末节)。
+
+## 1. 你唯一要 import 的文件
+
+`frontend/src/types/wire.gen.ts` —— 后端 Pydantic 自动生成的 TS 类型。
+
+- **只 import,绝不手改**(改了下次 codegen 覆盖;后端有漂移守门测试,源码改了不重生成会红)。
+- 旧的手写 `src/types/poker.ts` 是 **UI mockup 聚合类型 + 本地 mock 牌局逻辑**,不是协议——协议一律改用 `wire.gen.ts`。
+- 里面有:enums(`UserStatus`/`HandStatus`/`PlayerStatus`/`PlayerActionType`/`CardRank`/`CardSuit`/`ErrorCode`)、值对象(`Card`/`PlayerView`/`ShowdownReveal`/`NickAmount`)、`ServerMessage` 联合(你收)、`ClientMessage` 联合(你发)。
+
+## 2. 通信形状(几条铁律)
+
+1. **每条消息带 `type` 字面量**,是可辨识联合。收到后 `switch (msg.type)` 即把 `msg` 收窄到具体类型:
+   ```ts
+   function onMessage(msg: ServerMessage) {
+     switch (msg.type) {
+       case "hand_started":   /* msg: HandStarted */ break;
+       case "player_acted":   /* msg: PlayerActed */ break;
+       case "error":          /* msg: ErrorMessage */ break;
+       default: /* 忽略不认识的 type(向后兼容:后端会加新消息) */
+     }
+   }
+   ```
+2. **字段一律 `snake_case`**(后端同源)。别转 camelCase——转了和生成类型对不上。
+3. **身份不进报文**:你发的消息**不带 nick / id**。身份由 **WS 连接(会话)** 决定,后端按连接盖。所以 `player_action` 只有 `{type, action, bet_amount?}`,没有"谁"。
+4. **枚举用生成的字面量**:`"ready_to_play"` / `"fold"` / `"sitting_in"`…,不写裸字符串。
+5. **忽略不认识的 `ServerMessage.type`**:协议加性演进,后端会增消息;`default` 跳过即向后兼容。
+
+## 3. 你发什么(`ClientMessage`)
+
+| `type` | 字段 | 语义 |
+|---|---|---|
+| `sit_down` | `seat` | 观战 → 入座该座位 |
+| `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
+| `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
+| `start_hand` | `seat` | 开新一手(房内 ≥2 人 ready 时) |
+| `player_action` | `action, bet_amount?` | `fold` / `check` / `bet`;**`bet` 时 `bet_amount`=本街目标总额** |
+| `leave_room` | — | 退房(局中则自动弃牌,手尾结算后离座) |
+
+发送:`ws.send(JSON.stringify(msg))`。非法报文/字段后端回 `error`。
+
+> **`player_action.bet_amount` 是「本街目标总额」,不是增量**:跟注=把 `bet_amount` 设成当前 `last_bet`;加注=设成更大的目标额;all-in=设成你的全部可用额。`fold`/`check` 不带 `bet_amount`。
+
+## 4. 你收什么(`ServerMessage`)
+
+按 `type` 分发渲染:
+
+| `type` | 关键字段 | 渲染 |
+|---|---|---|
+| `hand_started` | `players[]`(行动序快照)、`button_position`、`small_blind`/`big_blind`、`acting_position` | 开局铺桌 |
+| `hole_cards` | `cards`(你**自己**的两张) | **私发本人**;摆你的手牌 |
+| `hand_status_changed` | `status`(街)、`board`(已发公共牌) | 翻 flop/turn/river |
+| `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`acting_position` | 某人动作 + 推进后底池/下一行动位 |
+| `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
+| `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
+| `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身 |
+| `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
+| `player_bought_in` | `nickname`/`seat_position`/`amount`/`seat_points` | 谁买入、座位新筹码 |
+| `error` | `code`(`ErrorCode`)、`detail?` | 见 §6 |
+
+> **`acting_position` 是 `players[]` 的下标,不是座位号**:`hand_started.players` 按行动序排(`[0]`=小盲、`[1]`=大盲)。"轮到谁"= `players[acting_position]`,它的座位是 `.seat_position`。`acting_position` 为 `null` 表示无人可行动(手已结束/全 all-in)。
+
+## 5. 一手牌的典型时序(已落地部分)
+
+```
+你 → sit_down{seat:2}                  ← user_status_changed{nick:你, status:"sitting_in", seat_position:2}
+你 → buy_in{seat:2, amount:100}        ← player_bought_in{nick:你, seat_position:2, amount:100, seat_points:100}
+你 → set_user_status{status:"ready_to_play"}   ← user_status_changed{..."ready_to_play"}
+某人 → start_hand{seat}                ← hand_started{button_position, small_blind, big_blind, players[], acting_position}
+                                       ← (私发你)hole_cards{cards:[你的两张]}
+                                       ← hand_status_changed{status:"pre_flop", board:[]}
+轮到你(players[acting_position]==你)→ player_action{action:"bet", bet_amount:10}
+  每次有人动                            ← player_acted{nickname, action, bet_amount, points, status, pot, last_bet, acting_position}
+本街关闭(自动)                        ← hand_status_changed{status:"flop", board:[3张]}  → turn[4] → river[5]
+摊牌                                    ← hand_show_down{board:[5张], reveals:[未弃牌者底牌]}
+                                       ← hand_ended{winnings:[{nickname,amount}], refunds:[...]}
+非法操作(如非你回合 / 钱不够)         ← error{code:"NOT_YOUR_TURN", detail:"..."}
+```
+
+筹码语义:`PlayerView.points`/`PlayerActed.points` = 该玩家**本手剩余可下注筹码**;`bet_amount` = **本街已投入**;`pot` = **总底池**(已并入的 + 各人本街投入)。
+
+## 6. 错误处理
+
+`error` 报文 = `{ type:"error", code: ErrorCode, detail?: string }`。
+
+- **按 `code` 映射你自己的本地化文案**(协议只回机器码,不回面向玩家的文案)。常见:`NOT_YOUR_TURN`/`ILLEGAL_ACTION`/`INSUFFICIENT_POINTS`/`SEAT_TAKEN`/`NOT_YOUR_SEAT`/`HAND_IN_PROGRESS`/`INVALID_BUY_IN`/`INVALID_STATUS_TRANSITION`…(全集见 `ErrorCode`)。
+- `detail` 是**开发上下文**(谁/哪个座位/什么状态),供调试/日志,**别直接展示给玩家**。
+- 错误只回**发起那条命令的连接**(不广播)。
+
+## 7. 隐私(前端无需特别处理,但要知道)
+
+- **别人的底牌永远不出现在广播里**(`ServerMessage` 广播类报文**结构上就没有** `hole_cards` 字段)。
+- 你只在两处拿到底牌:`hole_cards`(**你自己**,私发)、`hand_show_down.reveals`(摊牌时未弃牌者)。据此渲染:平时只翻自己的牌,摊牌才翻对手。
+
+## 8. 现在有 / 还没有(增量交付)
+
+**已交付(本批)**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)+ 上面所有 `ServerMessage`。
+
+**还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
+- **进房 `join_room` + 整桌快照 `state_snapshot`**:新进房 / 重连时一次性补全当前桌面(座位/筹码/已发公共牌/底池/轮到谁/你自己的底牌)。**这是你做"刷新即对齐"和重连的关键**——暂缺,先用上面的增量事件流搭状态机。
+- 大厅房间列表(REST)、聊天、免盲投票、房配置(设盲注/买入额)。
+
+## 9. 怎么连(Phase D · 即将)
+
+明文 dev WS 端点正在做(下一步)。落地后:`ws://<host>/dev?nick=<你的昵称>`(**开发用、明文、无加密**),连上即用上面的报文收发。正式国密加密信道放在**最后**做,对你**透明**——加解密在连接边界,你收发的始终是同样的明文 `ServerMessage`/`ClientMessage` JSON。
+
+**现在(端点落地前)就能做的**:对着 `wire.gen.ts` 把消息类型、`switch(type)` 分发、UI 组件、桌面状态机写起来,用 mock 数据驱动;端点一通,换成真 socket 即可。
