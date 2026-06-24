@@ -41,26 +41,31 @@
 
 **反例(必错)**:PersistWriter 边遍历 `self._dirty` 边 `await` 写库——`await` 让出时 GameLoop 改同一个 dict → `RuntimeError: dict changed size` 或丢写。**务必先 swap 后 await,绝不持缓冲本体跨 `await`。**
 
-## PersistWriter 主循环
+## PersistWriter 主循环(0025 落地;精确实现见 [persist.py](../app/shell/persist.py))
+
+`run()` 是「`sleep` → `flush_once()`」的薄壳;落库后端抽象在 **`Persister` 协议**(`async flush(dirty, appends)`)之后,真实现(`to_orm` + session,P4 三 `OrmPersister`)与控制流解耦:
 
 ```python
-async def run(self) -> None:
-    while True:
-        await asyncio.sleep(gameconfig.DB_FLUSH_INTERVAL_MS / 1000)   # 让出点①
-        if self._buf.is_empty():
-            continue
-        dirty, appends = self._buf.swap()                # 同步取走清空(双缓冲)
-        try:
-            async with self._session() as s:             # 一批一个短事务
-                for payload in dirty.values():  await s.merge(to_orm(payload))   # UPSERT(状态写)
-                for payload in appends:         s.add(to_orm(payload))           # INSERT(事件写)
-                await s.commit()                         # 让出点②
-        except Exception:
-            self._buf.requeue(dirty, appends)            # 整批回灌(更新者优先),下周期重试
-            log.error("delayDB flush failed, requeued", exc_info=True)
+async def flush_once(self) -> bool:          # 抽出供直测(同 timer.tick)
+    if self._buf.is_empty(): return False
+    dirty, appends = self._buf.swap()        # 先 swap 同步取走清空(双缓冲),再 await
+    try:
+        await self._persister.flush(dirty, appends)   # OrmPersister:一批一短事务 merge/add + commit
+    except asyncio.CancelledError:           # 关闭取消落在 flush 半途 → 先回灌再 re-raise,由 drain 补落(不丢)
+        self._buf.requeue(dirty, appends); raise
+    except Exception:                        # 失败:未达毒丸则整批回灌、达阈值则丢批
+        self._fail_streak += 1
+        if self._fail_streak >= self._max_retry:   # 毒丸:CRITICAL + 丢批 + 复位计数
+            log.critical(...); self._fail_streak = 0
+        else:
+            self._buf.requeue(dirty, appends)       # 更新者优先,下周期重试
+        return True
+    self._fail_streak = 0; return True       # 成功复位失败计数
 ```
 
-**为什么周期而非「来一条写一条」**:给覆盖一个窗口。立即消费则窗口为零、覆盖退化成 FIFO。`DB_FLUSH_INTERVAL_MS` 是「同实体多次变更合并的时间窗」,也是「积分落库最多滞后多久 / 崩溃窗口」——积分非货币,可放宽。可选增强:条目超 `DB_FLUSH_MAX_BATCH` 提前 flush。
+> **0025 偏离(已对齐代码)**:db.md 早先伪码把 `to_orm` + `session.merge/add/commit` 内联在 `run()`;0025 把落库后端抽成 `Persister` 协议(`flush_once` 只调 `persister.flush`),使 PersistWriter 控制流脱真 DB、纯 fake 可测;`to_orm`+session 成为 P4 三 `OrmPersister.flush` 的实现体(dev 用 `NullPersister` 丢弃)。并加 `CancelledError` 回灌守关闭半途丢批 + drain 节流(见下「优雅关闭」)。
+
+**为什么周期而非「来一条写一条」**:给覆盖一个窗口。立即消费则窗口为零、覆盖退化成 FIFO。`DB_FLUSH_INTERVAL_MS` 是「同实体多次变更合并的时间窗」,也是「积分落库最多滞后多久 / 崩溃窗口」——积分非货币,可放宽。可选增强:条目超 `DB_FLUSH_MAX_BATCH` 提前 flush(0025 未做)。
 
 ## 失败与重试
 
@@ -75,7 +80,7 @@ def requeue(self, dirty, appends) -> None:
 - **状态写回灌用 `setdefault`(更新者优先)**:这是覆盖语义下唯一的正确性要点——回灌的是上一批的旧值,若期间 GameLoop 又写了更新值,**必须保留更新的**,否则旧值盖新值 = 把内存权威最新状态写错。
 - **覆盖红利**:重试不必记「重试到第几条 / 累计多少增量」,状态写永远只关心当前值,回灌后下周期再 UPSERT,天然幂等。
 - **事件写幂等**:每批一个事务,失败整批回滚、什么都没落,原样放回重 INSERT 不会重复。`dedupe_key` 是额外保险(防"commit 成功但进程在记账前崩"),落库用 `INSERT ... ON CONFLICT (dedupe_key) DO NOTHING`。
-- **毒丸(永久失败)**:同一批连续失败超 `DB_WRITE_MAX_RETRY` 次 → 落 ERROR、移出缓冲(别卡死后续),留人工介入。这是 bug 信号。
+- **毒丸(永久失败)**:同一批连续失败**达** `DB_WRITE_MAX_RETRY` 次(`fail_streak >= 阈值`)→ 落 CRITICAL、丢批(别卡死后续),留人工介入。这是 bug 信号。
 
 ## 事务分组 & session
 
@@ -174,4 +179,4 @@ DM_CLEANUP_INTERVAL_SECONDS=3600   # 每小时跑一趟清理
 - **脱敏红线**:落库 payload **不得带 `hole_cards` / `deck`**(见 [log.md](log.md));手牌记录存**结果**(`initial_points`/`final_points`/`final_pot`),不是底牌。
 - **读写分离**:实时判定一律读内存;DB 只服务事后查询与崩溃后冷启动初值。
 - **私信是写缓冲的第二个生产者**:shell 私信路由 `put`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理**(删已读满期的行)也归 PersistWriter——DELETE 是 DB 写,不另起写者(守唯一写者),周期 `DM_CLEANUP_INTERVAL_SECONDS`、保留期 `DM_READ_RETENTION_SECONDS`。
-- **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 ERROR、drain 失败 CRITICAL。
+- **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 CRITICAL(数据丢失 + bug 信号)、drain 超时 CRITICAL。

@@ -14,6 +14,11 @@ INBOX_MAX: int = 1024  # GameLoop inbox 上限;满 = GameLoop 卡死(进程级 b
 OUTBOUND_MAX: int = 256  # 每连接 outbound 上限;满 = 慢客户端,丢连接 + Disconnect(不阻塞 GameLoop)
 ERROR_DETAIL_MAX_LEN: int = 200  # 回发 ErrorMessage.detail 的最大字符数(截断 Pydantic 校验错误文本)
 
+# ── delayDB 写回(见 db.md;P8 接 poker.env + bounds)──
+DB_FLUSH_INTERVAL_MS: int = 500  # PersistWriter 落库周期(毫秒)= 同实体多次变更合并窗 = 积分落库最大滞后 / 崩溃窗口
+DB_WRITE_MAX_RETRY: int = 10  # 同批连续落库失败**达**此次数(总尝试数,非额外重试)→ 毒丸:丢批 + CRITICAL(别卡死后续,bug 信号)
+DB_DRAIN_TIMEOUT_MS: int = 5000  # 优雅关闭 drain 上限(毫秒):超时放弃未落写 + CRITICAL(进程要退,接受该窗口)
+
 # ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
 DEV_ROOM: str = "dev"  # 明文 dev 端点预置的单一房名
 DEV_SMALL_BLIND: int = 1  # dev 房小盲(大盲 = 2×)

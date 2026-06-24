@@ -16,7 +16,7 @@ from app.core.enums import UserStatus
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
-from app.shell.persist import WriteBuffer
+from app.shell.persist import NullPersister, PersistWriter, WriteBuffer
 from app.shell.receiver import run_receiver
 from app.shell.timer import Timer
 
@@ -46,20 +46,26 @@ class DevShell:
         self.inbox: "asyncio.Queue[Command]" = asyncio.Queue(maxsize=gameconfig.INBOX_MAX)
         self.conns = ConnectionManager()
         self.persist = WriteBuffer()
+        # dev 无 DB → NullPersister(丢弃 + 日志);PersistWriter 仍周期 swap 清空缓冲、stop 时 drain。
+        # P4 三接真 OrmPersister(to_orm + session)替 NullPersister。
+        self.persistwriter = PersistWriter(self.persist, NullPersister())
         self.timer = Timer(self.inbox)
         self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
         self._tasks: list[asyncio.Task] = []
 
     def start(self) -> None:
-        # 起 GameLoop + Timer(dev:无 PersistWriter,persist 是桩;无加密)。
+        # 起 GameLoop + Timer + PersistWriter(dev 无加密;persister 为 NullPersister)。
         self._tasks = [
             asyncio.create_task(self.gameloop.run(), name="gameloop"),
             asyncio.create_task(self.timer.run(), name="timer"),
+            asyncio.create_task(self.persistwriter.run(), name="persistwriter"),
         ]
 
     async def stop(self) -> None:
-        # 关闭:cancel 协程(dev 桩无 drain;P4/P8 接 PersistWriter 终结 flush)。
+        # 关闭序(db.md drain):先 cancel 生产者(gameloop/timer)+ writer 周期循环 → 不再产新写;
+        # 再 await PersistWriter.drain() 终结 flush。cancel 若落在 writer 的 flush 半途,flush_once 会先回灌
+        # 再 re-raise,故那批写仍由随后的 drain 补落(不丢);drain 在写者 task 收割后单线跑,无并发竞 swap。
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -69,6 +75,7 @@ class DevShell:
                 pass
             except Exception:  # 协程意外死亡(如 inbox 满已是 CRITICAL 态):记下但不阻断关闭(尽力 drain)
                 log.exception("task %s crashed during shutdown", t.get_name())
+        await self.persistwriter.drain()  # 终结 flush 残余缓冲(dev NullPersister:丢弃 + 日志)
 
 
 def create_app() -> FastAPI:
