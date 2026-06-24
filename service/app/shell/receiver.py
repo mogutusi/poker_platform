@@ -82,7 +82,7 @@ async def _build_join(
         row = await load_user_by_nick(sessionmaker, conn.nick)
     except Exception:
         # DB 读失败(连接断/超时等):回发错误 + 保活连接(同解析错误,不让异常冒到外层 drop 连接)。
-        log.exception("join_room DB 读失败 nick=%s", conn.nick)
+        log.exception("join_room DB read failed nick=%s", conn.nick)
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "进房读 DB 失败")))
         return None
     if row is None:

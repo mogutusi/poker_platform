@@ -28,7 +28,7 @@ def _state_key(payload: PersistPayload) -> StateKey | None:
         case HandRecordWrite():
             return None  # 手牌记录是事件写,逐条追加(dedupe_key 幂等,内存不去重)
         case _:
-            log.warning("未知 Persist 载荷 %s,默认归事件写(追加)", type(payload).__name__)
+            log.warning("unknown Persist payload %s, defaulting to event write (append)", type(payload).__name__)
             return None
 
 
@@ -87,7 +87,7 @@ class NullPersister:
         self, dirty: dict[StateKey, PersistPayload], appends: list[PersistPayload]
     ) -> None:
         if dirty or appends:
-            log.debug("NullPersister 丢弃 %d 状态写 + %d 事件写(dev 无 DB)", len(dirty), len(appends))
+            log.debug("NullPersister dropped %d state writes + %d event writes (dev, no DB)", len(dirty), len(appends))
 
 
 class PersistWriter:
@@ -136,16 +136,16 @@ class PersistWriter:
             if self._fail_streak >= self._max_retry:
                 # 毒丸:同批连续失败超阈值 → 丢批 + CRITICAL,别卡死后续(留人工介入);清计数继续下批
                 log.critical(
-                    "delayDB 毒丸:%d 状态写 + %d 事件写连续失败 %d 次,丢弃",
+                    "delayDB poison batch: %d state writes + %d event writes failed %d times in a row, dropped",
                     len(dirty), len(appends), self._fail_streak,
                 )
                 self._fail_streak = 0
             else:
                 self._buf.requeue(dirty, appends)  # 整批回灌,下周期重试
-                log.error("delayDB 落库失败已回灌(streak=%d)", self._fail_streak, exc_info=True)
+                log.error("delayDB flush failed, batch requeued (streak=%d)", self._fail_streak, exc_info=True)
             return True
         self._fail_streak = 0
-        log.debug("delayDB flushed %d 状态写 + %d 事件写", len(dirty), len(appends))
+        log.debug("delayDB flushed %d state writes + %d event writes", len(dirty), len(appends))
         return True
 
     async def drain(self) -> None:
@@ -154,7 +154,7 @@ class PersistWriter:
         deadline = time.monotonic() + self._drain_timeout
         while not self._buf.is_empty():
             if time.monotonic() >= deadline:
-                log.critical("delayDB drain 超时,%d 笔未落写丢弃(进程退出)", len(self._buf))
+                log.critical("delayDB drain timed out, %d unwritten records dropped (process exiting)", len(self._buf))
                 return
             await self.flush_once()
             if not self._buf.is_empty():

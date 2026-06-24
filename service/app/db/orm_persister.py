@@ -41,14 +41,14 @@ class OrmPersister:
                 # 内存权威 + 载入一次 ⇒ 写积分时 user 行必已存在;行不存在则 0 命中、无害(dev 未种子时如此)。
                 await session.execute(update(User).where(User.id == uid).values(points=points))
             case _:
-                log.warning("OrmPersister 未知状态写 %s,跳过", type(payload).__name__)
+                log.warning("OrmPersister unknown state write %s, skipped", type(payload).__name__)
 
     async def _apply_event_write(self, session: AsyncSession, payload: PersistPayload) -> None:
         match payload:
             case HandRecordWrite():
                 await self._insert_hand_record(session, payload)
             case _:
-                log.warning("OrmPersister 未知事件写 %s,跳过", type(payload).__name__)
+                log.warning("OrmPersister unknown event write %s, skipped", type(payload).__name__)
 
     async def _insert_hand_record(self, session: AsyncSession, payload: HandRecordWrite) -> None:
         # 幂等:全进程唯一写者 ⇒ 先查 dedupe_key 在不在、不在才插,无并发竞争(race-free)、跨方言(免 sqlite/pg 的 ON CONFLICT 二分)。

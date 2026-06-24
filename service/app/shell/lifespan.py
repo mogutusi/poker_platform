@@ -21,6 +21,7 @@ from app.db.orm_persister import OrmPersister
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
+from app.shell.logsetup import setup_logging
 from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.receiver import run_receiver
 from app.shell.timer import Timer
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        setup_logging(gameconfig.LOG_LEVEL, gameconfig.LOG_FORMAT, gameconfig.LOG_FILE)  # 启动序:先配日志(connection.md)
         await shell.setup()  # 异步建表 + 种子 + 载入 + 建 world/gameloop(serving 前完成)
         shell.start()
         log.info("dev shell up: room=%s users=%s", gameconfig.DEV_ROOM, gameconfig.DEV_USERS)

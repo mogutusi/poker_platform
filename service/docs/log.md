@@ -90,6 +90,8 @@ class GameConfig(BaseSettings):
 
 业务代码只引用 `gameconfig.LOG_LEVEL` 等,绝不内联字面量。
 
+> **当前状态(0032)**:`LOG_LEVEL`/`LOG_FORMAT`/`LOG_FILE` 已落 [app/gameconfig.py](../app/gameconfig.py),但同 [config.md](config.md):43 所述,暂用**带默认值的 dev 常量**(`INFO`/`console`/空=stderr),`pydantic-settings + poker.env + 无默认` 的目标形态随 **P8 配置收编**整体迁移。`setup_logging(level, fmt, file)` 在 lifespan 启动序首步调用(见 [connection.md](connection.md)「配置日志」)。
+
 ## 注意点
 
 - **日志内容一律英文**:消息文本、字段名、`code` 全用英文(便于检索、跨环境一致)。面向玩家的中文文案是前端按 `code` 映射的事。
