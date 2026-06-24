@@ -148,7 +148,7 @@ else:   commit(world, work);  for ev in events: dispatch(ev)   # ④ 成功:装�
 ## 持久化与一致性
 
 - **统一范式**:凡需落库的数据都走「内存权威 + delayDB」——从 DB 读一次进内存,之后改内存、由 delayDB 异步追平 DB。**全局积分**是当前唯一持久化的内存实体;手牌结束写**手牌记录**。room 状态目前不落库,需要时按同一范式接入。通用机制(写缓冲、覆盖/追加、周期 flush、失败重试、drain)单独成模块,见 [db.md](db.md)。
-- **无并发写者**:PersistWriter 是唯一 DB 写者 ⇒ **不需要行锁 / `with_for_update`**(旧 [services.py](../app/pokertable/services.py) 里的行锁全部删除)。
+- **无并发写者**:PersistWriter 是唯一 DB 写者 ⇒ **不需要行锁 / `with_for_update`**(原型 `services.py` 里散落的行锁已随 0027 原型拆除一并移除)。
 - **买入是纯内存转账**:reduce 在工作副本上校验积分够不够、过了就改内存并产出 `Persist`;DB 不是买入的关卡,**不存在「落库失败需回滚」、无 `BuyInFailed` 命令**。落库失败只由 PersistWriter 重试 + 落 ERROR,内存权威始终自洽。
 - **崩溃语义**:单进程,任何崩溃带走全部内存状态——丢失进行中手牌(已结束的已落库)+ 尚未 flush 的积分变更。因是积分非货币,本规模直接接受;重启从 DB 载入积分初值即可,无需对账。
 

@@ -6,11 +6,11 @@
 
 | 文件 | 谁读 | 装什么 |
 |---|---|---|
-| `service/.env` | [app/config.py](../app/config.py) 的 `Settings`(`load_dotenv`) | `DATABASE_URL`、`JWT_SECRET`、token 过期等**基础设施** |
-| `service/app/poker.env`(P8) | [app/gameconfig.py](../app/gameconfig.py) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**当前 D 阶段**:`app/gameconfig.py` 用带默认值的常量、暂不读 env;P8「配置收编」时补 `poker.env(.example)`。旧 `app/pokertable/gameconfig.py` 是被取代的原型物 |
+| `service/.env`(P8 接) | P8 待建的 `app/config.py` Settings;**当前**仅 [alembic/env.py](../alembic/env.py) 直读 `os.environ` 的 `DATABASE_URL` | `DATABASE_URL`、token 过期等**基础设施**(原型 `app/config.py` 已于 0027 删)|
+| `service/app/poker.env`(P8) | [app/gameconfig.py](../app/gameconfig.py) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**当前 D 阶段**:`app/gameconfig.py` 用带默认值的常量、暂不读 env;P8「配置收编」时补 `poker.env(.example)`。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除)|
 
 - `.env` / `poker.env` **都不进 git**(含密钥);各配一个 `*.example` 提交。
-- **Alembic 的 `DATABASE_URL` 从环境变量读**(0026 起):[alembic/env.py](../alembic/env.py) 取 `os.environ` 的 `DATABASE_URL`、缺省本地 sqlite(`sqlite:///./poker.db`)——**免 `.env` 也能跑迁移**(不再经 `app.config`/`settings`,那会因缺 `.env` 崩)。生产把库 URL 给 alembic 即可:`DATABASE_URL=… alembic upgrade head`。完整用法见 **[db-migrations.md](db-migrations.md)**。
+- **Alembic 的 `DATABASE_URL` 从环境变量读**(0026 起):[alembic/env.py](../alembic/env.py) 取 `os.environ` 的 `DATABASE_URL`、缺省本地 sqlite(`sqlite:///./poker.db`)——**免 `.env` 也能跑迁移**(不依赖任何读 `.env` 的 Settings——那会因缺 `.env` 崩;原型 `app.config` 已于 0027 删)。生产把库 URL 给 alembic 即可:`DATABASE_URL=… alembic upgrade head`。完整用法见 **[db-migrations.md](db-migrations.md)**。
 
 ## Poetry
 
@@ -26,10 +26,10 @@ poetry install                              # 按 pyproject + poetry.lock 装
 poetry add <pkg>
 poetry add --group dev pytest pytest-asyncio   # 开发依赖(测试见 testing.md)
 
-# 跑东西(三选一,工作目录 service/)
-poetry run python -m app.main        # 不激活、直接在 venv 里跑(推荐)
-poetry env activate                   # 或先激活、再裸跑命令
-.venv/bin/python -m app.main          # 或直接点名 venv 解释器(等价)
+# 跑东西(工作目录 service/)。原型入口 app.main 已于 0027 删;当前可跑的是明文 dev shell。
+poetry run uvicorn app.shell.lifespan:app   # 不激活、直接在 venv 里跑(推荐);→ ws://127.0.0.1:8000/dev/ws?nick=alice
+poetry env activate                          # 或先激活、再裸跑命令
+.venv/bin/uvicorn app.shell.lifespan:app     # 或直接点名 venv 可执行(等价)
 ```
 
 - **venv 路径固定在 `service/.venv`**(`virtualenvs.in-project true` 的结果,Python 3.12):解释器是 `service/.venv/bin/python`,`pytest`/`alembic` 等可执行文件都在 `service/.venv/bin/` 下。IDE/编辑器把 Python interpreter 指到 `service/.venv/bin/python` 即可。
@@ -42,8 +42,8 @@ poetry env activate                   # 或先激活、再裸跑命令
 
 ### 这个仓库的 env.py(0026 重定向后)
 
-- **只 `import app.db.models`**(显式),把新架构表注册进 `SQLModel.metadata`(=`target_metadata`)——**不再** `os.walk` 全仓 `*models*`(那会把原型 `app/user`、`app/handrecord` 旧模型也注册进来造表名冲突)。**新表加进 [app/db/models.py](../app/db/models.py)**(不是随便哪个 `*models*.py`)。
-- **`DATABASE_URL` 从 `os.environ` 读**、缺省本地 sqlite(上面说过),不经 `app.config`/`alembic.ini` 占位。
+- **只 `import app.db.models`**(显式),把新架构表注册进 `SQLModel.metadata`(=`target_metadata`)——**不再** `os.walk` 全仓 `*models*`(0026 改;原型 `app/user`/`app/handrecord` 旧模型当时会被一并注册造表名冲突,现已随 0027 拆除)。**新表加进 [app/db/models.py](../app/db/models.py)**(单一事实源)。
+- **`DATABASE_URL` 从 `os.environ` 读**、缺省本地 sqlite(上面说过),不依赖读 `.env` 的 Settings / `alembic.ini` 占位。
 - **真外键**:不再跳过 FK(原型 env 的 `render_item` hack 已删)——表间关系在 DB 层强制(参与者→手牌/用户,见 [db.md](db.md))。
 - **`render_as_batch=True`**:sqlite 也能 ALTER(走 batch 重建);postgres 无害。
 - **`script.py.mako` 硬带 `import sqlmodel`**:autogen 引用 `sqlmodel.sql.sqltypes.AutoString` 等,不带则升级 `NameError`(见 [changes/0026](refactor/changes/0026-p4-db-models-alembic.md))。

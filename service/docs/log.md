@@ -56,7 +56,7 @@
 
 - 记录命令/事件摘要时**不序列化整个 payload**,只记类型 + 非隐私标识(谁、哪个房间、动作类型、下注额——积分额可记)。
 - 想 `log.debug(cmd)` 整条命令前**必须确认它不含底牌/牌堆**。若某命令为重放携带了洗好的牌堆 / seed,该字段同样禁记。
-- 复用 [models.py](../app/pokertable/models.py) 的 `field_serializer` 隐藏逻辑:`model_dump(mode="json")` 出来的已抹掉底牌/牌堆,可作「安全摘要」来源。
+- 出站 wire DTO 的脱敏靠**结构性缺位**([app/wire/server.py](../app/wire/server.py) 的广播/公开消息根本没有 `hole_cards`/`deck` 字段,见 [changes/0017](refactor/changes/0017-wire-first-batch.md) 决策 2),`model_dump(mode="json")` 自然不含隐私,可作「安全摘要」来源。(原型 `pokertable/models.py` 曾用 `field_serializer` 抹除,已随 0027 拆除。)
 
 ## 落地方式:同步直写为默认,`QueueHandler` 为可选兜尾
 

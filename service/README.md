@@ -100,9 +100,13 @@ alembic downgrade head
 
 Working directory: `~/service`
 
+The legacy prototype entrypoint (`app.main`) was removed in refactor 0027.
+The current runnable target is the **plaintext dev shell** (dev-only, no auth/encryption):
+
 ```bash
 poetry env activate
-python -m app.main
+uvicorn app.shell.lifespan:app
+# → ws://127.0.0.1:8000/dev/ws?nick=alice  (preset dev users: alice/bob/carol/dave/eve/frank)
 ```
 
 If this does not work, **open a new terminal** and try again.

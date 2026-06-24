@@ -1,8 +1,8 @@
 # Alembic 环境(重构后:重定向到新架构 app/db/ 模型)。用法见 docs/db-migrations.md。
 #
-# 与原型 env.py 的差异:① 不 import app.config(它读 .env、无则崩)——DATABASE_URL 从 os.environ 读、
-# 缺省本地 sqlite,免 .env 也能跑迁移;② 只 import app.db.models(显式),不再 os.walk 全仓 *models*,
-# 避免把原型模型注册进 SQLModel.metadata 造表名冲突;③ 不跳过外键(新架构要真 FK,见 db.md);④ render_as_batch
+# 与原型 env.py 的差异(原型已于 0027 拆除):① 不依赖任何会读 .env 的 Settings 模块(读 .env 缺则崩)——
+# DATABASE_URL 从 os.environ 读、缺省本地 sqlite,免 .env 也能跑迁移;② 只 import app.db.models(显式,
+# 单一事实源),不 os.walk 全仓 *models*;③ 不跳过外键(新架构要真 FK,见 db.md);④ render_as_batch
 # 让 sqlite 也能 ALTER(postgres 无害)。
 
 import os
@@ -13,7 +13,7 @@ from sqlmodel import SQLModel
 
 from alembic import context
 
-import app.db.models  # noqa: F401  仅此一行注册新架构表到 SQLModel.metadata(不碰原型模型 / 不 import app.config)
+import app.db.models  # noqa: F401  仅此一行注册新架构表到 SQLModel.metadata(单一事实源)
 
 config = context.config
 # 生产设 DATABASE_URL=postgresql+psycopg://…;本地缺省 sqlite,免 .env 也能跑迁移(见 docs/db-migrations.md)。

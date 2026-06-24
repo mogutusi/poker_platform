@@ -4,7 +4,7 @@
 
 core 是**纯同步的游戏规则层**:`reduce(work, cmd) -> (list[Event], Err | None)`。它只认两个外部类型(`Command` 进、`Event`/`Err` 出),不 import 任何 FastAPI / SQLAlchemy / WebSocket 符号,不 `await`、不碰 DB、不读墙钟(不变量 1)。`reduce` 改的是 GameLoop 给的**工作副本**,成功 commit、失败/异常丢弃(见 [storage.md](storage.md))。
 
-本文定义 core 的**域模型、命令全集、reduce 结构、一手牌的状态机**。它描述**目标行为**——现有 [gamelogic.py](../app/pokertable/gamelogic.py) / [services.py](../app/pokertable/services.py) 是要被它取代的(且含若干 bug,如 `pots.values().sum()`、`hand.handstatus`、`do_action` 里循环变量覆盖入参等),不作为事实来源。
+本文定义 core 的**域模型、命令全集、reduce 结构、一手牌的状态机**。它描述**目标行为**——原型 `gamelogic.py`/`services.py`(已于 0027 拆除,存于 git history)曾是它要取代的实现(且含若干 bug,如 `pots.values().sum()`、`hand.handstatus`、`do_action` 里循环变量覆盖入参等),不作为事实来源。
 
 ## 域模型(core 的权威状态)
 

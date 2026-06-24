@@ -17,7 +17,7 @@
 
 ## P0 · 基线(数据类型 + 工作副本 API)
 
-- [x] `core/enums.py`:四套状态枚举 + `USER_STATUS_TRANSITIONS` 合法转移表(从现 [enums.py](../../app/pokertable/enums.py) 迁移) — 0002
+- [x] `core/enums.py`:四套状态枚举 + `USER_STATUS_TRANSITIONS` 合法转移表(从原型 `pokertable/enums.py` 迁移;原型已于 0027 拆除) — 0002
 - [x] `core/domain.py`:`World/Room/Hand/Player/Seat/UserState` dataclass(含 `UserState.uid`、`Hand.epoch/seq/start_time`、`Seat.in_game_points/new_here`、`Room.entry_vote/waive_entry_for`) — 0002(另含 `Hand.last_raise_size`、`Player.has_acted`、`Seat.wait_for_big_blind`、`Room.leaving`、`EntryVote`、`core/cards.py`)
 - [x] `core/commands.py`:Command 全集,统一 `origin: str | None`,**不带 room**(`JoinRoom(room, uid, loaded)` 例外带 room) — 0002
 - [x] `core/events.py`:`Broadcast(room,msg)`/`Personal(nick,msg)`/`Persist(payload)`/`TurnChanged`/`ClearAction` — 0002
@@ -35,7 +35,7 @@
 
 ## W · wire 首批协议(前端解锁,增量第 1 批)— 详见 [changes/0016](changes/0016-replan-wire-first.md)
 
-> 已设计/已落地的消息 + 命令 → Pydantic 单一事实源 + codegen TS。reduce 直接产 wire DTO(core 可 import wire DTO,见 [models.md](../models.md)/[README §3](README.md)),收编 `core/messages.py`;`core/records.py` 的 Persist 载荷不上 wire,保留。治理见 [wire.md](../wire.md),旧 [wsm_schemas.py](../../app/pokertable/wsm_schemas.py) 作参考。
+> 已设计/已落地的消息 + 命令 → Pydantic 单一事实源 + codegen TS。reduce 直接产 wire DTO(core 可 import wire DTO,见 [models.md](../models.md)/[README §3](README.md)),收编 `core/messages.py`;`core/records.py` 的 Persist 载荷不上 wire,保留。治理见 [wire.md](../wire.md);原型 `wsm_schemas.py` 曾作参考,已于 0027 拆除(见 git history)。
 
 - [x] `app/wire/server.py`:`ServerMessage` 可辨识联合(`core/messages.py` 全集升级为 Pydantic:`type` 字面量/扁平/snake_case/core enums):`HandStarted`/`HoleCards`/`HandStatusChanged`/`PlayerActed`/`HandShowDown`/`HandEnded`/`UserStatusChanged`/`UserLeft`/`PlayerBoughtIn` + `ErrorMessage.from_err` — 0017(隐私=结构性缺位,非 field_serializer;见 0017 决策 2)
 - [x] `app/wire/client.py`:`ClientMessage` 可辨识联合 = 已落地命令报文(身份不进报文):`SitDown`/`BuyIn`/`SetUserStatus`/`LeaveRoom`/`StartHand`/`PlayerAction` + `parse`(JSON→`ClientMessage`)+ `to_command(msg,origin,now)`(Receiver 盖 `origin=nick`、shell 盖 `now` 墙钟)— 0017
@@ -70,7 +70,8 @@
 
 ## 硬化 / 子系统(每模块补协议切片)
 
-- [~] P4 delayDB:0024 落地 `WriteBuffer` 双缓冲(状态写按键覆盖 / 事件写追加 / `put` 单入口 `_state_key` 分流 / `swap` / `requeue` 更新者优先;test_persist 12);0025 落地 `PersistWriter`(`Persister` 协议 + `NullPersister`;`flush_once` 先 swap 后 await / 失败回灌 / 毒丸丢批 / `drain` 有界 + 节流;gameconfig DB 旋钮;接进 DevShell start/stop;test_persist_writer 11→13,共 254);0026 落地 `app/db/` SQLModel 模型(`User`(uid/nickname/points)、`HandRecord`(dedupe_key/start/end/pot)、`HandParticipant`((hand_id,uid) 复合主键 + FK)对齐 Write 载荷)+ Alembic 重定向 env.py(只导 app.db、`DATABASE_URL` 读 env、真 FK、`render_as_batch`、模板带 `import sqlmodel`)+ 删 4 原型迁移 + 新基线(sqlite 验 upgrade/downgrade 通)+ **Alembic 用法文档 [db-migrations.md](../db-migrations.md)**;**`to_orm` + 真 `OrmPersister`(async session UPSERT/INSERT + dedupe ON CONFLICT)替 `NullPersister` + async engine + 载入(Receiver 读 DB)待 P4 三之二(需 aiosqlite/Postgres)**
+- [~] P4 delayDB:0024 落地 `WriteBuffer` 双缓冲(状态写按键覆盖 / 事件写追加 / `put` 单入口 `_state_key` 分流 / `swap` / `requeue` 更新者优先;test_persist 12);0025 落地 `PersistWriter`(`Persister` 协议 + `NullPersister`;`flush_once` 先 swap 后 await / 失败回灌 / 毒丸丢批 / `drain` 有界 + 节流;gameconfig DB 旋钮;接进 DevShell start/stop;test_persist_writer 11→13,共 254);0026 落地 `app/db/` SQLModel 模型(`User`(uid/nickname/points)、`HandRecord`(dedupe_key/start/end/pot)、`HandParticipant`((hand_id,uid) 复合主键 + FK)对齐 Write 载荷)+ Alembic 重定向 env.py(只导 app.db、`DATABASE_URL` 读 env、真 FK、`render_as_batch`、模板带 `import sqlmodel`)+ 删 4 原型迁移 + 新基线(sqlite 验 upgrade/downgrade 通)+ **Alembic 用法文档 [db-migrations.md](../db-migrations.md)**;**P4 三之二**:`to_orm` + 真 `OrmPersister`(async session UPSERT/INSERT + dedupe ON CONFLICT)替 `NullPersister` + async engine + 载入(Receiver 读 DB);**0027 原型拆除已解除 `app/db` 与原型同名表的 metadata collision**,只差加一个 async driver(aiosqlite/Postgres)依赖即可落
+- [x] 原型拆除:删原型五包(`pokertable`/`user`/`auth`/`handrecord`/`database`)+ 三入口(`main`/`app_route`/`init`)+ `config.py`(原型期配置,自 review 改判一并删)+ `docs_generator`/`extensibility`(共 27 文件);解除 `app/db` 与原型同名表 metadata collision(P4 三之二前置)+ 兑现「不留死代码」;全量设计文档去链历史化(README §2 表格 + 散链 14 处);基础设施配置(`app/config.py`)由 P8 配置收编新建 — 0027
 - [ ] shell 硬化:背压(inbox/outbound 上限 + 队列满丢连)、顶替/重连 `StateSnapshot`、`tests/shell/`
 - [ ] P7 lobby/REST/messaging:`GET /lobby/rooms`、leaderboard/hands(游标)/profile(改昵称仅大厅)、**房聊 shell 文本防护(非空 + `ROOM_CHAT_MAX_TEXT_LEN`)+ 令牌桶限速**(0021 已把文本校验从 reduce 移此,见 [messaging.md](../messaging.md))、房聊环形缓冲 + `FetchRoomChat` + 私聊 DM 未读收件箱(见 [messaging.md](../messaging.md) + changes/0012)、presence 只读;REST 走 `openapi-typescript`
 - [ ] 日志:GameLoop 边界审计 + 脱敏红线(底牌/密钥不进日志)

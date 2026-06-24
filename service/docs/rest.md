@@ -30,7 +30,7 @@ GET /leaderboard?limit=N  →  [{ rank, nickname, points }]
 GET /hands?room=&user=&limit=&before=  →  [HandRecord]   (分页)
 ```
 
-- 读 DB 的手牌记录(由 delayDB **事件写**追加,见 [db.md](db.md));读 [`app/db/models.py`](../app/db/models.py) 的 `HandRecord`/`HandParticipant` 表(对齐 `HandRecordWrite`/`ParticipantWrite`:`start_time`/`end_time`/`final_pot` + 参与者 `uid`/`initial_points`/`final_points`;迁移见 [db-migrations.md](db-migrations.md))。原型 [handrecord](../app/handrecord/) 模块的查询代码可作改写起点,但事实源是 `app/db/`。
+- 读 DB 的手牌记录(由 delayDB **事件写**追加,见 [db.md](db.md));读 [`app/db/models.py`](../app/db/models.py) 的 `HandRecord`/`HandParticipant` 表(对齐 `HandRecordWrite`/`ParticipantWrite`:`start_time`/`end_time`/`final_pot` + 参与者 `uid`/`initial_points`/`final_points`;迁移见 [db-migrations.md](db-migrations.md))。事实源是 `app/db/`;原型 handrecord 查询代码已于 0027 拆除(历史实现见 git history,可作改写参考)。
 - **隐私**:记录只存**结果**,`hole_cards`/`deck` **从不落库**(见 [core.md](core.md) 不变量 3 / [log.md](log.md))——所以历史查询能看输赢、看不到底牌。摊牌时的底牌只在当时的 `HandShowDown` 事件里露过,不进历史。
 - 分页用 `before`(游标,按 `hand.seq` 或 `end_time`),不用 OFFSET 翻大表。
 

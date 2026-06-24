@@ -4,7 +4,7 @@
 
 身份认证 + 在**无 TLS(纯 ws,不是 wss)**的前提下保护传输。要堵两个现存洞:
 
-1. **ws 端点零鉴权**:现有 [routes.py](../app/pokertable/routes.py) 的 `/pokertable/room?user_nickname=Y` 把昵称当**明文 query 参数**直收——任何人可冒充任何人。
+1. **ws 端点零鉴权**:原型 `pokertable/routes.py`(已于 0027 拆除)的 `/pokertable/room?user_nickname=Y` 把昵称当**明文 query 参数**直收——任何人可冒充任何人。本篇国密信道即为根治此洞。
 2. **全程明文**:没有 wss,登录的账号密码、游戏消息在网络上裸奔,可被嗅探。
 
 对策:**应用层用国密三件套自建一条安全信道**(SM2 不用;用手输的共享密钥引导)——登录用对称加密把账号密码护住、换回会话 token;之后每条 ws 消息用 token 派生的密钥 **SM4 加密 + HMAC-SM3 完整性 + 单调序号防重放**。

@@ -40,7 +40,7 @@ class Timer:
 
 > 这把 [timer.md](timer.md) 的 `ACTION_TIMEOUT` / `LIVENESS_TIMEOUT` / `TICK`、[db.md](db.md) 的 `DB_FLUSH_*`、[log.md](log.md) 的 `LOG_*` 全部收编为配置项。
 
-> **当前状态(D 阶段,见 [changes/0018](refactor/changes/0018-d-dev-shell.md)/[0019](refactor/changes/0019-doc-sync-followup.md))**:[app/gameconfig.py](../app/gameconfig.py) 已建,但**暂用带默认值的具名常量**(import 不依赖 env,dev 脚手架友好),尚未做成上面的 `pydantic-settings + poker.env + 无默认 + Field 边界`。本节描述的是 **P8「配置收编」的目标形态**;届时把这些常量改为 env 驱动、去掉代码默认、补 `poker.env(.example)`。它满足本规范的「具名 / 集中 / 不散落字面量」一半,缺的是「env 单一事实源 + 无默认」那一半。旧 [app/pokertable/gameconfig.py](../app/pokertable/gameconfig.py) 是被取代的原型物(绑不存在的 `poker.env`、import 即崩),勿用。
+> **当前状态(D 阶段,见 [changes/0018](refactor/changes/0018-d-dev-shell.md)/[0019](refactor/changes/0019-doc-sync-followup.md))**:[app/gameconfig.py](../app/gameconfig.py) 已建,但**暂用带默认值的具名常量**(import 不依赖 env,dev 脚手架友好),尚未做成上面的 `pydantic-settings + poker.env + 无默认 + Field 边界`。本节描述的是 **P8「配置收编」的目标形态**;届时把这些常量改为 env 驱动、去掉代码默认、补 `poker.env(.example)`。它满足本规范的「具名 / 集中 / 不散落字面量」一半,缺的是「env 单一事实源 + 无默认」那一半。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。)
 
 ## 新增一个可调参数 = 改三处,只有一处是「值」
 

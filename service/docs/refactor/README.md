@@ -22,27 +22,29 @@
 
 适用规模锁定:**单进程、内网、在线 ≤20、房间极少、筹码是积分非货币**。所有「最终一致 / 崩溃丢进行中手牌 / 全局串行」的取舍都基于此。
 
-## 2. 现状代码结构(要被取代的)
+## 2. 历史:被取代的原型代码(已于 [0027](changes/0027-prototype-teardown.md) 拆除)
 
-代码在 [service/app/](../../app/)。原型特征:全局单例 `game_room`、IO 里直接改内存状态、`with_for_update` 行锁散落、ws 端点用 `?user_nickname=` 明文 query 当身份。
+> 原型五包(`app/pokertable`/`app/user`/`app/auth`/`app/handrecord`/`app/database`)+ 三入口(`app/main.py`/`app/app_route.py`/`app/init.py`)**已删除**,代码存于 git history(见 [changes/0027](changes/0027-prototype-teardown.md))。下表是其**历史问题清单**,留作 reduce/shell 设计的 bug 备忘——这些是新架构要根治的反例,**绝不作为事实来源**。文件名不再热链(已不存在)。
 
-| 模块 | 文件 | 现状职责 | 主要问题 |
+原型特征:全局单例 `game_room`、IO 里直接改内存状态、`with_for_update` 行锁散落、ws 端点用 `?user_nickname=` 明文 query 当身份、单房硬编码 `room1`。
+
+| 原模块(已删) | 历史职责 | 历史问题 | 已被谁取代 |
 |---|---|---|---|
-| 入口 | [main.py](../../app/main.py) / [app_route.py](../../app/app_route.py) / [init.py](../../app/init.py) | FastAPI 启动、路由汇总、硬编码初始化 9 个用户 | `init.py` 导入时 `asyncio.run`;无 lifespan 编排 |
-| DB | [database/core.py](../../app/database/core.py) | async engine / session / `DBsession` 依赖 | 注释掉的死代码 |
-| 用户 | [user/](../../app/user/) | 登录(SM3 裸哈希)、改密、改昵称、排行 | 密码无盐单轮;`points` 直接读写 |
-| 鉴权 | [auth/](../../app/auth/) | JWT access/refresh、refresh 用行锁 + 内存池 | 有 `services.py.bak` 死代码;ws 无鉴权 |
-| 牌桌 | [pokertable/models.py](../../app/pokertable/models.py) | `Card/Player/Hand/Room/Seat` (Pydantic) | 域模型与 wire/DB 未分离 |
-| 牌桌 | [pokertable/enums.py](../../app/pokertable/enums.py) | 四套状态枚举 + 转移规则 | 基本可复用 |
-| 牌桌 | [pokertable/gamelogic.py](../../app/pokertable/gamelogic.py) | 发牌/轮转/动作/边池(treys) | `get_blind` 未定义即导入;循环变量覆盖入参 |
-| 牌桌 | [pokertable/services.py](../../app/pokertable/services.py) | 业务流程编排(async generator) | `only_room_name` 硬编码 room1;`pots.values().sum()`、`hand.next_player_position`、`turn_card=community_cards`、`list().extend()` 等多个 runtime bug;行锁不一致 |
-| 牌桌 | [pokertable/websocket.py](../../app/pokertable/websocket.py) | `GameRoom` 单例、连接/断线/延迟清理、广播 | IO 直接改状态;`card_message` 可能 NameError;`disconnect_tasks` 未初始化 KeyError;绕过注入开新 session |
-| 牌桌 | [pokertable/wsm_schemas.py](../../app/pokertable/wsm_schemas.py) | ws 消息 Pydantic + parse/serialize | 将成为 wire 模块的起点 |
-| 牌桌 | [pokertable/routes.py](../../app/pokertable/routes.py) | ws 端点 `/room?room_id=&user_nickname=` | **零鉴权,可冒充任意身份** |
-| 记录 | [handrecord/](../../app/handrecord/) | 手牌记录 SQLModel + 分页查询 | 查询访问 `participant.player.nickname` 但 select 返回元组(bug);要对齐 `HandRecordWrite` |
-| 前端 | [frontend/src/](../../../frontend/src/) | Next.js;`types/poker.ts` 手写类型 | `chips`/`phase` 已与后端 enum 漂移,反例 |
+| `main.py` / `app_route.py` / `init.py` | FastAPI 启动、路由汇总、硬编码初始化 9 个用户 | `init.py` 导入时 `asyncio.run`;无 lifespan 编排 | `shell/lifespan.py`(dev shell;P8 收尾) |
+| `database/core.py` | async engine / session / `DBsession` 依赖 | 注释掉的死代码 | shell PersistWriter 自持 session(P4 三之二)|
+| `user/` | 登录(SM3 裸哈希)、改密、改昵称、排行 | 密码无盐单轮;`points` 直接读写 | P5 国密信道 + `db/` + P7 REST |
+| `auth/` | JWT access/refresh、refresh 用行锁 + 内存池 | 有 `services.py.bak` 死代码;ws 无鉴权 | P5 国密安全信道 |
+| `pokertable/models.py` | `Card/Player/Hand/Room/Seat` (Pydantic) | 域模型与 wire/DB 未分离 | `core/domain.py` + `wire/` + `db/`(三套表示分离)|
+| `pokertable/enums.py` | 四套状态枚举 + 转移规则 | 基本可复用 | 已迁 `core/enums.py`(0002)|
+| `pokertable/gamelogic.py` | 发牌/轮转/动作/边池(treys) | `get_blind` 未定义即导入;循环变量覆盖入参 | `core/rules/`(blinds/betting/sidepot)+ `core/deck.py` |
+| `pokertable/services.py` | 业务流程编排(async generator) | `only_room_name` 硬编码 room1;`pots.values().sum()`、`hand.next_player_position`、`turn_card=community_cards`、`list().extend()` 等多个 runtime bug;行锁不一致 | `core/reduce.py`(单写者 + 工作副本)|
+| `pokertable/websocket.py` | `GameRoom` 单例、连接/断线/延迟清理、广播 | IO 直接改状态;`card_message` 可能 NameError;`disconnect_tasks` 未初始化 KeyError;绕过注入开新 session | `shell/`(connection/receiver/sender/dispatch/timer)|
+| `pokertable/wsm_schemas.py` | ws 消息 Pydantic + parse/serialize | (原计划作 wire 起点)| 已被 `wire/server.py`+`client.py` 取代(0017)|
+| `pokertable/routes.py` | ws 端点 `/room?room_id=&user_nickname=` | **零鉴权,可冒充任意身份** | `shell/receiver.py`(dev 明文)→ P5 国密握手 |
+| `handrecord/` | 手牌记录 SQLModel + 分页查询 | 查询访问 `participant.player.nickname` 但 select 返回元组(bug)| `db/models.py`(0026)+ P7 REST 查询 |
+| [frontend/src/](../../../frontend/src/) | Next.js;`types/poker.ts` 手写类型 | `chips`/`phase` 已与后端 enum 漂移,反例 | `wire.gen.ts` codegen(0017;前端消费待集成)|
 
-> 详细行号级问题清单见本次重构起点的代码审计(可按需再跑)。重构期间**现有 `pokertable/` 视为参考与 bug 备忘,不作为事实来源**(见 [core.md](../core.md))。
+> 行号级历史问题详见 git history 中的原型代码与本次重构起点的代码审计。重构期间这些**仅作 bug 备忘,不作为事实来源**(见 [core.md](../core.md))。
 
 ## 3. 目标结构(提案,可改)
 

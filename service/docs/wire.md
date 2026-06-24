@@ -20,12 +20,12 @@
 - **ws 消息**(`ClientMessage`/`ServerMessage`):Pydantic 模型 → TS 可辨识联合。生成器是**自包含 Python 脚本** [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py)(内省 `model_fields` 直接吐扁平 TS),**不依赖 node**——本机无 node,`pydantic2ts` 不可运行,故自实现(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。
 - **REST**(查手牌/余额):FastAPI 出 OpenAPI →(`openapi-typescript`)→ TS(待 P7)。
 - **生成步骤进 CI / pre-commit**:改了 .py 不重新生成 → CI 红。当前由 [tests/wire/test_codegen_uptodate.py](../tests/wire/test_codegen_uptodate.py) 在 `pytest` 里逐字节比对兜住(无 node 也能守门);`gen_wire_ts.py --check` 同义供 pre-commit。前端改动只能改 .py 再生成,不碰产物。
-- **.py 落点**:wire 模型集中在 [app/wire/](../app/wire/)(`server.py`/`client.py`,取代旧 [wsm_schemas.py](../app/pokertable/wsm_schemas.py)),与域模型(core 的 `World`/`Hand`/…)**物理分开**——域模型是 core 权威状态,wire DTO 是对外报文,两者独立演进(见「wire DTO ≠ 域模型」)。
+- **.py 落点**:wire 模型集中在 [app/wire/](../app/wire/)(`server.py`/`client.py`,已取代原型 `pokertable/wsm_schemas.py`——后者于 0027 拆除),与域模型(core 的 `World`/`Hand`/…)**物理分开**——域模型是 core 权威状态,wire DTO 是对外报文,两者独立演进(见「wire DTO ≠ 域模型」)。
 
 ## 每条消息必须遵守的形状(约定,非清单)
 
 1. **可辨识联合(discriminated union)**:每条消息带一个 **`type` 字面量**(如 `"player_action"`),Pydantic 用它做 `Discriminator`,TS 1:1 得到 discriminated union。分两个顶层联合:`ClientMessage`(进)/`ServerMessage`(出)。
-2. **决策(可改)· 扁平信封**:字段**平铺**在消息上(`{type, seat_number}`),不套第二层 `{type, payload:{…}}`。理由:Pydantic/TS 的可辨识联合对扁平结构最顺,少一层解包;现有 [wsm_schemas.py](../app/pokertable/wsm_schemas.py) 已是扁平,沿用。
+2. **决策(可改)· 扁平信封**:字段**平铺**在消息上(`{type, seat_number}`),不套第二层 `{type, payload:{…}}`。理由:Pydantic/TS 的可辨识联合对扁平结构最顺,少一层解包;原型 `wsm_schemas.py`(已于 0027 拆除)亦是扁平,沿用。
 3. **决策(可改)· `snake_case` 字段**:wire 上一律 snake_case(与 Python/JSON 一致,前端按生成类型用),不为前端改 camelCase——生成器要转随生成器配置,不手改产物。
 4. **强类型,无裸结构**:每条消息是一个 Pydantic 模型,字段带类型;枚举(`UserStatus`/`HandStatus`/…)直接用后端 enum,前端拿到同名联合,杜绝 magic string。
 5. **决策(可改)· 身份不进报文**:`ClientMessage` **不带发送者身份**——身份是**连接**(握手时绑定的会话 nick,见 [auth.md](auth.md)),Receiver 收帧后盖 `origin=nick` 进 `Command`(目标房由 `world.users[origin].room` 推定,见 [lobby.md](lobby.md))。报文只装**动作参数**(座位号、金额、动作类型)。若出于纵深防御在加密封套内带了 `id`,服务器**只校验它等于会话身份**,绝不拿它当身份来源。
