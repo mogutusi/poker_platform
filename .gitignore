@@ -5,6 +5,11 @@
 __pycache__/
 *.pyc
 
+# 本地 sqlite(跑 alembic 迁移/dev 生成,不入库;生产用 Postgres,见 docs/db-migrations.md)
+*.db
+*.sqlite
+*.sqlite3
+
 .vscode/
 .idea/
 

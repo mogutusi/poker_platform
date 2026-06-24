@@ -49,5 +49,5 @@
 - **出站载荷已落 `app/wire/`(0017)**:reduce 投影**直接构造** [app/wire/server.py](../app/wire/server.py) 的 Pydantic 可辨识联合 DTO 作 `Broadcast`/`Personal` 的 `msg`(core 可 import wire DTO,见上)。临时的 `core/messages.py`(0010 起的 frozen dataclass 占位)已被取代删除;[events.py](../app/core/events.py) 的 `Broadcast.msg`/`Personal.msg` 改引 `app.wire.server.ServerMessage`。隐私由结构保证(广播 DTO 无 `hole_cards`/`deck` 字段)。投影点集中在 reduce,替换面可控。
 - **Persist 事件写载荷仍在 `core/records.py`**(`HandRecordWrite`/`ParticipantWrite`/`PointsWrite`,挂 [events.py](../app/core/events.py) 的 `PersistPayload`)——**不上 wire**,P4 对齐 ORM(见 [db.md](db.md)「Persist 接口」)。与「出站消息」分文件;0011 新增前两者、0014 补 `PointsWrite`(见 [changes/0011](refactor/changes/0011-p1-player-action-showdown.md)/[0014](refactor/changes/0014-p1-inhand-lifecycle.md)/[0017](refactor/changes/0017-wire-first-batch.md))。
 - 具体 DTO / DB 字段在 .py(见 [wire.md](wire.md) / [db.md](db.md)),随实现定。
-- 现有 [handrecord](../app/handrecord/) 的 SQLModel 要对齐 `HandRecordWrite`(见 [rest.md](rest.md))。
+- DB 模型已落 [`app/db/models.py`](../app/db/models.py)(`HandRecord`/`HandParticipant` 对齐 `HandRecordWrite`/`ParticipantWrite`、`User` 对齐 `PointsWrite`;迁移用法见 [db-migrations.md](db-migrations.md))——0026 落地;原型 [handrecord](../app/handrecord/) 是被取代物,待拆除。
 - 域模型与 wire DTO 各自的 .py 模块划分(命名/目录)随实现定。

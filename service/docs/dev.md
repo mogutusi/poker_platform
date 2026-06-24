@@ -10,7 +10,7 @@
 | `service/app/poker.env`(P8) | [app/gameconfig.py](../app/gameconfig.py) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**当前 D 阶段**:`app/gameconfig.py` 用带默认值的常量、暂不读 env;P8「配置收编」时补 `poker.env(.example)`。旧 `app/pokertable/gameconfig.py` 是被取代的原型物 |
 
 - `.env` / `poker.env` **都不进 git**(含密钥);各配一个 `*.example` 提交。
-- **Alembic 也读 `.env` 的 `DATABASE_URL`**:[alembic/env.py](../alembic/env.py) 用 `settings.DATABASE_URL` 覆盖 `alembic.ini` 里的占位值(`sqlalchemy.url = inenvpy` 是假值,被代码覆盖)。所以迁移连的库 = 应用连的库,统一在 `.env`。
+- **Alembic 的 `DATABASE_URL` 从环境变量读**(0026 起):[alembic/env.py](../alembic/env.py) 取 `os.environ` 的 `DATABASE_URL`、缺省本地 sqlite(`sqlite:///./poker.db`)——**免 `.env` 也能跑迁移**(不再经 `app.config`/`settings`,那会因缺 `.env` 崩)。生产把库 URL 给 alembic 即可:`DATABASE_URL=… alembic upgrade head`。完整用法见 **[db-migrations.md](db-migrations.md)**。
 
 ## Poetry
 
@@ -38,46 +38,26 @@ poetry env activate                   # 或先激活、再裸跑命令
 
 ## Alembic
 
-### 这个仓库的 env.py 做了三件特殊事(必须知道)
+> **完整用法(命令、改模型→出迁移、铁律)见 [db-migrations.md](db-migrations.md)。** 这里只记本仓 `env.py` 的接线要点与坑。
 
-1. **自动导入所有 `*models*.py`**:`env.py` 递归 `os.walk(app/)`,import 每个文件名含 `models` 的模块,从而把它们的 SQLModel 表注册进 `SQLModel.metadata`(=`target_metadata`)。
-   > **坑:新建一张表,模型必须放在文件名带 `models` 的文件里**(如 `app/xxx/models.py`),否则 autogenerate **看不到它**、不会生成迁移。
-2. **URL 从 `settings.DATABASE_URL` 取**(上面说过),不是 `alembic.ini`。
-3. **跳过外键约束**:`render_item` 对 `foreign_key` 返回 `None` ⇒ autogen **不输出 FK 约束**。即表间关系**不在 DB 层强制**(应用层自己保证)。要 DB 级 FK 就得改这个 hook;现状是有意为之。
+### 这个仓库的 env.py(0026 重定向后)
 
-> 同步 vs 异步:应用用 `create_async_engine`(psycopg3 异步),Alembic 用同步 `engine_from_config`。同一个 `postgresql+psycopg://...` URL **psycopg3 既支持同步也支持异步**,所以迁移不用另配同步驱动。
+- **只 `import app.db.models`**(显式),把新架构表注册进 `SQLModel.metadata`(=`target_metadata`)——**不再** `os.walk` 全仓 `*models*`(那会把原型 `app/user`、`app/handrecord` 旧模型也注册进来造表名冲突)。**新表加进 [app/db/models.py](../app/db/models.py)**(不是随便哪个 `*models*.py`)。
+- **`DATABASE_URL` 从 `os.environ` 读**、缺省本地 sqlite(上面说过),不经 `app.config`/`alembic.ini` 占位。
+- **真外键**:不再跳过 FK(原型 env 的 `render_item` hack 已删)——表间关系在 DB 层强制(参与者→手牌/用户,见 [db.md](db.md))。
+- **`render_as_batch=True`**:sqlite 也能 ALTER(走 batch 重建);postgres 无害。
+- **`script.py.mako` 硬带 `import sqlmodel`**:autogen 引用 `sqlmodel.sql.sqltypes.AutoString` 等,不带则升级 `NameError`(见 [changes/0026](refactor/changes/0026-p4-db-models-alembic.md))。
 
-### 日常流程
+> 同步 vs 异步:应用(运行时落库,P4 三之二)用 `create_async_engine`(psycopg3 异步);Alembic 用同步 `engine_from_config`。同一个 `postgresql+psycopg://...` URL **psycopg3 既支持同步也支持异步**,迁移不用另配同步驱动。本地验证可用同步 sqlite(`sqlite:///`)。
 
-```bash
-# 1. 改/加 SQLModel 模型(放在 *models*.py 里)
-# 2. 生成迁移(对比模型与库,产出 diff)
-poetry run alembic revision --autogenerate -m "0.1.x"
-# 3. 【必做】人工 review 生成的 alembic/versions/<hash>_0_1_x.py
-#    autogen 不完美:FK 被跳过、枚举/类型/server_default、改列名会被当成删+加,都要核对
-# 4. 应用到最新
-poetry run alembic upgrade head
-```
+### 迁移历史(0026 重置)
 
-回滚 / 查看:
-
-```bash
-poetry run alembic downgrade -1          # 回退一步(README 里的 "downgrade head" 是无效写法)
-poetry run alembic downgrade <revision>  # 回到指定版本
-poetry run alembic current               # 当前库在哪个版本
-poetry run alembic history               # 迁移历史
-```
-
-### 版本命名约定
-
-现有迁移文件名是 `<hash>_0_1_X.py`(slug = `0_1_x`),即用 `-m "0.1.x"` 给每次迁移一个 `0.1.x` 语义版本,**逐次递增**(现状到 `0.1.3`)。新迁移沿用,别用随口 message。
+原型 4 支迁移(`0_1_0`..`0_1_3`,建原型 schema)已删;新架构从一支**基线**(`down_revision=None`,建 `user`/`handrecord`/`handparticipant`)重新起历史。之后改模型 → autogenerate 增量出新版本(`-m "简述本次结构改动"`,如 `add user salt rounds`)。
 
 ### 重构会涉及的迁移(预告)
 
-- **密码哈希改 `salt$rounds$digest`**(见 [auth.md](auth.md)):需要一次迁移 + 数据迁移脚本。
-- **`K_user` 双钥 + 版本/宽限字段**(见 [auth.md](auth.md) 轮换)。
-- **手牌记录对齐 `HandRecordWrite`**(见 [db.md](db.md) / [rest.md](rest.md))。
-- 新增表都记得放 `*models*.py`,否则 autogen 漏。
+- **密码哈希 `salt$rounds$digest` + `K_user` 双钥/版本**(见 [auth.md](auth.md)):P5 给 `app/db/models.py` 的 `User` 加列 → 一支新迁移(+ 数据迁移脚本)。
+- **运行时落库(P4 三之二)**:`OrmPersister` + `to_orm` 把 Write 载荷映射到 `app/db/` 表(见 [db.md](db.md) / [db-migrations.md](db-migrations.md))。
 
 ## Git 使用
 
@@ -141,8 +121,8 @@ git push                         # 默认:推到 develop(本地 develop 已跟�
 
 ## 约定(必须守住)
 
-1. **新表/新列改完模型 → autogenerate → 人工 review → upgrade**;迁移文件和 `poetry.lock` 都进 git。
-2. **模型放 `*models*.py`**,否则 Alembic 看不见。
+1. **新表/新列改完模型 → autogenerate → 人工 review → upgrade**;迁移文件和 `poetry.lock` 都进 git(详见 [db-migrations.md](db-migrations.md))。
+2. **新架构表加进 [app/db/models.py](../app/db/models.py)**(env.py 只导它);原型 `*models*.py` 不再被 Alembic 追踪。
 3. **`.env`/`poker.env` 不进 git**;改配置项时连 `*.example` 一起更新(同 [config.md](config.md))。
 4. 命令一律在 venv 内(`poetry run` / 激活)。
 5. **提交信息全英文**,引用 `changes/NNNN`;秘密绝不进 git。

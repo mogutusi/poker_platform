@@ -4,7 +4,7 @@
 
 **delayDB 是「内存权威 → DB」的滞后落库写通道。** `reduce` 改的是内存(经工作副本 commit),改动以 `Persist` 事件交给本通道,由 **PersistWriter**(全进程唯一 DB 写者)**周期批量**落库,异步追平 DB。core 不碰 DB,只产出 `Persist`;一切落库都在 shell。
 
-> 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;前置概念在那里。
+> 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;**表结构(`app/db/` 模型)与 Alembic 迁移用法**见 **[db-migrations.md](db-migrations.md)**;前置概念在那里。
 > 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` + 状态写 `DMReadCursorWrite`,见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
 
 ## 两类写(接入新实体先归类)

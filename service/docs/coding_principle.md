@@ -9,7 +9,7 @@
 3. [storage.md](storage.md) —— 内存权威 + 工作副本回滚 + delayDB(状态怎么活、怎么回滚、怎么落库)
 4. [core.md](core.md) —— 游戏状态机:域模型、命令全集、一手牌的 reduce;细则见 [rules.md](rules.md)(盲注/下注轮关闭/边池 + 测试)
 5. 按你要改的模块再读:[connection.md](connection.md)(连接管理与 shell 装配) · [lobby.md](lobby.md)(大厅与房间生命周期) · [messaging.md](messaging.md)(房聊与私信) · [presence.md](presence.md)(在线状态) · [rest.md](rest.md)(排行榜/历史/资料) · [wire.md](wire.md)(协议契约) · [models.md](models.md)(域/wire/DB 三套表示) · [timer.md](timer.md) · [error.md](error.md) · [config.md](config.md) · [log.md](log.md) · [user.md](user.md) · [db.md](db.md) · [auth.md](auth.md)
-6. 工程:[dev.md](dev.md)(Poetry/Alembic/环境) · [testing.md](testing.md)(测试策略) · [review.md](review.md)(提交前复审 —— push 前必走)
+6. 工程:[dev.md](dev.md)(Poetry/Alembic/环境) · [db-migrations.md](db-migrations.md)(Alembic 迁移用法) · [testing.md](testing.md)(测试策略) · [review.md](review.md)(提交前复审 —— push 前必走)
 
 ## 核心模型(一句话)
 

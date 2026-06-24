@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+import sqlmodel  # SQLModel 列类型(如 AutoString)在自动生成迁移里被引用;须随模板带入,否则升级时 NameError
 ${imports if imports else ""}
 
 # revision identifiers, used by Alembic.
