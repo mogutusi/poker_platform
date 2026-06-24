@@ -25,6 +25,7 @@ class LeaveRoom(Command):
 @dataclass(frozen=True, slots=True)
 class SitDown(Command):
     seat: int  # 要入座的座位号
+    wait_for_big_blind: bool = False  # 入局方式:True=等大盲免费、False=付盲即玩(默认,见 rules.md ①)
 
 
 @dataclass(frozen=True, slots=True)

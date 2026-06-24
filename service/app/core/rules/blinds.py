@@ -26,6 +26,20 @@ def seat_order(button: int, eligible: set[int]) -> list[int]:
     return seats[i + 1:] + seats[: i + 1]
 
 
+def sweep_entrant(button: int, core_dealt: set[int], waiters: set[int]) -> int | None:
+    # 「等大盲免费入局」时机(rules.md ① 入局与防躲盲 / changes/0023):某 waiter 当且仅当本手会成为
+    # **大盲**(seat_order[1])才免费入局——他下的那个结构大盲即入局费,不额外 post。返回入局者座位或 None。
+    # 前置:core_dealt 非空且 button ∈ core_dealt(调用方 _start_hand 已守:空 core 前置返 Err,不进此函数)。
+    # 解循环依赖:庄位由调用方在 core_dealt(非等大盲发牌集)上定 → waiter 永不持庄/小盲,只可能当大盲。
+    # 单看每个 waiter:把它加进 core_dealt 后是否正好是大盲;多个候选都成立时(各自单看),真正入局的唯一
+    # 大盲 = core_dealt ∪ 全候选 里的 order[1](最靠小盲那个),其余候选下手随庄推进再轮到(不饿死、不瞬移)。
+    qualifiers = {w for w in waiters if seat_order(button, core_dealt | {w})[1] == w}
+    if not qualifiers:
+        return None
+    entrant = seat_order(button, core_dealt | qualifiers)[1]
+    return entrant if entrant in qualifiers else None  # 防御:并集大盲必落在某候选上,否则不入局
+
+
 def post_blinds(hand: Hand, small_blind: int) -> None:
     # players[0] 投小盲、players[1] 投大盲;下盲只进 bet_amount(本街),街结束才并入 contributed(见 rules.md ③)。
     # 不置 has_acted:SB/BB 还没自愿行动,尤其 BB 保留 preflop 选择权(见 rules.md ②)。

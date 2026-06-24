@@ -5,7 +5,8 @@
 置 PLAYING + 定行动者 + 事件投影 + 守恒/隐私。SB=1、BB=2。
 
 固定牌堆 DECK 注入,玩家 j 得 (DECK[j], DECK[N+j])(轮转、不烧牌)。
-等大盲「再入局时机」(①.7-①.10)与免盲投票(①.12-①.15)留 0011,这里只测 0010 行为。
+等大盲「再入局时机」(①.7-①.10)穷举见 test_wait_for_big_blind(0023);免盲投票(①.12-①.15)见
+test_free_entry_vote(0020)。本篇覆盖开局主路径 + 等大盲者「本手非大盲位 → 不发牌」这一侧。
 """
 
 from app.core.enums import HandStatus, PlayerStatus, RoomStatus, UserStatus
@@ -165,7 +166,7 @@ def test_waive_entry_snapshot_honored():
     assert _room(world).waive_entry_for == set()  # 快照已消费
 
 
-# ── 等大盲(0010 行为):new_here 且选等大盲 → 本手不发牌(再入局时机留 0011)──
+# ── 等大盲:本手非大盲位 → 不发牌(button=0 → 推进到 1,座2 会是小盲位;入局时机穷举见 test_wait_for_big_blind)──
 def test_wait_for_big_blind_not_dealt():
     world = make_table(
         {
@@ -173,12 +174,12 @@ def test_wait_for_big_blind_not_dealt():
             1: seat("B", 100, new_here=False),
             2: seat("C", 100, new_here=True, wait_for_big_blind=True),  # 选等大盲
         },
-        button=0,
+        button=0,  # → 推进到 1:seat_order(1,{0,1,2})=[2,0,1],座2=小盲位、非大盲 → 不入局
     )
     world, events, err = _start(world, "A", 0)
     assert err is None
     h = _hand(world)
-    assert all(p.seat_position != 2 for p in h.players)  # 本手不发牌
+    assert all(p.seat_position != 2 for p in h.players)  # 本手不发牌(未被 BB 扫到)
     assert _room(world).users_in_room["C"] is UserStatus.READY_TO_PLAY  # 仍 ready,等下手
     assert _room(world).seats[2].new_here is True and _room(world).seats[2].points == 100  # 未锁筹
 

@@ -42,7 +42,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 |---|---|---|---|
 | `JoinRoom(room, uid, loaded)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;校验房间存在(`NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(0022);client 报文 + Receiver 读 DB 随真 DB 集成 |
 | `LeaveRoom()` | nick | wire | 退分离桌,回大厅;驱逐出 `world.users` |
-| `SitDown(seat)` | nick | wire | 观战→入座 |
+| `SitDown(seat, wait_for_big_blind)` | nick | wire | 观战→入座;`wait_for_big_blind` 声明入局方式(等大盲免费 / 默认付盲即玩,见 [rules.md](rules.md) ①) |
 | `BuyIn(seat, amount)` | nick | wire | 全局积分→座位筹码 |
 | `SetUserStatus(status, seat)` | nick | wire | ready / sit-out / 起身等 UserStatus 转移 |
 | `SetSmallBlind(amount)` / `SetBuyIn(amount)` | nick | wire | 0 号位配置房间参数 |
@@ -86,12 +86,12 @@ def reduce(work, cmd):
 
 校验:房间 `PENDING_START`、发起人已 `READY_TO_PLAY`、就座者中 `READY_TO_PLAY` ≥ 2、无在途 `Hand`。然后:
 
-1. **定庄**:`button_position` 推进到下一个 `READY_TO_PLAY` 座位。
+1. **定庄**:`button_position` 推进到下一个**发牌座位**(`READY_TO_PLAY` 的已入局/付盲/bootstrap/免盲座位;选「等大盲」者不持庄,精确集合见 [rules.md](rules.md) ①)。
 2. **排座**:把就座的 ready 玩家按「庄之后→庄」顺序排成 `players`,使 `players[0]=小盲`、`players[1]=大盲`(两人局特例:庄=小盲)。
 3. **建 Hand**:`hand_seq += 1`;`hand = Hand(status=PRE_FLOP, players, last_bet=2*small_blind, contributed={}, epoch=0, seq=room.hand_seq, start_time=cmd.started_at)`(`start_time` 是 shell 带入的墙钟值,core 不读时钟)。把每个 `Seat.points` 锁进 `Player.points`、并存 `Seat.in_game_points` 快照,`Seat.points=0`。
 4. **下盲**:小盲投 `small_blind`、大盲投 `2*small_blind`(新玩家入局「付盲即玩 / 等大盲」见下);更新各自 `bet_amount`(本街投入;街结束才并入 `contributed`,见 [rules.md](rules.md) ②/③);归零筹码者置 `ALLIN`。
 5. **发牌**:洗牌(`random.SystemRandom`,不变量 1 允许;或用 `StartHand.deck` 重放),给每人发 2 张 `hole_cards`(**不烧牌**:轮转取前 `2N` 张,余牌存 `hand.deck`,公共牌在街推进时从牌堆顺取)。
-6. **置 `PLAYING`**:参与者 UserStatus → `PLAYING`,`RoomStatus → HAND_STARTED`。
+6. **置 `PLAYING`**:参与者 UserStatus → `PLAYING`,`RoomStatus → HAND_STARTED`;**本手未被发牌的在座者重标 `new_here`**(防躲盲「上一手是否参与」,见 [rules.md](rules.md) ①)。
 7. **定行动者**:`acting_position` = 大盲下一位(两人局为小盲/庄),`epoch=0`。
 
 产出:`Broadcast(HandStarted)`(不含底牌)、每人 `Personal(HoleCards)`、`Broadcast(HandStatusChanged)`、`TurnChanged`(起行动倒计时,见 [timer.md](timer.md))。

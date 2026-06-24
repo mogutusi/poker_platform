@@ -177,6 +177,7 @@ export interface ErrorMessage {
 export interface SitDown {
   type: "sit_down";
   seat: number;
+  wait_for_big_blind?: boolean;
 }
 
 export interface BuyIn {

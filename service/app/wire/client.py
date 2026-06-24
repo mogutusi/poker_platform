@@ -23,6 +23,7 @@ class ClientMessage(BaseModel):
 class SitDown(ClientMessage):
     type: Literal["sit_down"] = "sit_down"
     seat: int  # 要入座的座位号
+    wait_for_big_blind: bool = False  # 入局方式:True=等大盲免费、False=付盲即玩(默认,见 rules.md ①)
 
 
 class BuyIn(ClientMessage):
@@ -100,7 +101,7 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
     # ClientMessage → Command:盖 origin(会话身份,不信报文)+ now(shell 墙钟,仅 StartHand 用)。
     match msg:
         case SitDown():
-            return commands.SitDown(origin=origin, seat=msg.seat)
+            return commands.SitDown(origin=origin, seat=msg.seat, wait_for_big_blind=msg.wait_for_big_blind)
         case BuyIn():
             return commands.BuyIn(origin=origin, seat=msg.seat, amount=msg.amount)
         case SetUserStatus():

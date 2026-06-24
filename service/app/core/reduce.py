@@ -118,14 +118,22 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
     if room.users_in_room.get(cmd.origin) is not UserStatus.READY_TO_PLAY:
         return [], Err(ErrorCode.NOT_READY, f"{cmd.origin} 未 READY_TO_PLAY,不能开局")
 
-    # 入局资格:本手被发牌的座位下标集合 + 需付入局 BB 的入局者
-    dealt, paying_entrants = _eligible_seats(room)
+    # 入局资格分类(rules.md ①):core_dealt = 不依赖 BB 位就发牌的座位(established/付盲即玩/bootstrap/waive);
+    # paying_entrants ⊆ core_dealt 需付入局 BB;waiters = 选「等大盲免费」、本手是否入局取决于 BB 是否扫到其座。
+    core_dealt, paying_entrants, waiters = _eligible_seats(room)
+    if len(core_dealt) < 1:
+        # 无已入局/付盲座位锚定庄位(FIX-1:advance_button 空集会 raise,破 helper 契约);等大盲者单独不能
+        # bootstrap(无「免费空降好位」不变量,rules.md ①)→ 判人数不足等待。
+        return [], Err(ErrorCode.NOT_ENOUGH_PLAYERS, "无已入局(established/付盲)玩家锚定庄位")
+
+    # 定位(复用 blinds):庄**只在 core_dealt 上推进**(waiter 永不持庄/小盲),再据庄判等大盲者是否被 BB 扫入。
+    button = blinds.advance_button(room.button_position, core_dealt)
+    entrant = blinds.sweep_entrant(button, core_dealt, waiters)  # BB 扫到的等大盲者(免费入局,下结构大盲)
+    dealt = core_dealt | ({entrant} if entrant is not None else set())
     if len(dealt) < 2:
         return [], Err(ErrorCode.NOT_ENOUGH_PLAYERS, f"在局 ready 玩家不足 2(={len(dealt)})")
 
-    # 定位(复用 blinds):庄推进到下一在局座位,排成行动序 players([0]=SB、[1]=BB)
-    button = blinds.advance_button(room.button_position, dealt)
-    order = blinds.seat_order(button, dealt)
+    order = blinds.seat_order(button, dealt)  # entrant(若有)即 order[1]=大盲,由 post_blinds 下结构大盲
     n = len(order)
     small_blind = room.small_blind
     big_blind = blinds.BIG_BLIND_MULTIPLE * small_blind
@@ -168,12 +176,19 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
     hand.deck = deck[2 * n:]
 
     # 置 PLAYING / HAND_STARTED;入局者清 new_here / wait_for_big_blind;消费 waive 快照
+    dealt_seats = {p.seat_position for p in players}
     for p in players:
         room.users_in_room[p.nickname] = UserStatus.PLAYING
         dealt_seat = room.seats[p.seat_position]
         assert dealt_seat is not None
         dealt_seat.new_here = False
         dealt_seat.wait_for_big_blind = False
+    # 防躲盲(rules.md ① 行 50「判据是上一手是否参与」):本手未被发牌的在座者一律重标 new_here——
+    # 涵盖坐出 / 没 ready 干等 / 断线跨手,回来都要付盲或等大盲(等大盲 waiter 本就 new_here,此处幂等)。
+    # 必在上面发牌者清 new_here 之后跑,且 eligibility/bootstrap 已在本函数顶读 pre-hand new_here,故不自扰本手。
+    for i, s in enumerate(room.seats):
+        if s is not None and i not in dealt_seats:
+            s.new_here = True
     room.waive_entry_for = set()
     room.entry_vote = None  # 阵容已定:未通过的免盲投票随开局作废(rules.md ① 行 75「没投到不算免」),不跨手悬挂
     room.button_position = button
@@ -191,11 +206,13 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
     return events, None
 
 
-def _eligible_seats(room: Room) -> tuple[set[int], set[int]]:
-    # 返回 (本手被发牌的座位下标集合, 其中需付入局 BB 的座位下标集合)。
-    # 资格(rules.md ①):READY_TO_PLAY 且——非 new_here(上一手在局)直接发;
-    # bootstrap(无任何已入局玩家)全员免付发;new_here 在 waive 快照里免付发;
-    # new_here 付盲即玩(默认)发并 post 一个 BB;new_here 选等大盲则本手不发(等 BB 路过,时机留 0011)。
+def _eligible_seats(room: Room) -> tuple[set[int], set[int], set[int]]:
+    # 入局资格分类(rules.md ①)。返回 (core_dealt, paying_entrants, waiters):
+    #   core_dealt    = 不依赖庄/BB 位即发牌的座位(established/付盲即玩/bootstrap/waive);庄位据它定。
+    #   paying_entrants ⊆ core_dealt:需付一个入局 BB(付盲即玩的 new_here)。
+    #   waiters       = 选「等大盲免费」者:本手是否入局取决于 BB 是否扫到其座(由 blinds.sweep_entrant 判)。
+    # 资格细则:READY_TO_PLAY 且——非 new_here(上一手在局)直接发;bootstrap(整桌无已入局玩家)全员免付发;
+    # new_here 在 waive 快照里免付发;new_here 付盲即玩(默认)发并 post 一个 BB;new_here 选等大盲进 waiters。
     ready = [
         (i, s)
         for i, s in enumerate(room.seats)
@@ -205,16 +222,18 @@ def _eligible_seats(room: Room) -> tuple[set[int], set[int]]:
     # 坐出/未 ready 的已入局(new_here=False)玩家仍堵掉新人的免费入局,守防躲盲不变量(行 46/50)。
     bootstrap = not any(s is not None and not s.new_here for s in room.seats)
 
-    dealt: set[int] = set()
+    core_dealt: set[int] = set()
     paying_entrants: set[int] = set()
+    waiters: set[int] = set()
     for i, s in ready:
         if not s.new_here or bootstrap or s.nickname in room.waive_entry_for:
-            dealt.add(i)  # 已入局 / bootstrap / 免盲快照:免付入局
+            core_dealt.add(i)  # 已入局 / bootstrap / 免盲快照:免付入局(waive 优先于等大盲)
         elif not s.wait_for_big_blind:
-            dealt.add(i)  # 付盲即玩(默认)
+            core_dealt.add(i)  # 付盲即玩(默认)
             paying_entrants.add(i)
-        # else: 等大盲 → 本手不发牌(等 BB 路过其座,0011)
-    return dealt, paying_entrants
+        else:
+            waiters.add(i)  # 等大盲:本手是否入局待 sweep_entrant 据庄/BB 判
+    return core_dealt, paying_entrants, waiters
 
 
 def _post_entry(player: Player, big_blind: int) -> None:
@@ -727,7 +746,8 @@ def _sit_down(work: Work, cmd: SitDown) -> ReduceResult:
         return [], Err(ErrorCode.SEAT_TAKEN, f"座位 {cmd.seat} 已被占用")
     if not current.can_change_to(UserStatus.SITTING_IN):
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} {current}→SITTING_IN 非法")
-    room.seats[cmd.seat] = Seat(nickname=nick, points=0)  # new_here=True(默认),买入后再 ready
+    # new_here=True(防躲盲);wait_for_big_blind 由玩家在 SitDown 声明入局方式(rules.md ①);买入后再 ready
+    room.seats[cmd.seat] = Seat(nickname=nick, points=0, wait_for_big_blind=cmd.wait_for_big_blind)
     room.users_in_room[nick] = UserStatus.SITTING_IN
     msg = UserStatusChanged(nickname=nick, status=UserStatus.SITTING_IN, seat_position=cmd.seat)
     return [Broadcast(room=work.room_name, msg=msg)], None

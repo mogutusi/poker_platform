@@ -32,7 +32,7 @@
 
 | `type` | 字段 | 语义 |
 |---|---|---|
-| `sit_down` | `seat` | 观战 → 入座该座位 |
+| `sit_down` | `seat, wait_for_big_blind?` | 观战 → 入座该座位;`wait_for_big_blind=true`=等大盲免费入局,缺省 `false`=付盲即玩(见 rules.md ①) |
 | `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
 | `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
 | `start_hand` | `seat` | 开新一手(房内 ≥2 人 ready 时) |
