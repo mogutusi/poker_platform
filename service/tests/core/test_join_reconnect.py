@@ -1,7 +1,7 @@
 """P1 余项:JoinRoom 进房 + Connect 重连恢复 + StateSnapshot 整桌快照 —— lobby.md / user.md / connection.md。
 
 JoinRoom:大厅→房间,装 world.users 为 WATCHING + Broadcast(UserJoined) + Personal(StateSnapshot)。
-Connect 重连:OFFLINE → 按 world 推断恢复(PLAYING/SITTING_IN/WATCHING)+ 私发快照;在线/大厅幂等 no-op。
+Connect:OFFLINE → 按 world 推断恢复(PLAYING/SITTING_IN/WATCHING)+ 广播 + 私发快照;在房在线(顶替再连,0031)→ 只私发快照对齐;纯大厅 → no-op。
 StateSnapshot 隐私:your_hole_cards 仅收件人自己;players 投影无 hole_cards(他人底牌结构性缺位)。
 """
 
@@ -170,12 +170,36 @@ def test_reconnect_no_seat_restores_watching():
     assert not any(isinstance(e, Persist) for e in ev)
 
 
-# ── 在线用户 Connect(预置 WATCHING / 重复)→ 幂等 no-op,不重发快照 ──
-def test_connect_online_user_is_noop():
+# ── 顶替再连(在房在线,新 ws 接管旧连接):只私发 StateSnapshot 对齐新连接,状态不变、不广播(0031)──
+def test_connect_online_in_room_resends_snapshot():
     world = make_table({0: seat("A", 100, new_here=False), 1: seat("B", 100, new_here=False)}, button=0)
-    world, ev, err = run(world, Connect(origin=None, nick="A"))  # A 在线(READY_TO_PLAY)
-    assert err is None and ev == []
-    assert _room(world).users_in_room["A"] is UserStatus.READY_TO_PLAY  # 状态不变
+    world, ev, err = run(world, Connect(origin=None, nick="A"))  # A 在房在线(READY_TO_PLAY)→ 顶替再连
+    assert err is None
+    assert _room(world).users_in_room["A"] is UserStatus.READY_TO_PLAY  # 状态不变(无恢复 / 无转移)
+    personals = [e for e in ev if isinstance(e, Personal)]
+    assert len(personals) == 1 and personals[0].nick == "A" and isinstance(personals[0].msg, StateSnapshot)
+    assert not any(isinstance(e, Broadcast) for e in ev)  # 顶替对他人无信息变化 → 不广播
+    assert not any(isinstance(e, Persist) for e in ev)  # 不动积分 / 不落库
+    snap = _snapshot(ev)
+    assert snap.your_hole_cards is None and snap.hand_status is None  # 两手之间无手
+    assert {s.nickname for s in snap.seats} == {"A", "B"}
+
+
+# ── 顶替再连(局中,A 在手):快照带 A 自有底牌、不带对手底牌;留 PLAYING、不广播(0031)──
+def test_connect_in_hand_takeover_carries_own_cards_not_others():
+    world = _active_hand_world()  # A(As Kd)、B(Qh Jc) 在手 FLOP(hand_world 置 PLAYING)
+    assert _room(world).users_in_room["A"] is UserStatus.PLAYING  # 前提:A 在线在局
+    world, ev, err = run(world, Connect(origin=None, nick="A"))  # 顶替再连
+    assert err is None
+    assert _room(world).users_in_room["A"] is UserStatus.PLAYING  # 顶替不改状态
+    assert not any(isinstance(e, Broadcast) for e in ev)  # 不广播
+    snap = _snapshot(ev)
+    assert snap.your_hole_cards == (card("As"), card("Kd"))  # 自己的底牌
+    # 值级隐私(非恒真式):序列化产物里对手 B 的 Qh/Jc 绝不出现,只有自己 + 公共牌
+    serialized = _cards_in(snap.model_dump(mode="json"))
+    assert ("Q", "h") not in serialized and ("J", "c") not in serialized
+    assert serialized == {("A", "s"), ("K", "d"), ("2", "c"), ("7", "d"), ("9", "s")}
+    assert not any(isinstance(e, Persist) for e in ev)
 
 
 # ── 大厅用户 Connect(不在任何房)→ core 无事(进房走 JoinRoom)──

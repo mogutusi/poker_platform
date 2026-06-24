@@ -108,3 +108,22 @@ def test_slow_client_dropped_and_disconnect_enqueued():
     assert sh.conns.get("alice") is None  # 已 unregister,停路由
     fired = sh.inbox_drain()
     assert any(isinstance(c, Disconnect) and c.nick == "alice" for c in fired)
+
+
+def test_drop_connection_inbox_full_logs_critical_not_crash(caplog):
+    # 丢慢客户端时 inbox 已满:_drop_connection 的 inbox.put_nowait 抛 QueueFull,**绝不**冒出去崩 GameLoop
+    # (本调用同步执行于 GameLoop 内)。应吞掉 + 落 CRITICAL(architecture.md「inbox 满」),连接仍被 unregister。
+    import logging
+
+    world = _world()
+    sh = Shell(world, inbox_maxsize=1)  # 极小 inbox,一条即满
+    conns = sh.connect("alice")
+    alice = conns["alice"]
+    sh.inbox.put_nowait(Disconnect(origin=None, nick="filler"))  # 灌满 inbox(maxsize=1)
+    assert sh.inbox.full()
+    while not alice.outbound.full():  # 再灌满 alice 的 outbound
+        alice.outbound.put_nowait(_msg())
+    with caplog.at_level(logging.CRITICAL):
+        sh.dispatcher.dispatch(Broadcast(room="r1", msg=_msg()))  # outbound 满 → drop;inbox 满 → 不崩,落 CRITICAL
+    assert sh.conns.get("alice") is None  # 仍 unregister 停路由
+    assert any(r.levelno == logging.CRITICAL and "inbox full" in r.message for r in caplog.records)

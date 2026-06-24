@@ -11,9 +11,15 @@ from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.shell.connection import Connection
 from app.shell.receiver import run_receiver
-from app.wire.server import ErrorMessage, UserStatusChanged
+from app.wire.server import ErrorMessage, StateSnapshot, UserStatusChanged
 from tests.builders import make_world, room_with
 from tests.shell._fakes import FakeWS, Shell
+
+
+def _non_snapshot(sent: list[str]) -> str:
+    # alice 预置在房在线 → 初始 Connect 先回一帧 takeover StateSnapshot(0031,_connect 在房在线臂);
+    # 取首个非快照帧 = 喂入命令的真正响应。
+    return next(s for s in sent if '"type":"state_snapshot"' not in s)
 
 
 def _world():
@@ -61,7 +67,9 @@ async def _run_one_frame(frame: str):
     rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm()))
     await asyncio.sleep(0)  # 让 receiver 登记 + 起 sender + 投 Connect,停在 receive_text
     conn.ws.feed(frame)
-    await _settle(lambda: len(conn.ws.sent) >= 1)
+    # alice 预置在房在线 → 初始 Connect 先回一帧 takeover StateSnapshot(0031);等「喂入帧的响应」=
+    # 首个非 state_snapshot 帧到达,再交回断言(避免只等到先行的快照帧)。
+    await _settle(lambda: any('"type":"state_snapshot"' not in s for s in conn.ws.sent))
     return world, sh, conn, (gl, rx)
 
 
@@ -80,7 +88,7 @@ async def test_valid_frame_flows_through_to_ws():
     try:
         assert world.rooms["r1"].users_in_room["alice"] is UserStatus.SITTING_IN  # reduce 真改了 world
         assert conn.ws.sent, "client received no frame"
-        msg = UserStatusChanged.model_validate_json(conn.ws.sent[0])  # 明文 JSON 往返
+        msg = UserStatusChanged.model_validate_json(_non_snapshot(conn.ws.sent))  # 明文 JSON 往返(跳过先行快照)
         assert msg.status is UserStatus.SITTING_IN and msg.seat_position == 0
     finally:
         await _shutdown(tasks)
@@ -89,7 +97,7 @@ async def test_valid_frame_flows_through_to_ws():
 async def test_invalid_frame_returns_error_and_leaves_world_untouched():
     world, sh, conn, tasks = await _run_one_frame('{"type":"nonsense"}')
     try:
-        msg = ErrorMessage.model_validate_json(conn.ws.sent[0])
+        msg = ErrorMessage.model_validate_json(_non_snapshot(conn.ws.sent))  # 跳过先行的 takeover 快照
         assert msg.code.value == "INVALID_MESSAGE"  # 解析层直接回发,不进 reduce
         assert world.rooms["r1"].users_in_room["alice"] is UserStatus.WATCHING  # world 未动
     finally:
@@ -217,8 +225,13 @@ async def test_async_displacement_old_connection_exits_silently():
         # 关键:旧连接退出未把 alice 标 OFFLINE(顶替静默);新连接仍可正常收发
         await asyncio.sleep(0.02)
         assert world.rooms["r1"].users_in_room["alice"] is UserStatus.WATCHING
+        # 0031:顶替后新连接(c2)经 Connect → _connect 在房在线臂收到 takeover StateSnapshot 对齐桌面
+        await _settle(lambda: any('"type":"state_snapshot"' in s for s in c2.ws.sent))
+        snap_frame = next(s for s in c2.ws.sent if '"type":"state_snapshot"' in s)
+        StateSnapshot.model_validate_json(snap_frame)  # 合法整桌快照报文
+        # 新连接仍能正常发命令收响应(等非快照帧 = sit_down 的 user_status_changed)
         c2.ws.feed('{"type":"sit_down","seat":0}')
-        await _settle(lambda: len(c2.ws.sent) >= 1)
+        await _settle(lambda: any('"type":"user_status_changed"' in s for s in c2.ws.sent))
         assert world.rooms["r1"].users_in_room["alice"] is UserStatus.SITTING_IN
     finally:
         await _shutdown((rx2, gl))

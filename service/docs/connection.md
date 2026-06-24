@@ -126,7 +126,12 @@ def _enqueue(self, conn: Connection, msg) -> None:
 1. **握手鉴权**(详见 [auth.md](auth.md)):`ws connect ?sid=<session_id>`(**不带 room_id**)→ 按 `session_id` 查会话表得 `nick`/`token` → 派生密钥建 `SecureChannel`。**第一帧 MAC 验过 = 证明持有 token**。鉴权失败:ws 关闭码拒掉,**绝不建 `Connection`**。
 2. **登记**:建 `Connection(nick=…)` → `old = conns.register(conn)`。`old` 非空 = **顶替**(见下):关 `old.ws`、cancel `old.sender_task`,**不投 `Disconnect`**。
 3. **起 Sender**:`conn.sender_task = create_task(sender_loop(conn))`。
-4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 判断(0022 `_connect`)——若 `nick` 已在 `world.users` 且为 `OFFLINE`(正在某房、之前断线)→ 这是**重连**:恢复在线 + 私发 `Personal(StateSnapshot)` 对齐其所在房;在线(预置 / 重复 `Connect`)→ 幂等 no-op、不重发快照;纯大厅用户(不在 `world.users`)→ core 无事可做。**恢复到的状态按 world 推断,不存断线前状态**(`_disconnect` 已用 `OFFLINE` 覆盖):在进行中手牌(是其 `Player`)→ `PLAYING`、有座但不在手 → `SITTING_IN`(需重新 ready)、无座 → `WATCHING`(皆合法 `OFFLINE→*` 转移)。**积分不在此载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
+4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 按 `world` 真相分三类处理(`_connect`,0022 起、0031 补顶替臂)——
+   - **纯大厅**(`nick` 不在 `world.users`)→ core 无事可做(进房 + 载入积分走 `JoinRoom`)。
+   - **在房 + `OFFLINE`**(正在某房、之前断线)→ **重连**:恢复在线 + `Broadcast(UserStatusChanged)` + 私发 `Personal(StateSnapshot)` 对齐其所在房。**恢复到的状态按 world 推断,不存断线前状态**(`_disconnect` 已用 `OFFLINE` 覆盖):在进行中手牌(是其 `Player`)→ `PLAYING`、有座但不在手 → `SITTING_IN`(需重新 ready)、无座 → `WATCHING`(皆合法 `OFFLINE→*` 转移)。
+   - **在房 + 在线**(状态非 `OFFLINE`)→ **顶替再连**:新 ws 接管旧连接,旧连接被静默关闭、**未投 `Disconnect`**(见下「顶替语义」),故 `world` 仍记其在线。此时只私发 `Personal(StateSnapshot)` 让**新连接**对齐桌面;状态未变 → **不改不广播**(对房内他人无信息变化,用户无感,见「会话过期与密钥轮换」)。这与下文 §会话轮换「顶替 → 私发 `StateSnapshot`」一致。
+
+   > reduce **不感知「连接」**,无法区分「顶替再连」与「同一连接重复 `Connect`」;但 Receiver 每条连接只投一次 `Connect`(见下「收帧循环」前的 `Connect` 投递),对**已在房在线** nick 的第二次 `Connect` 必来自新 ws(= 顶替)。重发快照是只读、隐私逐收件人(见 [core.md](core.md) `StateSnapshot`)、幂等安全的——正确性不靠「证明这是顶替」,而靠「快照本身无害可重发」。**积分始终不在 `Connect` 载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
 5. **收帧循环**:`while: 收帧 → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`LeaveRoom`/游戏动作/房聊在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room);**`JoinRoom` 例外**——报文只带 `room`,Receiver 按连接 nick **读 DB 富化 `uid`/`loaded`**(异步)再构 `JoinRoom(room, uid, loaded)`(身份/积分不信报文,见 [changes/0030](refactor/changes/0030-p4-per-join-wire-load.md))。每收一帧 `timer.heartbeat(nick)` 续命(见 [timer.md](timer.md))。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。
 6. **退出清理**(ws 断 / 异常):
    - `conns.unregister(conn)`(只删自己,顶替场景自动跳过)。

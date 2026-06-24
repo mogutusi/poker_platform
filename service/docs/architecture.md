@@ -138,7 +138,7 @@ else:   commit(world, work);  for ev in events: dispatch(ev)   # ④ 成功:装�
 
 ## 连接生命周期(全部走命令)
 
-- **连接**:ws 握手(鉴权见 [auth.md](auth.md))成功 → 建 outbound 队列 + 起 Sender → 投 `Connect(nick)` 接入**大厅**(连接绑 nick、不绑房间,模型 2)。reduce:若该 nick 正在某房(之前 OFFLINE)→ 重连恢复 + 私发 `Personal(StateSnapshot)`;否则纯大厅接入。**进房与载入积分在 `JoinRoom`**(见 [lobby.md](lobby.md) / [user.md](user.md))。
+- **连接**:ws 握手(鉴权见 [auth.md](auth.md))成功 → 建 outbound 队列 + 起 Sender → 投 `Connect(nick)` 接入**大厅**(连接绑 nick、不绑房间,模型 2)。reduce 按 world 真相分三类(详见 [connection.md](connection.md)):在房 + `OFFLINE` → 重连恢复 + `Broadcast(UserStatusChanged)` + 私发 `Personal(StateSnapshot)`;在房 + 在线 → **顶替再连**(新 ws 接管),仅私发 `Personal(StateSnapshot)` 对齐(不改状态、不广播);纯大厅 → core 无事。**进房与载入积分在 `JoinRoom`**(见 [lobby.md](lobby.md) / [user.md](user.md))。
 - **断开**:ws 异常 → 投 `Disconnect(nick)`(模型 2:不带 room,reduce 用 `world.users[nick].room` 解析)。reduce 标记离线、对局中保留座位。
 - **重连**:同一 nick 再次 `Connect`,reduce 取消其清理、恢复状态、补发 `Personal(StateSnapshot)`,**忽略本次从 DB 读到的值**(内存比 DB 新)。
 - **超时/清理**:Timer 到点投 `Timeout` / `Cleanup`,由 reduce 处理(自动 fold、退还筹码、释放座位)。

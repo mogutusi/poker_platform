@@ -51,8 +51,9 @@ def drain(conn: Connection) -> list:
 
 class Shell:
     # 把 inbox/conns/persist/timer/dispatcher/gameloop 装一处,供测试驱动 gameloop.handle(cmd)。
-    def __init__(self, world) -> None:
-        self.inbox: "asyncio.Queue[Command]" = asyncio.Queue()
+    def __init__(self, world, *, inbox_maxsize: int = 0) -> None:
+        # inbox_maxsize=0 → 无界(默认,既有测试不触发背压);>0 → 有界,供「inbox 满」背压/丢连测试。
+        self.inbox: "asyncio.Queue[Command]" = asyncio.Queue(maxsize=inbox_maxsize)
         self.conns = ConnectionManager()
         self.persist = WriteBuffer()
         self.timer = Timer(self.inbox)

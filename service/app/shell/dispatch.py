@@ -83,7 +83,16 @@ class Dispatcher:
             self._drop_connection(conn)
 
     def _drop_connection(self, conn: Connection) -> None:
-        # 慢客户端:停路由到它(unregister)+ 投 Disconnect 标 OFFLINE;客户端重连靠 StateSnapshot 补回(P1 余项)。
+        # 慢客户端:停路由到它(unregister)+ 投 Disconnect 标 OFFLINE;客户端重连靠 StateSnapshot 补回。
         # ws 物理关闭由其 Sender/Receiver 下次错误兜(dispatch 不 await,不在此 close)。
         self.conns.unregister(conn)
-        self.inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))
+        try:
+            self.inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))
+        except asyncio.QueueFull:
+            # 本调用在 GameLoop 内同步执行(dispatch ← commit 后 for ev)。inbox 满 = GameLoop 自身卡死
+            # (architecture.md「inbox 满」CRITICAL,进程级 bug),绝不让 QueueFull 冒出去崩掉唯一状态写者:
+            # 丢该 Disconnect + 落 CRITICAL。残留:丢了 Disconnect → 该 nick 仍记为在线(非 OFFLINE),而
+            # `_cleanup` 只回收 OFFLINE 座位(reduce.py)→ **不会自动退座**;座位占用至该 nick 重连(走顶替再连
+            # 补回)或进程重启。shell 不写 world(不变量 2),无法在此标 OFFLINE,故不兜——这是 inbox 满(已
+            # CRITICAL)窗口内可接受的已知占座泄漏。
+            log.critical("inbox full; could not post Disconnect for dropped slow client nick=%s", conn.nick)

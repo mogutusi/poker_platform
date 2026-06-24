@@ -542,15 +542,23 @@ def _timeout(work: Work, cmd: Timeout) -> ReduceResult:
 
 
 def _connect(work: Work, cmd: Connect) -> ReduceResult:
-    # 接入大厅(连接绑 nick,不绑房间)。纯大厅用户(不在 world.users)→ core 无事;
-    # 已在某房且 OFFLINE → 重连:恢复在线 + 私发 StateSnapshot 对齐;在线(预置 WATCHING / 重复 Connect)→ 幂等忽略。
+    # 接入大厅(连接绑 nick,不绑房间)。三类:
+    #   ① 纯大厅(不在 world.users)→ core 无事(进房 + 载入积分走 JoinRoom,lobby.md / user.md);
+    #   ② 在房 + OFFLINE → 重连:按 world 真相恢复在线状态 + 广播 UserStatusChanged + 私发 StateSnapshot 对齐;
+    #   ③ 在房 + 在线 → 顶替再连(新 ws 接管旧连接,旧连接静默退、未投 Disconnect,故 world 仍记其在线):
+    #      只私发 StateSnapshot 让新连接对齐桌面;状态未变 → 不改不广播(对他人无信息变化,connection.md 顶替「用户无感」)。
+    # 注:reduce 不感知「连接」,无法区分「顶替再连」与「同连接重复 Connect」;但 shell 每条连接只投一次 Connect
+    #     (receiver.py),对已在房在线 nick 的第二次 Connect 必来自新 ws(= 顶替)。重发快照只读、隐私逐收件人
+    #     (见 _state_snapshot)、幂等安全——正确性不依赖「证明这是顶替」,而依赖快照本身无害可重发。
     room = work.room
     nick = cmd.nick
     if room is None or nick not in room.users_in_room:
-        return [], None  # 纯大厅接入:进房 + 载入积分走 JoinRoom(lobby.md / user.md),core 此处无事
+        return [], None  # ① 纯大厅接入
     if room.users_in_room[nick] is not UserStatus.OFFLINE:
-        return [], None  # 已在线(非重连)→ 不重发快照
-    # 重连:OFFLINE → 按 world 真相恢复状态(座位/筹码在 OFFLINE 期间保留),私发整桌快照
+        # ③ 顶替再连:状态已对,直接据现状投影(SeatView.status 读 users_in_room),只私发快照对齐新连接
+        snap = _state_snapshot(room, work.room_name, for_nick=nick)
+        return [Personal(nick=nick, msg=snap)], None
+    # ② 重连:OFFLINE → **先**恢复状态(座位/筹码 OFFLINE 期间保留),**再**据恢复后状态投影快照(快照含 SeatView.status)
     restored = _reconnect_status(room, nick)
     room.users_in_room[nick] = restored
     snap = _state_snapshot(room, work.room_name, for_nick=nick)
