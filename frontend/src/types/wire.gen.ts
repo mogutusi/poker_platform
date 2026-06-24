@@ -256,3 +256,27 @@ export type ClientMessage =
   | OpenFreeEntryVote
   | VoteFreeEntry
   | JoinRoom;
+
+// ── emoji catalog (chat render; backend passthrough, see messaging.md / changes/0034) ──
+
+export type EmojiCode = "smile" | "laugh" | "cry" | "cool" | "thinking" | "poker_face" | "thumbs_up" | "clap" | "fire" | "gg" | "fold" | "all_in";
+
+export interface EmojiMeta {
+  label: string;
+  glyph: string;
+}
+
+export const EMOJI_CATALOG: Record<EmojiCode, EmojiMeta> = {
+  "smile": { label: "微笑", glyph: "😊" },
+  "laugh": { label: "大笑", glyph: "😂" },
+  "cry": { label: "哭", glyph: "😭" },
+  "cool": { label: "酷", glyph: "😎" },
+  "thinking": { label: "思考", glyph: "🤔" },
+  "poker_face": { label: "扑克脸", glyph: "😐" },
+  "thumbs_up": { label: "赞", glyph: "👍" },
+  "clap": { label: "鼓掌", glyph: "👏" },
+  "fire": { label: "火", glyph: "🔥" },
+  "gg": { label: "打得好", glyph: "🎉" },
+  "fold": { label: "弃牌", glyph: "🏳️" },
+  "all_in": { label: "全下", glyph: "🟢" },
+};

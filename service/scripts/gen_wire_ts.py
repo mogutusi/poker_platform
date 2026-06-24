@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import json
 import sys
 import types as _types
 import typing
@@ -29,6 +30,7 @@ from app.core.cards import Card, CardRank, CardSuit
 from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.wire.client import CLIENT_MESSAGES
+from app.wire.emoji import EMOJI_CATALOG, EmojiCode, EmojiMeta
 from app.wire.server import NickAmount, PlayerView, SeatView, ServerMessage, ShowdownReveal, SERVER_MESSAGES
 
 # 产物路径(相对本脚本:service/scripts/ → ../../frontend/src/types/wire.gen.ts)
@@ -153,6 +155,20 @@ def _emit_union(name: str, classes: tuple[type, ...]) -> str:
     return f"export type {name} =\n{body};"
 
 
+def _emit_emoji_catalog() -> str:
+    # 表情目录:EmojiCode 联合 + EmojiMeta 接口 + EMOJI_CATALOG 常量(实际数据,非仅类型)。
+    # 无条件吐(不被任何 wire 消息引用,故不走 _discover 的 ref_set 断言路径)。
+    code_union = _emit_enum(EmojiCode)
+    meta_iface = _emit_interface(EmojiMeta)
+    entries = "\n".join(
+        f"  {json.dumps(code.value)}: {{ label: {json.dumps(meta.label, ensure_ascii=False)}, "
+        f"glyph: {json.dumps(meta.glyph, ensure_ascii=False)} }},"
+        for code, meta in EMOJI_CATALOG.items()
+    )
+    const = f"export const EMOJI_CATALOG: Record<EmojiCode, EmojiMeta> = {{\n{entries}\n}};"
+    return "\n\n".join([code_union, meta_iface, const])
+
+
 def generate() -> str:
     referenced = _discover([*SERVER_MESSAGES, *CLIENT_MESSAGES])
     ref_set = set(referenced)
@@ -176,6 +192,8 @@ def generate() -> str:
     blocks.append("// ── discriminated unions ──")
     blocks.append(_emit_union("ServerMessage", SERVER_MESSAGES))
     blocks.append(_emit_union("ClientMessage", CLIENT_MESSAGES))
+    blocks.append("// ── emoji catalog (chat render; backend passthrough, see messaging.md / changes/0034) ──")
+    blocks.append(_emit_emoji_catalog())
     return "\n\n".join(blocks) + "\n"
 
 

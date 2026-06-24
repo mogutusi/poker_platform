@@ -38,7 +38,7 @@
 
 - **格式 `[code]`**:消息文本里用定界括号引用,`code` 是稳定 **ASCII snake_case** 键(如 `[smile]`/`[poker_face]`/`[all_in]`)。定界括号边界无歧义(优于 `#code`)、贴合微信/QQ 习惯;**显示名(label)可中文**。
 - **后端纯透传,渲染在前端**:`ChatMessage.text`(及未来 DM)**完全不变**,`[code]` 当普通文本随 `text` 流转;`_room_chat` reduce **维持只读、不校验/不转换**(承 0021/0033)。前端按目录把**已知** code 换成字形(Unicode 表情或自定义贴纸),**未知 `[foo]` 原样显示为文本**——绝不因含方括号而拒收。**无新增 wire 字段/消息**。
-- **目录 = 单一事实源,codegen 到 TS**(同 `ErrorCode`/wire 枚举,见 [wire.md](wire.md)):后端写一份封闭目录(`code` + 中文 `label` + 默认 Unicode `glyph`),生成器吐 TS,前端只消费、不手写第二份(杜绝 FE/BE 漂移);前端可按 code 覆盖为自定义贴纸图(故同一目录兼容 Unicode 表情与贴纸)。落点 `app/wire/emoji.py`(实现待 TODO)。
+- **目录 = 单一事实源,codegen 到 TS(已落地 [0035](refactor/changes/0035-emoji-implementation.md))**:后端封闭目录 [app/wire/emoji.py](../app/wire/emoji.py)(`EmojiCode` 枚举 + `EMOJI_CATALOG{label,glyph}`)→ `gen_wire_ts.py` 无条件吐 `EmojiCode`/`EmojiMeta`/`EMOJI_CATALOG` 进 `wire.gen.ts`,前端只消费、不手写第二份(杜绝 FE/BE 漂移);前端 [utils/emoji.ts](../../frontend/src/utils/emoji.ts) 的 `tokenizeChat`/`chatToPlainText` 据目录渲染,可按 code 覆盖为自定义贴纸图(故同一目录兼容 Unicode 表情与贴纸)。
 - **边界(v1)**:`[code]` 计入 `ROOM_CHAT_MAX_TEXT_LEN`(全表情消息仍有界);**字面量** `[smile]` 的转义(如 `\[smile]`)、服务端 code 校验/统计、富文本/@提及 均为后续(见下「待定」)。
 
 ## presence(在线判定,本文只用到一点)
@@ -109,6 +109,6 @@
 - **内存未读镜像**:把私信未读也做成「shell 内存权威 + delayDB」,消掉上文那个 flush 窗口竞态、登录补收免读 DB——本规模非必需,future。
 - **全量聊天记录**:若日后要双方翻历史,把私信从「已读即删」改成「不删 + 拉历史接口」(分页游标,同 [rest.md](rest.md) 查手牌)——future。
 - **系统公告 / 大厅群发**:`LobbyBroadcast`(发给所有大厅连接),接 [lobby.md](lobby.md) 的待定。
-- **表情(emoji)**:**设计已定** → 见上「表情」节(`[code]` 前端渲染 + codegen 共享目录,后端透传、**不加协议字段**;[changes/0034](refactor/changes/0034-emoji-catalog-design.md));实现待 [TODO](refactor/TODO.md)。转义字面量 `[code]` / 服务端 code 校验是其后续 nicety。
+- **表情(emoji)**:**已落地** → 见上「表情」节(设计 [0034](refactor/changes/0034-emoji-catalog-design.md) + 实现 [0035](refactor/changes/0035-emoji-implementation.md):`[code]` 前端渲染 + codegen 共享目录,后端透传、**不加协议字段**)。转义字面量 `[code]` / 服务端 code 校验 / 富文本 @提及 是后续 nicety。
 - **富文本 / @提及**:协议加字段即可(见 [wire.md](wire.md) 加性演进),本文不展开。
 - **完整 presence 模块**:谁在线/在哪房/状态的只读 API,见 [presence.md](presence.md),供大厅、好友、私聊共用。
