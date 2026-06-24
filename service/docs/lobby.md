@@ -31,7 +31,7 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 - shell:用户在大厅选某房 → Receiver 从 DB 读该 nick 的 `uid` + `points` → 投 `JoinRoom(room, uid, loaded=points)`。
 - reduce 校验:房间存在(`NO_SUCH_ROOM`);**nick 不在 `world.users`**(单房间约束 `ALREADY_IN_ROOM`——已在别房要先 `LeaveRoom`)。
 - reduce 改副本:装 `UserState(uid, nickname=nick, room=R, points=loaded)` 进 `world.users`;加进 `room.users_in_room` 为 `WATCHING`。
-- 产出:`Broadcast(room, UserJoined)` + `Personal(StateSnapshot)`(整桌当前态)。core 已落地(0022 `_join_room`);**client `join_room{room}` 报文 + Receiver 读 DB 富化 `uid`/`loaded` 留 [0030]**;dev shell 自 [0029](refactor/changes/0029-p4-db-backed-dev-shell.md) 已 **DB-backed**(种子 + 启动期整体载入),但仍用「预置用户在房 WATCHING」**绕开 per-join `JoinRoom`**——真 per-join 载入(本流程)随 0030 的 wire 报文 + Receiver DB 读落地。
+- 产出:`Broadcast(room, UserJoined)` + `Personal(StateSnapshot)`(整桌当前态)。**全链已落地**:core `_join_room`(0022)+ wire `join_room{room}` 报文 + Receiver 按连接 nick 读 DB 富化 `uid`/`loaded`([0030](refactor/changes/0030-p4-per-join-wire-load.md))。dev shell 用户连接进大厅 → 主动 `join_room{"dev"}` 载入(0030 退役了 [0029](refactor/changes/0029-p4-db-backed-dev-shell.md) 的「预置在房 + 启动整载」)。
 - **`ROOM_FULL` v1 暂不强制**:≤20 在线、房极少下「满」非真实约束,且「满桌不可观战」是有损 UX 的武断规则;故 v1 不限观战(座位可用性由 `SitDown` 的 `SEAT_TAKEN` 兜),`ErrorCode.ROOM_FULL` 保留待引入容量上限。失败码现为 `NO_SUCH_ROOM` / `ALREADY_IN_ROOM`(见 [changes/0022](refactor/changes/0022-p1-join-room-state-snapshot.md) 决策 5)。
 
 **`LeaveRoom()`**(房间 → 大厅):

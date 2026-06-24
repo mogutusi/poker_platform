@@ -7,10 +7,12 @@ import logging
 from datetime import datetime, timezone
 
 import pydantic
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
-from app.core.commands import Command, Connect, Disconnect
+from app.core.commands import Command, Connect, Disconnect, JoinRoom
 from app.core.errors import Err, ErrorCode
+from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
@@ -25,6 +27,7 @@ async def run_receiver(
     conns: ConnectionManager,
     inbox: "asyncio.Queue[Command]",
     timer: Timer,
+    sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
     if old is not None:
@@ -38,7 +41,7 @@ async def run_receiver(
         while True:
             raw = await conn.ws.receive_text()  # 让出点
             timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick)
-            cmd = _to_command(conn, raw)
+            cmd = await _frame_to_command(conn, raw, sessionmaker)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -55,7 +58,9 @@ async def run_receiver(
                 log.critical("inbox full; could not post Disconnect for nick=%s", conn.nick)
 
 
-def _to_command(conn: Connection, raw: str) -> Command | None:
+async def _frame_to_command(
+    conn: Connection, raw: str, sessionmaker: async_sessionmaker[AsyncSession]
+) -> Command | None:
     # 明文帧 → Command:解析失败(非法 JSON / 未知 type / 字段不合法)直接回发 ErrorMessage(error.md),不进 reduce。
     try:
         msg = wire_client.parse(raw)
@@ -63,8 +68,31 @@ def _to_command(conn: Connection, raw: str) -> Command | None:
         detail = str(e)[: gameconfig.ERROR_DETAIL_MAX_LEN]
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INVALID_MESSAGE, detail)))
         return None
+    if isinstance(msg, wire_client.JoinRoom):
+        return await _build_join(conn, msg, sessionmaker)  # JoinRoom 需读 DB 富化 uid/loaded(见 changes/0030)
     # 身份盖 origin=会话 nick(不信报文);墙钟 now 由 shell 盖(core 不读钟,仅 StartHand 用,见 wire/client）。
     return wire_client.to_command(msg, origin=conn.nick, now=datetime.now(timezone.utc))
+
+
+async def _build_join(
+    conn: Connection, msg: wire_client.JoinRoom, sessionmaker: async_sessionmaker[AsyncSession]
+) -> Command | None:
+    # 进房:按连接 nick 读 DB 取 uid/loaded(身份/积分不信报文,storage.md 载入一次)→ JoinRoom 命令。
+    try:
+        row = await load_user_by_nick(sessionmaker, conn.nick)
+    except Exception:
+        # DB 读失败(连接断/超时等):回发错误 + 保活连接(同解析错误,不让异常冒到外层 drop 连接)。
+        log.exception("join_room DB 读失败 nick=%s", conn.nick)
+        conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "进房读 DB 失败")))
+        return None
+    if row is None:
+        # 鉴权说有此用户、DB 说无 = 内部不一致(dev 握手已拒非种子 nick;生产 session 由注册签发,必有行)。
+        conn.outbound.put_nowait(
+            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {conn.nick} 无 DB 账号行"))
+        )
+        return None
+    uid, loaded = row
+    return JoinRoom(origin=conn.nick, room=msg.room, uid=uid, loaded=loaded)
 
 
 async def _displace(old: Connection) -> None:

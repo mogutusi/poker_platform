@@ -1,8 +1,8 @@
 # lifespan:dev shell 装配 + 明文 ws 端点(见 connection.md「lifespan」,最小 dev 版)。
-# dev-only:无鉴权 / 无加密;接真 async DB(sqlite+aiosqlite)——幂等种子 dev 用户 + 从 DB 载入积分建 world
-# + OrmPersister 落库(替 0028 前的 NullPersister)。运行:cd service && .venv/bin/uvicorn app.shell.lifespan:app
-#   → ws://<host>/dev/ws?nick=alice
-# P5 国密信道落地即替换握手/帧;0030 接 per-join wire-load(client join_room + Receiver 读 DB);P8 lifespan drain 收尾。
+# dev-only:无鉴权 / 无加密;接真 async DB(sqlite+aiosqlite)——幂等种子 dev 用户进 DB + OrmPersister 落库。
+# 用户连接 → 进大厅 → 主动 join_room → Receiver 读 DB 载入(per-join,0030);dev 房空预置。
+# 运行:cd service && .venv/bin/uvicorn app.shell.lifespan:app  → ws://<host>/dev/ws?nick=alice
+# P5 国密信道落地即替换握手/帧;P8 lifespan drain 收尾。
 
 import asyncio
 import logging
@@ -14,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import gameconfig
 from app.core.commands import Command
-from app.core.domain import Room, UserState, World
-from app.core.enums import UserStatus
+from app.core.domain import Room, World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
@@ -45,27 +44,15 @@ async def seed_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> None
                     session.add(User(id=uid, nickname=nick, points=gameconfig.DEV_START_POINTS))
 
 
-async def load_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> dict[str, tuple[int, int]]:
-    # 从 DB 载入:返回 {nick: (uid, points)}。内存权威的初值来自 DB(兑现「载入一次」),不是 DEV_START_POINTS 常量。
-    async with sessionmaker() as session:
-        rows = (await session.execute(select(User))).scalars().all()
-        return {u.nickname: (u.id, u.points) for u in rows}
-
-
-def build_dev_world(loaded: dict[str, tuple[int, int]]) -> World:
-    # 用从 DB 载入的 (uid, points) 建 world:预置 dev 房 + dev 用户(WATCHING 在房,绕开 JoinRoom,见 changes/0018)。
-    # 积分取 DB 值——重启承接上次落库变更;per-join 真载入(JoinRoom 读 DB)留 0030。
+def build_dev_world() -> World:
+    # 预置一个**空** dev 房(房须存在供 JoinRoom 的 NO_SUCH_ROOM 校验,但不预置任何用户)。
+    # 用户连接 → 进大厅(Connect no-op)→ 主动 join_room{"dev"} → Receiver 读 DB 载入(per-join,0030)。
     room = Room(
         seats=[None] * gameconfig.DEV_SEATS,
         small_blind=gameconfig.DEV_SMALL_BLIND,
         buy_in=gameconfig.DEV_BUY_IN,
     )
-    users: dict[str, UserState] = {}
-    for nick in gameconfig.DEV_USERS:
-        uid, points = loaded[nick]
-        users[nick] = UserState(uid=uid, nickname=nick, points=points, room=gameconfig.DEV_ROOM)
-        room.users_in_room[nick] = UserStatus.WATCHING
-    return World(rooms={gameconfig.DEV_ROOM: room}, users=users)
+    return World(rooms={gameconfig.DEV_ROOM: room}, users={})
 
 
 class DevShell:
@@ -86,19 +73,10 @@ class DevShell:
         self._tasks: list[asyncio.Task] = []
 
     async def setup(self) -> None:
-        # 异步启动:建表(dev 引导,无 Alembic)→ 幂等种子 → 从 DB 载入积分 → 建 world + dispatcher + gameloop。
+        # 异步启动:建表(dev 引导,无 Alembic)→ 幂等种子 dev 用户进 DB(供 join_room 载入)→ 建空 world + dispatcher + gameloop。
         await create_all(self.engine)
         await seed_dev_users(self.sessionmaker)
-        loaded = await load_dev_users(self.sessionmaker)
-        # 种子后所有 dev 用户应在 DB;若缺,多半是 DEV_USERS 改名后撞旧 dev 库同 id 行(seed 按 id 跳过)。
-        # 明确报错(而非后续 build_dev_world 里裸 KeyError),指向可操作的修复。
-        missing = [n for n in gameconfig.DEV_USERS if n not in loaded]
-        if missing:
-            raise RuntimeError(
-                f"dev 用户 {missing} 种子后仍不在 DB——多半是 DEV_USERS 改名后撞了旧 dev 库的同 id 行;"
-                f"删掉 dev 库(默认 ./poker.db)重启即可。"
-            )
-        self.world = build_dev_world(loaded)
+        self.world = build_dev_world()
         self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
 
@@ -150,7 +128,7 @@ def create_app() -> FastAPI:
             await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)
-        await run_receiver(conn, shell.conns, shell.inbox, shell.timer)
+        await run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker)
 
     return app
 

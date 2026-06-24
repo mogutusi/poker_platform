@@ -69,6 +69,11 @@ class VoteFreeEntry(ClientMessage):
     approve: bool  # 该投票人对免盲的表态(全票 approve 才免;任一 reject 即失败)
 
 
+class JoinRoom(ClientMessage):
+    type: Literal["join_room"] = "join_room"
+    room: str  # 目标房名;uid/loaded 不进报文——Receiver 按连接 nick 读 DB 富化(见 changes/0030 决策 1)
+
+
 # codegen 注册表 + parse 可辨识联合的成员(scripts/gen_wire_ts.py 据此生成);新增报文须登记。
 CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
@@ -80,11 +85,12 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     RoomChat,
     OpenFreeEntryVote,
     VoteFreeEntry,
+    JoinRoom,
 )
 
 _ClientMessageUnion = Annotated[
     Union[
-        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry
+        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom
     ],
     Field(discriminator="type"),
 ]
@@ -118,4 +124,7 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
             return commands.OpenFreeEntryVote(origin=origin)
         case VoteFreeEntry():
             return commands.VoteFreeEntry(origin=origin, approve=msg.approve)
+        case JoinRoom():
+            # JoinRoom 需 DB 富化 uid/loaded(身份/积分不进报文),由 Receiver 异步读 DB 构造,不经此(见 changes/0030 决策 1)。
+            raise AssertionError("JoinRoom 须由 Receiver 经 DB 富化构造,不走 to_command")
     raise AssertionError(f"unmapped client message: {type(msg).__name__}")  # 不可达:CLIENT_MESSAGES 穷尽

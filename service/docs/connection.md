@@ -127,7 +127,7 @@ def _enqueue(self, conn: Connection, msg) -> None:
 2. **登记**:建 `Connection(nick=…)` → `old = conns.register(conn)`。`old` 非空 = **顶替**(见下):关 `old.ws`、cancel `old.sender_task`,**不投 `Disconnect`**。
 3. **起 Sender**:`conn.sender_task = create_task(sender_loop(conn))`。
 4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 判断(0022 `_connect`)——若 `nick` 已在 `world.users` 且为 `OFFLINE`(正在某房、之前断线)→ 这是**重连**:恢复在线 + 私发 `Personal(StateSnapshot)` 对齐其所在房;在线(预置 / 重复 `Connect`)→ 幂等 no-op、不重发快照;纯大厅用户(不在 `world.users`)→ core 无事可做。**恢复到的状态按 world 推断,不存断线前状态**(`_disconnect` 已用 `OFFLINE` 覆盖):在进行中手牌(是其 `Player`)→ `PLAYING`、有座但不在手 → `SITTING_IN`(需重新 ready)、无座 → `WATCHING`(皆合法 `OFFLINE→*` 转移)。**积分不在此载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
-5. **收帧循环**:`while: 收帧 → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`JoinRoom`/`LeaveRoom`/游戏动作/房聊都在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room)。每收一帧 `timer.heartbeat(nick)` 续命(见 [timer.md](timer.md))。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。
+5. **收帧循环**:`while: 收帧 → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`LeaveRoom`/游戏动作/房聊在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room);**`JoinRoom` 例外**——报文只带 `room`,Receiver 按连接 nick **读 DB 富化 `uid`/`loaded`**(异步)再构 `JoinRoom(room, uid, loaded)`(身份/积分不信报文,见 [changes/0030](refactor/changes/0030-p4-per-join-wire-load.md))。每收一帧 `timer.heartbeat(nick)` 续命(见 [timer.md](timer.md))。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。
 6. **退出清理**(ws 断 / 异常):
    - `conns.unregister(conn)`(只删自己,顶替场景自动跳过)。
    - **仅当 `is_current` 为真才投 `Disconnect(nick)`**:被顶替的旧连接 `is_current=False`,**静默退出**(否则会把刚重连上的人误标 OFFLINE)。reduce 收 `Disconnect`:若 nick 在某房则标 `OFFLINE` 保座,否则(大厅)只是没了 presence、无 world 变化。
@@ -176,7 +176,7 @@ def _enqueue(self, conn: Connection, msg) -> None:
 
 > 非优雅崩溃丢进行中手牌 + 未 flush 的积分变更——积分非货币,本规模接受(见 [storage.md](storage.md))。
 
-> **dev shell 落地(明文脚手架,见 [changes/0018](refactor/changes/0018-d-dev-shell.md) / [0029](refactor/changes/0029-p4-db-backed-dev-shell.md))**:`shell/lifespan.py` 的 `DevShell.setup()` 启动序为 **async engine(`sqlite+aiosqlite` 缺省)→ `create_all` 建表(dev 引导,无 Alembic;生产用迁移)→ 幂等种子 dev 用户进 DB(原型注册 P5 未建的替身)→ 从 DB 载入积分建 `world` → `OrmPersister` 落库(替 `NullPersister`)→ 起 GameLoop/Timer/PersistWriter → 挂 `/dev/ws`**;关闭在 drain 后 `await engine.dispose()`。dev 用「预置用户在房 WATCHING + 启动整体载入」绕开 `JoinRoom`;**生产的 per-user 载入在 `JoinRoom`**(shell 读 DB → `JoinRoom(room, uid, loaded)`),其 wire 报文 + Receiver DB 读留 **0030**。
+> **dev shell 落地(明文脚手架,见 [changes/0018](refactor/changes/0018-d-dev-shell.md) / [0029](refactor/changes/0029-p4-db-backed-dev-shell.md) / [0030](refactor/changes/0030-p4-per-join-wire-load.md))**:`shell/lifespan.py` 的 `DevShell.setup()` 启动序为 **async engine(`sqlite+aiosqlite` 缺省)→ `create_all` 建表(dev 引导,无 Alembic;生产用迁移)→ 幂等种子 dev 用户进 DB(原型注册 P5 未建的替身)→ 建**空** `world`(dev 房空预置)→ `OrmPersister` 落库(替 `NullPersister`)→ 起 GameLoop/Timer/PersistWriter → 挂 `/dev/ws`**;关闭在 drain 后 `await engine.dispose()`。**per-join 载入已落地(0030)**:dev 用户连接进大厅 → 主动 `join_room{"dev"}` → Receiver 按 nick 读 DB 富化 `uid`/`loaded` → `JoinRoom(room, uid, loaded)` 装入(退役了 0029 的「预置在房 + 启动整载」)。
 
 ## 与架构契约(必须守住)
 

@@ -134,7 +134,10 @@ def test_parse_rejects_unknown_and_missing_type():
 
 
 def test_client_registry_covered_by_to_command():
-    # CLIENT_MESSAGES 每个类型都能被 to_command 映射(默认值构造 → 不落到 AssertionError 兜底臂)。
+    # CLIENT_MESSAGES 每个类型都登记;非 JoinRoom 经 to_command 映射,JoinRoom 是特例(需 DB 富化 uid/loaded,
+    # 由 Receiver 异步构造,to_command 命中即 AssertionError,见 changes/0030)。
+    import pytest
+
     samples = {
         C.SitDown: C.SitDown(seat=0),
         C.BuyIn: C.BuyIn(seat=0, amount=1),
@@ -145,9 +148,15 @@ def test_client_registry_covered_by_to_command():
         C.RoomChat: C.RoomChat(text="hi"),
         C.OpenFreeEntryVote: C.OpenFreeEntryVote(),
         C.VoteFreeEntry: C.VoteFreeEntry(approve=True),
+        C.JoinRoom: C.JoinRoom(room="dev"),
     }
     assert set(samples) == set(C.CLIENT_MESSAGES)  # 防新增报文漏测
-    for msg in samples.values():
+    assert C.parse('{"type":"join_room","room":"dev"}') == C.JoinRoom(room="dev")  # parse 往返
+    for cls, msg in samples.items():
+        if cls is C.JoinRoom:
+            with pytest.raises(AssertionError):  # JoinRoom 不走 to_command(契约)
+                C.to_command(msg, origin="A", now=_NOW)
+            continue
         cmd = C.to_command(msg, origin="A", now=_NOW)
         assert isinstance(cmd, commands.Command)
         assert cmd.origin == "A"

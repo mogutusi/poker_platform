@@ -32,6 +32,7 @@
 
 | `type` | 字段 | 语义 |
 |---|---|---|
+| `join_room` | `room` | 从大厅进某房(观战);后端按你的连接身份**读 DB 富化** `uid`/积分,回 `user_joined` 广播 + 私发 `state_snapshot`。失败 `error`(`no_such_room`/`already_in_room`) |
 | `sit_down` | `seat, wait_for_big_blind?` | 观战 → 入座该座位;`wait_for_big_blind=true`=等大盲免费入局,缺省 `false`=付盲即玩(见 rules.md ①) |
 | `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
 | `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
@@ -104,10 +105,9 @@
 
 ## 8. 现在有 / 还没有(增量交付)
 
-**已交付**:座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot` + 进房通知 `user_joined`**(重连即由后端 `Connect` 私发 `state_snapshot`;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
+**已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- **进房 client 报文 `join_room{room}`**:`state_snapshot` 本身已交付(重连经后端 `Connect` 私发,可据它「刷新即对齐」),但**主动从大厅进房的 `join_room` 报文 + 后端读账号 `uid`/积分** 随真 DB 集成落地(当前 dev 端点用预置用户绕开,无大厅入房流)。
 - 大厅房间列表(REST)、私聊(`direct_message`)、房配置(设盲注/买入额)。
 
 ## 9. 怎么连(Phase D · 即将)

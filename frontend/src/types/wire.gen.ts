@@ -221,6 +221,11 @@ export interface VoteFreeEntry {
   approve: boolean;
 }
 
+export interface JoinRoom {
+  type: "join_room";
+  room: string;
+}
+
 // ── discriminated unions ──
 
 export type ServerMessage =
@@ -249,4 +254,5 @@ export type ClientMessage =
   | PlayerAction
   | RoomChat
   | OpenFreeEntryVote
-  | VoteFreeEntry;
+  | VoteFreeEntry
+  | JoinRoom;
