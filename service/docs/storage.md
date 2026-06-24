@@ -13,6 +13,7 @@
 - 凡需持久化的数据(当前:全局积分;手牌结束写手牌记录),**从 DB 读一次进内存,内存即权威**;此后改内存、由 delayDB 落库,**DB 不参与任何实时判定**。
 - 读 DB 是 IO,**只能在 shell**(Receiver / lifespan),把读到的值随**命令**带进 core(如 `Connect(loaded=...)`),由 reduce 决定是否安装。**core 内绝不 `await` DB。**
 - **绝不重载已在内存的实体**:内存比 DB 新(DB 滞后),重载会丢未落库的变更。是否安装的判定在 reduce(见 [user.md](user.md)),shell 不读 `world`(守不变量 2)。
+- **启动初始化例外**:进程启动时内存为空、无任何已安装实体,故 **lifespan 在启动阶段直读 DB 初始化 `world`** 是允许的——没有「内存更新值」会被覆盖,「绝不重载」针对的是**运行期**对已安装实体的重读。**运行期**的载入(用户加房 `JoinRoom` 等)仍走「shell 读 DB → 随命令带进 core → reduce 决定安装」。dev shell 的启动期整体载入即此例外(见 [changes/0029](refactor/changes/0029-p4-db-backed-dev-shell.md));生产同理在 lifespan 预置静态房后,各用户积分在其 `JoinRoom` 时载入。
 - 好处:买入这类高频操作是**纯内存转账**,不需要在 GameLoop 里 `await` DB(那会撞碎「reduce 不 await」);无并发写者 ⇒ **无行锁 / `with_for_update`**。
 
 ## ② 工作副本回滚(进业务就深复制一份)

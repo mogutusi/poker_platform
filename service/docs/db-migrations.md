@@ -60,6 +60,7 @@ DATABASE_URL="postgresql+psycopg://u:p@host/poker" .venv/bin/alembic upgrade hea
 - **模型是源,库是投影**:只改模型 + 出迁移;**绝不手 `ALTER TABLE` 改库**(会与迁移历史漂移)。
 - **必审 autogen 产物**:尤其改名/删列/数据迁移,autogen 可能丢数据;一支迁移聚焦一个逻辑改动,便于回滚。
 - **`import sqlmodel` 必须在迁移里**(模板已带);新建模板别删那行。
+- **dev shell 用 `create_all` 引导建表、不跑 Alembic**(见 [app/db/engine.py](../app/db/engine.py) `create_all` + [changes/0029](refactor/changes/0029-p4-db-backed-dev-shell.md)):dev 脚手架免迁移工具链(`checkfirst` 幂等,与已有表无冲突);**生产/集成用 Alembic 迁移建表**,绝不靠 `create_all`(不留迁移历史)。两者别在同一库混用。
 - **新架构对齐**:`app/db/` 的表对齐 [core/records.py](../app/core/records.py) 的 Write 载荷(`User.points`←`PointsWrite`、`HandRecord`+`HandParticipant`←`HandRecordWrite`/`ParticipantWrite`);落库由 shell 的 `PersistWriter`/`OrmPersister` 经此(见 [db.md](db.md),运行时落地 P4 三之二)。**隐私**:表只存结果(uid + 初/末筹码 + 池额),绝不含底牌/牌堆。
 - **唯一 DB 写者**:运行时落库只经 `PersistWriter`,**无行锁 / `with_for_update`**(见 [db.md](db.md));读路径(REST 查询)各自请求级 session,实时判定一律以内存为准。
 - **本地 sqlite ≠ 生产 Postgres**:类型/方言有差异(如 `TIMESTAMP WITH TIME ZONE`)。本地 sqlite 适合快速验证迁移能跑通;**最终在 Postgres 上 `upgrade head` 验收**。

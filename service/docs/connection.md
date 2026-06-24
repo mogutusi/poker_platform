@@ -176,6 +176,8 @@ def _enqueue(self, conn: Connection, msg) -> None:
 
 > 非优雅崩溃丢进行中手牌 + 未 flush 的积分变更——积分非货币,本规模接受(见 [storage.md](storage.md))。
 
+> **dev shell 落地(明文脚手架,见 [changes/0018](refactor/changes/0018-d-dev-shell.md) / [0029](refactor/changes/0029-p4-db-backed-dev-shell.md))**:`shell/lifespan.py` 的 `DevShell.setup()` 启动序为 **async engine(`sqlite+aiosqlite` 缺省)→ `create_all` 建表(dev 引导,无 Alembic;生产用迁移)→ 幂等种子 dev 用户进 DB(原型注册 P5 未建的替身)→ 从 DB 载入积分建 `world` → `OrmPersister` 落库(替 `NullPersister`)→ 起 GameLoop/Timer/PersistWriter → 挂 `/dev/ws`**;关闭在 drain 后 `await engine.dispose()`。dev 用「预置用户在房 WATCHING + 启动整体载入」绕开 `JoinRoom`;**生产的 per-user 载入在 `JoinRoom`**(shell 读 DB → `JoinRoom(room, uid, loaded)`),其 wire 报文 + Receiver DB 读留 **0030**。
+
 ## 与架构契约(必须守住)
 
 1. **ConnectionManager/Timer 的内部表是 shell 私有连接态,不是 `world`**;只有 GameLoop 经 reduce commit 改 `world`。
