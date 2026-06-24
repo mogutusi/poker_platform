@@ -32,6 +32,15 @@
 - **第二个 outbound 生产者**:私聊路由和 GameLoop 都 `put_nowait` 到 `outbound`——单线程 asyncio 下安全;私聊与游戏消息之间**不保证相对顺序**(对聊天无所谓,可接受)。**仍只经 `outbound` → Sender**,不旁路 `ws.send`(守不变量 4/6)。
 - **限速**:同样在 shell(发件人维度令牌桶),进配置。
 
+## 表情(emoji,见 [changes/0034](refactor/changes/0034-emoji-catalog-design.md))
+
+聊天**表情 = 前端渲染约定 + 一份共享目录**,后端几乎零改动。适用**所有聊天面**(房聊现、私聊将来)——它是渲染约定,不是某条消息的字段。
+
+- **格式 `[code]`**:消息文本里用定界括号引用,`code` 是稳定 **ASCII snake_case** 键(如 `[smile]`/`[poker_face]`/`[all_in]`)。定界括号边界无歧义(优于 `#code`)、贴合微信/QQ 习惯;**显示名(label)可中文**。
+- **后端纯透传,渲染在前端**:`ChatMessage.text`(及未来 DM)**完全不变**,`[code]` 当普通文本随 `text` 流转;`_room_chat` reduce **维持只读、不校验/不转换**(承 0021/0033)。前端按目录把**已知** code 换成字形(Unicode 表情或自定义贴纸),**未知 `[foo]` 原样显示为文本**——绝不因含方括号而拒收。**无新增 wire 字段/消息**。
+- **目录 = 单一事实源,codegen 到 TS**(同 `ErrorCode`/wire 枚举,见 [wire.md](wire.md)):后端写一份封闭目录(`code` + 中文 `label` + 默认 Unicode `glyph`),生成器吐 TS,前端只消费、不手写第二份(杜绝 FE/BE 漂移);前端可按 code 覆盖为自定义贴纸图(故同一目录兼容 Unicode 表情与贴纸)。落点 `app/wire/emoji.py`(实现待 TODO)。
+- **边界(v1)**:`[code]` 计入 `ROOM_CHAT_MAX_TEXT_LEN`(全表情消息仍有界);**字面量** `[smile]` 的转义(如 `\[smile]`)、服务端 code 校验/统计、富文本/@提及 均为后续(见下「待定」)。
+
 ## presence(在线判定,本文只用到一点)
 
 私聊判断"对方在不在线" = `conns.get(to_nick) is not None`——就是 ConnectionManager 的 nick 表(presence)。完整 presence(谁在线/在哪房/什么状态,供大厅人数、好友在线提醒)是更大的只读视图,**单列或后续并入**,本文只用"在不在线"这一点。
@@ -91,6 +100,7 @@
 6. **私信落库走「未读收件箱」**:发即 `put(DMWrite)`(事件写,未读)、读 `put(DMReadCursorWrite)`(状态写)推进游标、已读满保留期由 PersistWriter 清;私信路由是**写缓冲的第二个生产者**(`put` 同步无 await),唯一写库者仍 PersistWriter,路由内**绝不 `await commit`**。
 7. **房聊只在内存留最近 N 条**(shell 环形缓冲,不落库),`RoomChat` reduce 维持**只读**;新进房/重连靠 `FetchRoomChat` 拉。
 8. **持久化键用 `uid` 不用 `nick`;保留期 / 容量 / 限速一律配置化**(见 [config.md](config.md))。
+9. **表情是前端渲染约定 + codegen 共享目录**(`[code]`),后端透传:`ChatMessage`/`_room_chat`/wire 字段**不变**,目录单一事实源(见上「表情」/ [changes/0034](refactor/changes/0034-emoji-catalog-design.md))。
 
 ## 待定 / future
 
@@ -99,5 +109,6 @@
 - **内存未读镜像**:把私信未读也做成「shell 内存权威 + delayDB」,消掉上文那个 flush 窗口竞态、登录补收免读 DB——本规模非必需,future。
 - **全量聊天记录**:若日后要双方翻历史,把私信从「已读即删」改成「不删 + 拉历史接口」(分页游标,同 [rest.md](rest.md) 查手牌)——future。
 - **系统公告 / 大厅群发**:`LobbyBroadcast`(发给所有大厅连接),接 [lobby.md](lobby.md) 的待定。
-- **富文本 / @提及 / 表情**:协议加字段即可(见 [wire.md](wire.md) 加性演进),本文不展开。
+- **表情(emoji)**:**设计已定** → 见上「表情」节(`[code]` 前端渲染 + codegen 共享目录,后端透传、**不加协议字段**;[changes/0034](refactor/changes/0034-emoji-catalog-design.md));实现待 [TODO](refactor/TODO.md)。转义字面量 `[code]` / 服务端 code 校验是其后续 nicety。
+- **富文本 / @提及**:协议加字段即可(见 [wire.md](wire.md) 加性演进),本文不展开。
 - **完整 presence 模块**:谁在线/在哪房/状态的只读 API,见 [presence.md](presence.md),供大厅、好友、私聊共用。

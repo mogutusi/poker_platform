@@ -19,6 +19,7 @@
 
 - **ws 消息**(`ClientMessage`/`ServerMessage`):Pydantic 模型 → TS 可辨识联合。生成器是**自包含 Python 脚本** [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py)(内省 `model_fields` 直接吐扁平 TS),**不依赖 node**——本机无 node,`pydantic2ts` 不可运行,故自实现(见 [changes/0017](refactor/changes/0017-wire-first-batch.md))。
 - **REST**(查手牌/余额):FastAPI 出 OpenAPI →(`openapi-typescript`)→ TS(待 P7)。
+- **共享词汇目录**(非消息,但同走「单源 + codegen」):如**表情目录**(`app/wire/emoji.py` 的 `EmojiCode` 封闭枚举 + `EMOJI_CATALOG`)→ 生成器吐 TS 供前端渲染 `[code]`(后端纯透传、不进报文,见 [messaging.md](messaging.md)「表情」/ [changes/0034](refactor/changes/0034-emoji-catalog-design.md));因不被任何消息引用,codegen 需「无条件吐该目录」(现 `generate()` 仅吐被引用枚举)。待 TODO 实现。
 - **生成步骤进 CI / pre-commit**:改了 .py 不重新生成 → CI 红。当前由 [tests/wire/test_codegen_uptodate.py](../tests/wire/test_codegen_uptodate.py) 在 `pytest` 里逐字节比对兜住(无 node 也能守门);`gen_wire_ts.py --check` 同义供 pre-commit。前端改动只能改 .py 再生成,不碰产物。
 - **.py 落点**:wire 模型集中在 [app/wire/](../app/wire/)(`server.py`/`client.py`,已取代原型 `pokertable/wsm_schemas.py`——后者于 0027 拆除),与域模型(core 的 `World`/`Hand`/…)**物理分开**——域模型是 core 权威状态,wire DTO 是对外报文,两者独立演进(见「wire DTO ≠ 域模型」)。
 
