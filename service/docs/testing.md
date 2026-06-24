@@ -70,7 +70,7 @@ def test_preflop_bb_option():
 
 - **保序**:同一连接 `outbound` 严格按 enqueue 顺序发出(Sender)。
 - **顶替/身份判定**:同 nick 新连接顶旧的;旧连接退出 `is_current=False` 不投 `Disconnect`(见 [connection.md](connection.md))。
-- **delayDB**:`put_state` 同键覆盖、`put_append` 追加、`swap` 后落库、失败 `setdefault` 回灌"更新者优先"、drain(见 [db.md](db.md))。
+- **delayDB**:`put` 分流(状态写同键覆盖 / 事件写追加)、`swap` 双缓冲取走清空、失败 `requeue` 回灌"更新者优先"(`setdefault`)、drain(见 [db.md](db.md))。
 - **队列满**:`outbound` 满 → 丢连接 + `Disconnect`,不阻塞 GameLoop。
 - **lifespan**:关闭按序 drain,缓冲落净(见 [connection.md](connection.md))。
 

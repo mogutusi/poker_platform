@@ -70,7 +70,7 @@
 
 ## 硬化 / 子系统(每模块补协议切片)
 
-- [ ] P4 delayDB:`shell/persist.py` 双缓冲 swap + `PersistWriter`(先 swap 后 await)+ `to_orm`;`db/` 模型(`User` 加 uid/salt/rounds/K_user、`HandRecord` 对齐 `HandRecordWrite`)+ Alembic 迁移;回灌「更新者优先」/drain 测试
+- [~] P4 delayDB:0024 落地 `WriteBuffer` 双缓冲(状态写按键覆盖 / 事件写追加 / `put` 单入口 `_state_key` 分流 / `swap` / `requeue` 更新者优先 / 向后兼容 `snapshot`+`__len__`;test_persist 12,共 241);**`PersistWriter`(先 swap 后 await)+ `to_orm` + `db/` 模型(`User` 加 uid/salt/rounds/K_user、`HandRecord`+`Participant` 对齐 `HandRecordWrite`)+ Alembic 迁移 + gameconfig DB 旋钮 + lifespan drain 待 P4 二**
 - [ ] shell 硬化:背压(inbox/outbound 上限 + 队列满丢连)、顶替/重连 `StateSnapshot`、`tests/shell/`
 - [ ] P7 lobby/REST/messaging:`GET /lobby/rooms`、leaderboard/hands(游标)/profile(改昵称仅大厅)、**房聊 shell 文本防护(非空 + `ROOM_CHAT_MAX_TEXT_LEN`)+ 令牌桶限速**(0021 已把文本校验从 reduce 移此,见 [messaging.md](../messaging.md))、房聊环形缓冲 + `FetchRoomChat` + 私聊 DM 未读收件箱(见 [messaging.md](../messaging.md) + changes/0012)、presence 只读;REST 走 `openapi-typescript`
 - [ ] 日志:GameLoop 边界审计 + 脱敏红线(底牌/密钥不进日志)

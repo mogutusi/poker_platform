@@ -11,46 +11,25 @@
 
 | 类别 | 语义 | 例子 | 落库 | 能否覆盖 | 键 |
 |---|---|---|---|---|---|
-| **状态写 `StateWrite`** | 实体「现在的样子」 | 全局积分 `points` | UPSERT by 主键 | **可覆盖**(同键只留最新) | `(table, pk)` |
-| **事件写 `AppendWrite`** | 「发生过一件事」 | 手牌记录 + 参与者 | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
+| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` | UPSERT by 主键 | **可覆盖**(同键只留最新) | `(table, pk)` |
+| **事件写**(append-write) | 「发生过一件事」 | 手牌记录 + 参与者 | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
 
 判据:**描述「实体当前状态」(可覆盖)还是「一次已发生的事实」(必追加)?** 拿不准默认归事件写——覆盖一个本该追加的实体会**静默丢数据**,代价远高于多落几条。
 
 **为什么状态写要覆盖而非 FIFO**:内存是权威,DB 只需追平到当前值。用户一秒内买入两次再退分,DB 只关心最终值;中间值落库是纯浪费。同键后写直接盖前写,N 次变更合成 1 次落库。
 
-## 数据结构:写缓冲 `WriteBuffer`
+## 数据结构:写缓冲 `WriteBuffer`(0024 落地,精确签名见 [persist.py](../app/shell/persist.py))
 
-```python
-StateKey = tuple[str, ...]          # (table, pk),如 ("user", uid)
+双缓冲两个桶 + 单入口 `put`:
 
-@dataclass(frozen=True)
-class StateWrite:
-    key: StateKey
-    payload: ...                    # 快照值,如 PointsWrite(uid, points)
+- `_dirty: dict[StateKey, payload]` —— 状态写,同键覆盖(`StateKey = ("user", str(uid))` 等)。
+- `_appends: list[payload]` —— 事件写,逐条追加。
+- `put(payload)`:**单入口**,内部 `_state_key(payload)` 归类(状态写→键入 `_dirty`、事件写或未知→ append 进 `_appends`)。GameLoop.dispatch 仍调 `self.persist.put(p)`,**同步内存写、不 `await`**(守不变量 3)。
+- `swap() -> (dirty, appends)`:同步取走两桶并置空(双缓冲;PersistWriter 用)。
+- `requeue(dirty, appends)`:失败回灌(状态写 `setdefault` 更新者优先、事件写前插)。
+- `is_empty()` / `snapshot()`(只读调试)/ `__len__`。
 
-@dataclass(frozen=True)
-class AppendWrite:
-    dedupe_key: str                 # 业务唯一键,重试幂等用
-    payload: ...                    # 快照值,如 HandRecord 字段 + 其 participants
-
-class WriteBuffer:
-    def __init__(self) -> None:
-        self._dirty: dict[StateKey, StateWrite] = {}   # 覆盖:同 key 后写盖前写
-        self._appends: list[AppendWrite] = []          # 追加:逐条落
-
-    # —— 由 GameLoop.dispatch 同步调用(与 put_nowait 同级,绝不 await)——
-    def put_state(self, w: StateWrite) -> None:  self._dirty[w.key] = w
-    def put_append(self, w: AppendWrite) -> None: self._appends.append(w)
-
-    # —— 由 PersistWriter 调用:双缓冲,同步取走清空,之后才 await 落库 ——
-    def swap(self) -> tuple[dict[StateKey, StateWrite], list[AppendWrite]]:
-        dirty, appends = self._dirty, self._appends
-        self._dirty, self._appends = {}, []
-        return dirty, appends
-    def is_empty(self) -> bool:  return not self._dirty and not self._appends
-```
-
-`dispatch` 按 `Persist` payload 类型选 `put_state` / `put_append`,**同步内存写**(覆盖 dict 项 / append list),不 `await`,守不变量 3。
+> **0024 偏离(已对齐代码)**:不用 `StateWrite`/`AppendWrite` 包装类、不暴露 `put_state`/`put_append` 双方法——payload 自带识别字段(`PointsWrite.uid` / `HandRecordWrite.dedupe_key`),由 `_state_key` 一处归类即可,dispatch 调用点 `put(payload)` 不动。`swap` 返回的 `dirty`(dict)/`appends`(list)分桶本身即承载「状态写 vs 事件写」语义,无需包装类。
 
 ## 关键并发不变量:先 swap 后 await
 
@@ -73,11 +52,11 @@ async def run(self) -> None:
         dirty, appends = self._buf.swap()                # 同步取走清空(双缓冲)
         try:
             async with self._session() as s:             # 一批一个短事务
-                for w in dirty.values():   await s.merge(to_orm(w.payload))   # UPSERT
-                for w in appends:          s.add(to_orm(w.payload))           # INSERT
+                for payload in dirty.values():  await s.merge(to_orm(payload))   # UPSERT(状态写)
+                for payload in appends:         s.add(to_orm(payload))           # INSERT(事件写)
                 await s.commit()                         # 让出点②
         except Exception:
-            self._requeue(dirty, appends)                # 整批回灌,下周期重试
+            self._buf.requeue(dirty, appends)            # 整批回灌(更新者优先),下周期重试
             log.error("delayDB flush failed, requeued", exc_info=True)
 ```
 
@@ -86,10 +65,11 @@ async def run(self) -> None:
 ## 失败与重试
 
 ```python
-def _requeue(self, dirty, appends) -> None:
-    for k, w in dirty.items():
-        self._buf._dirty.setdefault(k, w)   # 更新者优先:期间已有更新的写就保留新的,绝不旧盖新
-    self._buf._appends[:0] = appends        # 事件写放回,下批重新 INSERT
+# WriteBuffer.requeue(0024):状态写 setdefault(更新者优先)、事件写前插
+def requeue(self, dirty, appends) -> None:
+    for key, payload in dirty.items():
+        self._dirty.setdefault(key, payload)   # 更新者优先:期间已有更新的写就保留新的,绝不旧盖新
+    self._appends[:0] = appends                # 事件写放回缓冲头,下批重新 INSERT
 ```
 
 - **状态写回灌用 `setdefault`(更新者优先)**:这是覆盖语义下唯一的正确性要点——回灌的是上一批的旧值,若期间 GameLoop 又写了更新值,**必须保留更新的**,否则旧值盖新值 = 把内存权威最新状态写错。
@@ -99,7 +79,7 @@ def _requeue(self, dirty, appends) -> None:
 
 ## 事务分组 & session
 
-- **手牌记录与其参与者必须同事务**(参与者外键引用 record.id):一个 `AppendWrite` 单元 = 「一条 record + 它全部 participants」,整体 INSERT、整体成败。
+- **手牌记录与其参与者必须同事务**(参与者外键引用 record.id):一个事件写单元 = 「一条 record + 它全部 participants」,整体 INSERT、整体成败。
 - 状态写各实体独立,可与事件写同批同事务;一批失败整批回滚,回灌安全。
 - **每批一个短事务,用完即关 session**;PersistWriter 持自己的 `AsyncSessionLocal`,**不复用** WS 请求注入的 `DBsession`。
 - 唯一写者 ⇒ **全程无 `with_for_update` / 无行锁**。读路径(REST 查手牌、查余额)走各自请求级 `DBsession`,与写路径互不干扰(读 DB 可能比内存旧,实时判定一律以内存为准)。
@@ -155,7 +135,7 @@ class DMReadCursorWrite(BaseModel):
 
 - payload 必须是**快照值**:core 产出 `Persist` 那一刻就是不可变值(int / 新构造的记录),不带 `world` 活引用(配合工作副本回滚,见不变量 7)。
 - **新增持久化实体** = 在状态写/事件写里选语义 + 给键,不另起炉灶、不加第三种通道(受「不过度解耦」约束)。
-- **私信两类写由 shell 直接 `put`,不经 core/`Persist`**:`PointsWrite`/`HandRecordWrite` 是 core 产 `Persist`、GameLoop.dispatch 代投;`DMWrite`/`DMReadCursorWrite` 则由 **shell 私信路由**直接 `put_append/put_state`(写缓冲的第二个生产者,见 [messaging.md](messaging.md))。两者都是快照值、都只经 PersistWriter 落库,故同列本接口。
+- **私信两类写由 shell 直接 `put`,不经 core/`Persist`**:`PointsWrite`/`HandRecordWrite` 是 core 产 `Persist`、GameLoop.dispatch 代投;`DMWrite`/`DMReadCursorWrite` 则由 **shell 私信路由**直接 `put`(写缓冲的第二个生产者,`_state_key` 把 `DMReadCursorWrite` 归状态写、`DMWrite` 归事件写,见 [messaging.md](messaging.md))。两者都是快照值、都只经 PersistWriter 落库,故同列本接口。
 
 ## 配置(照 [config.md](config.md),不硬编码)
 
@@ -193,5 +173,5 @@ DM_CLEANUP_INTERVAL_SECONDS=3600   # 每小时跑一趟清理
 - **覆盖 ≠ 丢一致性**:落的是内存权威**当前值**,DB 追平即正确;被覆盖的中间值本就无需持久化。把这点和「事件写绝不可覆盖」分清,是本模块唯一易错处。
 - **脱敏红线**:落库 payload **不得带 `hole_cards` / `deck`**(见 [log.md](log.md));手牌记录存**结果**(`initial_points`/`final_points`/`final_pot`),不是底牌。
 - **读写分离**:实时判定一律读内存;DB 只服务事后查询与崩溃后冷启动初值。
-- **私信是写缓冲的第二个生产者**:shell 私信路由 `put_append/put_state`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理**(删已读满期的行)也归 PersistWriter——DELETE 是 DB 写,不另起写者(守唯一写者),周期 `DM_CLEANUP_INTERVAL_SECONDS`、保留期 `DM_READ_RETENTION_SECONDS`。
+- **私信是写缓冲的第二个生产者**:shell 私信路由 `put`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理**(删已读满期的行)也归 PersistWriter——DELETE 是 DB 写,不另起写者(守唯一写者),周期 `DM_CLEANUP_INTERVAL_SECONDS`、保留期 `DM_READ_RETENTION_SECONDS`。
 - **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 ERROR、drain 失败 CRITICAL。
