@@ -11,7 +11,7 @@ from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.shell.connection import Connection
 from app.shell.receiver import run_receiver
-from app.wire.server import ErrorMessage, StateSnapshot, UserStatusChanged
+from app.wire.server import ChatMessage, ErrorMessage, StateSnapshot, UserStatusChanged
 from tests.builders import make_world, room_with
 from tests.shell._fakes import FakeWS, Shell
 
@@ -90,6 +90,36 @@ async def test_valid_frame_flows_through_to_ws():
         assert conn.ws.sent, "client received no frame"
         msg = UserStatusChanged.model_validate_json(_non_snapshot(conn.ws.sent))  # 明文 JSON 往返(跳过先行快照)
         assert msg.status is UserStatus.SITTING_IN and msg.seat_position == 0
+    finally:
+        await _shutdown(tasks)
+
+
+async def test_room_chat_frame_passes_guard_and_broadcasts_chat_message():
+    # 端到端:合法 room_chat 帧穿过 _guard_room_chat → inbox → _room_chat reduce → Broadcast(ChatMessage)
+    # (验防护真接进 run_receiver 路径,非仅 sync 单测 _guard_room_chat)。alice 预置在房 WATCHING。
+    world, sh, conn, tasks = await _run_one_frame('{"type":"room_chat","text":"hi all"}')
+    try:
+        msg = ChatMessage.model_validate_json(_non_snapshot(conn.ws.sent))  # 跳过先行的 takeover 快照
+        assert msg.from_nick == "alice" and msg.text == "hi all"  # 身份盖连接 nick、原文广播
+    finally:
+        await _shutdown(tasks)
+
+
+async def test_room_chat_empty_frame_rejected_in_guard_before_reduce():
+    # 空文本帧被 Receiver 文本防护拦下(回 INVALID_MESSAGE),根本不进 reduce/world。
+    world, sh, conn, tasks = await _run_one_frame('{"type":"room_chat","text":"   "}')
+    try:
+        assert ErrorMessage.model_validate_json(_non_snapshot(conn.ws.sent)).code.value == "INVALID_MESSAGE"
+    finally:
+        await _shutdown(tasks)
+
+
+async def test_room_chat_too_long_frame_rejected_through_pipeline():
+    # 超长帧端到端走 run_receiver → 防护拒 → outbound → Sender,回 MESSAGE_TOO_LONG。
+    over = "x" * 600  # > ROOM_CHAT_MAX_TEXT_LEN(500)
+    world, sh, conn, tasks = await _run_one_frame(f'{{"type":"room_chat","text":"{over}"}}')
+    try:
+        assert ErrorMessage.model_validate_json(_non_snapshot(conn.ws.sent)).code.value == "MESSAGE_TOO_LONG"
     finally:
         await _shutdown(tasks)
 

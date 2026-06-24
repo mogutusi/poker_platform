@@ -4,13 +4,14 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 import pydantic
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
-from app.core.commands import Command, Connect, Disconnect, JoinRoom
+from app.core.commands import Command, Connect, Disconnect, JoinRoom, RoomChat
 from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
@@ -70,8 +71,29 @@ async def _frame_to_command(
         return None
     if isinstance(msg, wire_client.JoinRoom):
         return await _build_join(conn, msg, sessionmaker)  # JoinRoom 需读 DB 富化 uid/loaded(见 changes/0030)
+    if isinstance(msg, wire_client.RoomChat):
+        return _guard_room_chat(conn, msg)  # 房聊进 reduce 前过文本防护 + 限速(见 changes/0033 / messaging.md)
     # 身份盖 origin=会话 nick(不信报文);墙钟 now 由 shell 盖(core 不读钟,仅 StartHand 用,见 wire/client）。
     return wire_client.to_command(msg, origin=conn.nick, now=datetime.now(timezone.utc))
+
+
+def _guard_room_chat(conn: Connection, msg: wire_client.RoomChat) -> Command | None:
+    # 房聊进 reduce 前防护(messaging.md 契约 4):空/超长内容**先**拒(根本不到 GameLoop,故不耗令牌),
+    # 内容合法**再**过令牌桶限速。失败 → 回 Err 投本连接 outbound + return None(不进 inbox);过则构 RoomChat(身份盖连接 nick)。
+    if not msg.text.strip():  # 非空(strip 后判据):空 / 纯空白拒
+        conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INVALID_MESSAGE, "房聊文本不能为空")))
+        return None
+    if len(msg.text) > gameconfig.ROOM_CHAT_MAX_TEXT_LEN:  # 超长(按原文长度 = 即将广播的串)
+        conn.outbound.put_nowait(
+            ErrorMessage.from_err(
+                Err(ErrorCode.MESSAGE_TOO_LONG, f"房聊文本超 {gameconfig.ROOM_CHAT_MAX_TEXT_LEN} 字符上限")
+            )
+        )
+        return None
+    if conn.chat_bucket is None or not conn.chat_bucket.try_consume(time.monotonic()):  # 内容合法才耗令牌
+        conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.RATE_LIMITED, "房聊发送过频,请稍候")))
+        return None
+    return RoomChat(origin=conn.nick, text=msg.text)  # 广播原文,不改用户内容
 
 
 async def _build_join(

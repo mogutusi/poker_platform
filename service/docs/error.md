@@ -23,6 +23,7 @@ def reduce(work, cmd) -> tuple[list[Event], Err | None]:
 |---|---|---|---|
 | **业务校验失败**(可预期) | 非你回合、积分不足、状态非法 | `reduce` 内 | `return [], Err(code, detail)`;GameLoop 丢弃工作副本 + 回发发起人 |
 | **协议/解析错误** | 消息格式非法、字段缺失 | Receiver 层 | 没形成合法 `Command`,**不进 reduce**;直接构造 `ErrorMessage(INVALID_MESSAGE)` 投该连接 Sender 队列 |
+| **文本/滥用防护**(可预期) | 房聊空文本 / 超长 / 刷屏 | Receiver 层 | 进 reduce 前拦(`INVALID_MESSAGE`/`MESSAGE_TOO_LONG`/`RATE_LIMITED`),回发该连接、不占 GameLoop(见 [messaging.md](messaging.md) / changes/0033)|
 | **未预期异常**(bug) | 越界、空指针 | `reduce` 内意外抛出 | GameLoop 接住 → 丢弃工作副本 → 以 `Err(INTERNAL)` 回发 + 落日志 |
 
 ## 数据结构(三层)
@@ -40,7 +41,7 @@ class ErrorCode(str, Enum):
     INTERNAL = "INTERNAL"
     # …随业务补充;后续做成配置。**权威清单以 app/core/errors.py 的 ErrorCode 为准**,本块是示意
     # (实现已含 NOT_IN_ROOM/SEAT_TAKEN/NOT_YOUR_SEAT/INVALID_STATUS_TRANSITION/HAND_IN_PROGRESS/
-    #  ILLEGAL_ACTION/NOT_ENOUGH_PLAYERS/NO_VOTE_IN_PROGRESS/NOT_A_VOTER/CANNOT_OPEN_VOTE/INVALID_BUY_IN/INVALID_MESSAGE 等)
+    #  ILLEGAL_ACTION/NOT_ENOUGH_PLAYERS/NO_VOTE_IN_PROGRESS/NOT_A_VOTER/CANNOT_OPEN_VOTE/INVALID_BUY_IN/INVALID_MESSAGE/MESSAGE_TOO_LONG/RATE_LIMITED 等)
 
 # ② Err —— 纯错误值:「出了什么错」,不含收件人。core↔GameLoop 间传递,不进队列
 @dataclass(frozen=True)

@@ -14,6 +14,11 @@ INBOX_MAX: int = 1024  # GameLoop inbox 上限;满 = GameLoop 卡死(进程级 b
 OUTBOUND_MAX: int = 256  # 每连接 outbound 上限;满 = 慢客户端,丢连接 + Disconnect(不阻塞 GameLoop)
 ERROR_DETAIL_MAX_LEN: int = 200  # 回发 ErrorMessage.detail 的最大字符数(截断 Pydantic 校验错误文本)
 
+# ── 房聊文本防护 / 限速(见 messaging.md;shell 进 reduce 前防护;P8 接 poker.env + bounds)──
+ROOM_CHAT_MAX_TEXT_LEN: int = 500  # 房聊单条正文最大字符数;超则 Receiver 拒(MESSAGE_TOO_LONG)
+ROOM_CHAT_RATE_BURST: float = 5.0  # 令牌桶容量(突发上限):静默后最多连发几条
+ROOM_CHAT_RATE_PER_SEC: float = 1.0  # 令牌桶稳态补充速率(每秒令牌数 = 每秒可发条数)
+
 # ── 日志(见 log.md;P8 接 poker.env + bounds)──
 LOG_LEVEL: str = "INFO"  # root 级别:DEBUG=全量审计(开发/排障)/ INFO=业务里程碑 / WARNING+=异常路径
 LOG_FORMAT: str = "console"  # "json"=结构化一行一条(生产,jq 过滤)/ "console"=人类友好单行(本地)

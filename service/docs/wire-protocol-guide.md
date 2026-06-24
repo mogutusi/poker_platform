@@ -32,14 +32,14 @@
 
 | `type` | 字段 | 语义 |
 |---|---|---|
-| `join_room` | `room` | 从大厅进某房(观战);后端按你的连接身份**读 DB 富化** `uid`/积分,回 `user_joined` 广播 + 私发 `state_snapshot`。失败 `error`(`no_such_room`/`already_in_room`) |
+| `join_room` | `room` | 从大厅进某房(观战);后端按你的连接身份**读 DB 富化** `uid`/积分,回 `user_joined` 广播 + 私发 `state_snapshot`。失败 `error`(`NO_SUCH_ROOM`/`ALREADY_IN_ROOM`)|
 | `sit_down` | `seat, wait_for_big_blind?` | 观战 → 入座该座位;`wait_for_big_blind=true`=等大盲免费入局,缺省 `false`=付盲即玩(见 rules.md ①) |
 | `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
 | `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
 | `start_hand` | `seat` | 开新一手(房内 ≥2 人 ready 时) |
 | `player_action` | `action, bet_amount?` | `fold` / `check` / `bet`;**`bet` 时 `bet_amount`=本街目标总额** |
 | `leave_room` | — | 退房(局中则自动弃牌,手尾结算后离座) |
-| `room_chat` | `text` | 房间聊天(广播给全房,含观战者);非空/长度由后端文本防护把关 |
+| `room_chat` | `text` | 房间聊天(广播给全房,含观战者);后端文本防护把关:空→`error(INVALID_MESSAGE)`、超长→`error(MESSAGE_TOO_LONG)`、刷屏→`error(RATE_LIMITED)`(见 0033)|
 | `open_free_entry_vote` | — | 为当前新玩家开一次免盲投票(有新人 + 有合格投票人时;否则回 `error`) |
 | `vote_free_entry` | `approve` | 对免盲投票表态;**全体投票人 approve 才免**、任一 `false` 即失败 |
 

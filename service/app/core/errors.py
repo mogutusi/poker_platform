@@ -22,7 +22,9 @@ class ErrorCode(StrEnum):
     NO_VOTE_IN_PROGRESS = "NO_VOTE_IN_PROGRESS"  # VoteFreeEntry 时无进行中投票
     NOT_A_VOTER = "NOT_A_VOTER"  # 非合格投票人却投票
     CANNOT_OPEN_VOTE = "CANNOT_OPEN_VOTE"  # OpenFreeEntryVote 时无 new_here 候选或无合格投票人(rules.md ①)
-    INVALID_MESSAGE = "INVALID_MESSAGE"  # 帧非法 JSON / 未知 type / 字段不合法;Receiver 解析层直接回发(见 error.md)
+    INVALID_MESSAGE = "INVALID_MESSAGE"  # 帧非法 JSON / 未知 type / 字段不合法(含房聊空文本);Receiver 解析/防护层直接回发(见 error.md)
+    MESSAGE_TOO_LONG = "MESSAGE_TOO_LONG"  # 房聊文本超 ROOM_CHAT_MAX_TEXT_LEN;Receiver 文本防护拒(messaging.md)
+    RATE_LIMITED = "RATE_LIMITED"  # 发送过频被令牌桶限速;Receiver 防护拒(messaging.md 契约 4)
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,7 +20,7 @@
 - **派发**:dispatch 按 `world.rooms[room].users_in_room` 发给全房(含观战者),OFFLINE 跳过(见 [connection.md](connection.md))。
 - **读写性质**:房聊是**只读命令**(不改 world),可走 [storage.md](storage.md) 的 `uRead` 只读路径、免深拷;即便走默认深拷也无害(产出 events、commit 一个内容相同的副本),本规模随意。
 - **顺序**:经 GameLoop 串行,所以房聊与牌局事件**有确定全局顺序**,各客户端看到的次序一致(房聊走 reduce 的额外好处)。
-- **文本防护 + 限速**:在 **shell**(Receiver 收到 `RoomChat` 先做文本校验「非空 + `text ≤ ROOM_CHAT_MAX_TEXT_LEN`」+ 过令牌桶,超了直接丢 + 回 `Err`),**不让刷屏 / 超长文本占 GameLoop**;阈值进 [config.md](config.md)。非空/长度与限速同属「文本/滥用防护」,集中在进 reduce 之前一处,reduce 不重复校验(随 shell 硬化落地;当前 reduce 已只读、shell 防护待补)。
+- **文本防护 + 限速(已落地,[changes/0033](refactor/changes/0033-room-chat-text-guard.md))**:在 **shell**(Receiver `_guard_room_chat` 收到 `RoomChat` 先做文本校验「非空(strip 后)→ `INVALID_MESSAGE`;`text ≤ ROOM_CHAT_MAX_TEXT_LEN` → 超则 `MESSAGE_TOO_LONG`」+ 过**令牌桶**(每连接 `chat_bucket`,见 [ratelimit](../app/shell/ratelimit.py))→ `RATE_LIMITED`,超了直接丢 + 回 `Err`,**不让刷屏 / 超长文本占 GameLoop**),阈值进 [config.md](config.md)(`ROOM_CHAT_MAX_TEXT_LEN`/`ROOM_CHAT_RATE_BURST`/`ROOM_CHAT_RATE_PER_SEC`,现 dev 常量、P8 env 化)。**校验序**:内容(空/长)先拒(根本不到 GameLoop、不耗令牌),内容合法**再**过桶。`_room_chat` reduce 保持只读、不重复校验(0021 决策)。令牌桶挂连接 ⇒ 重连/顶替起新连接桶重置(v1 接受,见 [changes/0033](refactor/changes/0033-room-chat-text-guard.md) 决策 3)。
 
 ## 私聊(shell 路由,不进 GameLoop)
 

@@ -119,6 +119,8 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
         case PlayerAction():
             return commands.PlayerAction(origin=origin, action=msg.action, bet_amount=msg.bet_amount)
         case RoomChat():
+            # 纯映射;实际收发路径里 Receiver 先在 `_guard_room_chat` 拦 RoomChat 做文本防护 + 限速(0033),
+            # 不经此分支。保留作通用映射 + 协议直测;reduce `_room_chat` 仍只读、不重校验文本(0021)。
             return commands.RoomChat(origin=origin, text=msg.text)
         case OpenFreeEntryVote():
             return commands.OpenFreeEntryVote(origin=origin)
