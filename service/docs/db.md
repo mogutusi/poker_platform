@@ -11,7 +11,7 @@
 
 | 类别 | 语义 | 例子 | 落库 | 能否覆盖 | 键 |
 |---|---|---|---|---|---|
-| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` | UPSERT by 主键 | **可覆盖**(同键只留最新) | `(table, pk)` |
+| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` | 定向 UPDATE by 主键(只盖 Write 携带列) | **可覆盖**(同键只留最新) | `(table, pk)` |
 | **事件写**(append-write) | 「发生过一件事」 | 手牌记录 + 参与者 | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
 
 判据:**描述「实体当前状态」(可覆盖)还是「一次已发生的事实」(必追加)?** 拿不准默认归事件写——覆盖一个本该追加的实体会**静默丢数据**,代价远高于多落几条。
@@ -50,7 +50,7 @@ async def flush_once(self) -> bool:          # 抽出供直测(同 timer.tick)
     if self._buf.is_empty(): return False
     dirty, appends = self._buf.swap()        # 先 swap 同步取走清空(双缓冲),再 await
     try:
-        await self._persister.flush(dirty, appends)   # OrmPersister:一批一短事务 merge/add + commit
+        await self._persister.flush(dirty, appends)   # OrmPersister:一批一短事务 UPDATE(状态写)/INSERT(事件写)+ commit
     except asyncio.CancelledError:           # 关闭取消落在 flush 半途 → 先回灌再 re-raise,由 drain 补落(不丢)
         self._buf.requeue(dirty, appends); raise
     except Exception:                        # 失败:未达毒丸则整批回灌、达阈值则丢批
@@ -64,6 +64,8 @@ async def flush_once(self) -> bool:          # 抽出供直测(同 timer.tick)
 ```
 
 > **0025 偏离(已对齐代码)**:db.md 早先伪码把 `to_orm` + `session.merge/add/commit` 内联在 `run()`;0025 把落库后端抽成 `Persister` 协议(`flush_once` 只调 `persister.flush`),使 PersistWriter 控制流脱真 DB、纯 fake 可测;`to_orm`+session 成为 P4 三 `OrmPersister.flush` 的实现体(dev 用 `NullPersister` 丢弃)。并加 `CancelledError` 回灌守关闭半途丢批 + drain 节流(见下「优雅关闭」)。
+
+> **0028 落地(`OrmPersister` 写路径,已对齐代码)**:`to_orm` + `OrmPersister` + async engine/session 落在 **[app/db/](../app/db/)**(`orm_persister.py` / `engine.py`),**不在** `shell/persist.py`——保持 `persist.py` 纯 asyncio、SQLAlchemy-free(0025 抽 `Persister` 协议的初衷);`OrmPersister` 靠结构化协议满足 `Persister`,只 import `core.records`+`db.models`+sqlalchemy、**不 import shell**(见 [changes/0028](refactor/changes/0028-p4-orm-persister.md))。落库语义两处细化(对齐下文「失败与重试 / 事务分组」):**状态写=定向列 UPDATE**(`User` 有 `nickname` 等 `PointsWrite` 不拥有的列,整行 `merge` 会写 NULL ⇒ 只 `UPDATE ... SET points WHERE id=uid`;内存权威+载入一次保证行已存在);**事件写幂等=单写者下 `SELECT by dedupe_key` 再 INSERT**(唯一写者无并发竞争 ⇒ race-free 且跨方言,免 `ON CONFLICT` 的 sqlite/pg 二分;unique 索引兜底)。**dev/测试 async driver=`aiosqlite`**(`make_engine` 给 sqlite 装 `PRAGMA foreign_keys=ON` 使其与 postgres 一致强制 FK);postgres 走现有 `psycopg`。**`OrmPersister` 接进 lifespan 替 `NullPersister` + 种子/载入 dev 用户 = 0029**。
 
 **为什么周期而非「来一条写一条」**:给覆盖一个窗口。立即消费则窗口为零、覆盖退化成 FIFO。`DB_FLUSH_INTERVAL_MS` 是「同实体多次变更合并的时间窗」,也是「积分落库最多滞后多久 / 崩溃窗口」——积分非货币,可放宽。可选增强:条目超 `DB_FLUSH_MAX_BATCH` 提前 flush(0025 未做)。
 
@@ -79,7 +81,7 @@ def requeue(self, dirty, appends) -> None:
 
 - **状态写回灌用 `setdefault`(更新者优先)**:这是覆盖语义下唯一的正确性要点——回灌的是上一批的旧值,若期间 GameLoop 又写了更新值,**必须保留更新的**,否则旧值盖新值 = 把内存权威最新状态写错。
 - **覆盖红利**:重试不必记「重试到第几条 / 累计多少增量」,状态写永远只关心当前值,回灌后下周期再 UPSERT,天然幂等。
-- **事件写幂等**:每批一个事务,失败整批回滚、什么都没落,原样放回重 INSERT 不会重复。`dedupe_key` 是额外保险(防"commit 成功但进程在记账前崩"),落库用 `INSERT ... ON CONFLICT (dedupe_key) DO NOTHING`。
+- **事件写幂等**:每批一个事务,失败整批回滚、什么都没落,原样放回重 INSERT 不会重复。`dedupe_key` 是额外保险(防"commit 成功但进程在记账前崩")——**全进程唯一写者**下落库用 `SELECT by dedupe_key` 在不在、不在才 INSERT(race-free、跨方言;`dedupe_key` unique 索引兜底真撞 → IntegrityError → 整批回滚 + 下批 SELECT 见即跳)。`INSERT ... ON CONFLICT (dedupe_key) DO NOTHING` 是要 DB 层强制时的等价替代(0028 落地用 SELECT-then-INSERT)。
 - **毒丸(永久失败)**:同一批连续失败**达** `DB_WRITE_MAX_RETRY` 次(`fail_streak >= 阈值`)→ 落 CRITICAL、丢批(别卡死后续),留人工介入。这是 bug 信号。
 
 ## 事务分组 & session
@@ -117,7 +119,7 @@ class PointsWrite(BaseModel):
 class HandRecordWrite(BaseModel):
     dedupe_key: str       # = f"{room}:{hand.seq}",由 core 生成(见 core.md「手牌标识」)
     start_time: datetime  # core 携带(开局时 shell 经 StartHand 带入的墙钟值)
-    end_time: datetime    # core 留空 → shell 在派发本 Persist 时盖墙钟(core 不读时钟)
+    end_time: datetime | None  # core 产出时为 None(不读时钟)→ shell 在 dispatch 派发本 Persist 时盖墙钟(落库前必非 None)
     final_pot: int
     participants: list[ParticipantWrite]   # 每个含 uid / initial_points / final_points(uid = 不可变 User.id)
 

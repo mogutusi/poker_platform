@@ -30,4 +30,4 @@ class HandRecordWrite(PersistPayload):
     start_time: datetime  # 开局墙钟(shell 经 StartHand 带入,core 只携带、不读时钟)
     final_pot: int  # 本手各子池金额之和(不含退还的未叫注)
     participants: tuple[ParticipantWrite, ...]  # 每个在局玩家的 uid + 初始/最终筹码;不含底牌
-    # 注:end_time 不在此——由 shell 派发本 Persist 时盖墙钟(core 不读时钟,见 db.md)。
+    end_time: datetime | None = None  # 手结束墙钟;core 留 None(不读钟),shell 在 dispatch 盖(见 db.md / changes/0028)

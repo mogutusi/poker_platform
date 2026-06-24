@@ -46,5 +46,6 @@
 ## 待办 / 下一步
 
 - **P4(三之二)运行时**:`to_orm` + `OrmPersister`(async session + UPSERT/INSERT + dedupe ON CONFLICT)+ async engine + lifespan 接真 session + 载入(Receiver 读 DB)+ aiosqlite 测试。**前置**:先做下面「原型拆除」(否则 `OrmPersister` 导 `app.db.models` 与原型模型同进程冲突,见自 review)。
+  - **后续落地修正**:[0027](0027-prototype-teardown.md) 已做原型拆除;[0028](0028-p4-orm-persister.md) 落地写路径时把此处「UPSERT/merge + ON CONFLICT」**改为定向 `UPDATE points`(User 有 nickname 等 Write 不拥有的列)+ 单写者下 `SELECT-by-dedupe_key` 再 INSERT**(最终设计以 0028 / db.md 为准)。lifespan 接真 session + 载入留 0029。
 - **原型拆除**(独立改,P4 三之二前必做):删 `app/user`/`app/handrecord`/`app/auth` 原型模型/路由 + `app/main.py`/`app/init.py`,统一到新 `app/db` + shell;或给 `app/db` 独立 `MetaData`/`registry` 隔离。
 - 配置收编(P8):`DATABASE_URL` 进 `app/config`(接 `.env`)+ `poker.env`;本篇 env.py 暂直读 `os.environ`。

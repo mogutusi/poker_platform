@@ -1,0 +1,80 @@
+# Persister 真实现(P4 三之二):to_orm(delayDB Write 载荷 → ORM)+ OrmPersister(async session 落库)。
+# 落库语义见 db.md「两类写 / 事务分组」:状态写=定向列 UPDATE(只盖 Write 携带的列)、事件写=幂等 INSERT。
+# 不 import shell:靠结构化协议(duck typing)满足 shell/persist.py 的 Persister;只 import core.records + db.models + sqlalchemy。
+
+import logging
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.core.events import PersistPayload
+from app.core.records import HandRecordWrite, PointsWrite
+from app.db.models import HandParticipant, HandRecord, User
+
+log = logging.getLogger(__name__)
+
+# StateKey 与 shell/persist.py 同义(= 状态写覆盖键),此处内联其结构以免 app/db import shell(守分层)。
+StateKey = tuple[str, ...]
+
+
+class OrmPersister:
+    # delayDB 落库后端:PersistWriter 周期把一批写交本类的 flush。全进程唯一 DB 写者 ⇒ 无行锁、无并发竞争。
+    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+        self._sessionmaker = sessionmaker
+
+    async def flush(
+        self, dirty: dict[StateKey, PersistPayload], appends: list[PersistPayload]
+    ) -> None:
+        # 一批一个短事务:状态写 + 事件写同事务;任意一步抛(IntegrityError / 取消)整批回滚 → PersistWriter 回灌重试。
+        # 重试幂等安全:状态写是覆盖式 UPDATE、事件写靠 dedupe_key SELECT 去重(见下)。
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                for payload in dirty.values():
+                    await self._apply_state_write(session, payload)
+                for payload in appends:
+                    await self._apply_event_write(session, payload)
+
+    async def _apply_state_write(self, session: AsyncSession, payload: PersistPayload) -> None:
+        match payload:
+            case PointsWrite(uid=uid, points=points):
+                # 定向 UPDATE:只盖 points 列,绝不碰 nickname 等 PointsWrite 不拥有的列(否则 merge 会把 nickname 写 NULL)。
+                # 内存权威 + 载入一次 ⇒ 写积分时 user 行必已存在;行不存在则 0 命中、无害(dev 未种子时如此)。
+                await session.execute(update(User).where(User.id == uid).values(points=points))
+            case _:
+                log.warning("OrmPersister 未知状态写 %s,跳过", type(payload).__name__)
+
+    async def _apply_event_write(self, session: AsyncSession, payload: PersistPayload) -> None:
+        match payload:
+            case HandRecordWrite():
+                await self._insert_hand_record(session, payload)
+            case _:
+                log.warning("OrmPersister 未知事件写 %s,跳过", type(payload).__name__)
+
+    async def _insert_hand_record(self, session: AsyncSession, payload: HandRecordWrite) -> None:
+        # 幂等:全进程唯一写者 ⇒ 先查 dedupe_key 在不在、不在才插,无并发竞争(race-free)、跨方言(免 sqlite/pg 的 ON CONFLICT 二分)。
+        # dedupe_key 的 unique 索引仍是兜底:真撞 → IntegrityError → 整批回滚,下批 SELECT 即见、跳过。
+        existing = await session.scalar(
+            select(HandRecord.id).where(HandRecord.dedupe_key == payload.dedupe_key)
+        )
+        if existing is not None:
+            return  # 已落过(崩溃后重放 / drain 重试),整单跳过
+        if payload.end_time is None:
+            # 契约:end_time 由 shell 在 dispatch 盖墙钟(见 db.md / changes/0028 决策 4);到此仍 None = 调用方违约。
+            raise ValueError(f"HandRecordWrite.end_time 未盖戳(dedupe_key={payload.dedupe_key})")
+        record = HandRecord(
+            dedupe_key=payload.dedupe_key,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            final_pot=payload.final_pot,
+        )
+        session.add(record)
+        await session.flush()  # flush 取自增 record.id,供参与者 FK 引用(同事务,未 commit)
+        for part in payload.participants:
+            session.add(
+                HandParticipant(
+                    hand_id=record.id,
+                    uid=part.uid,
+                    initial_points=part.initial_points,
+                    final_points=part.final_points,
+                )
+            )

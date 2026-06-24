@@ -72,7 +72,7 @@ service/app/
     receiver.py          # ws handler:握手鉴权→收帧验解→Command→inbox
     sender.py            # per-connection 出站:加密成帧→ws.send,严格保序
     timer.py             # 行动倒计时(room 键) + 保活(nick 键)
-    persist.py           # delayDB:WriteBuffer + PersistWriter + to_orm
+    persist.py           # delayDB:WriteBuffer + PersistWriter + Persister 协议(to_orm/OrmPersister/engine 落 db/,见 0028)
     lifespan.py          # 启动正序 / 关闭反序 drain
   wire/                  # Pydantic ClientMessage/ServerMessage(单一事实源)+ codegen 脚本
   db/                    # SQLModel:User/HandRecord…(对齐 *Write)+ Alembic

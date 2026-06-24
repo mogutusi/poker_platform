@@ -3,17 +3,25 @@
 
 import asyncio
 import logging
+from dataclasses import replace
+from datetime import datetime, timezone
+from typing import Callable
 
 from app.core.commands import Command, Disconnect
 from app.core.domain import World
 from app.core.errors import Err
 from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
+from app.core.records import HandRecordWrite
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.persist import WriteBuffer
 from app.shell.timer import Timer
 from app.wire.server import ErrorMessage, ServerMessage
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Dispatcher:
@@ -24,12 +32,15 @@ class Dispatcher:
         persist: WriteBuffer,
         timer: Timer,
         inbox: "asyncio.Queue[Command]",
+        *,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self.world = world
         self.conns = conns
         self.persist = persist
         self.timer = timer
         self.inbox = inbox
+        self._now = now or _utcnow  # 盖 end_time 用的墙钟;可注入供测试定值(core 不读钟,墙钟只在 shell)
 
     def dispatch(self, ev: Event) -> None:
         match ev:
@@ -46,6 +57,9 @@ class Dispatcher:
                 if conn is not None:
                     self._enqueue(conn, m)
             case Persist(payload=p):
+                # 手牌记录的 end_time 由 shell 在派发本 Persist 时盖墙钟(≈手结束时刻,非 flush 时刻;core 不读钟,见 db.md)。
+                if isinstance(p, HandRecordWrite) and p.end_time is None:
+                    p = replace(p, end_time=self._now())
                 self.persist.put(p)
             case TurnChanged(room=r, acting_nick=n, epoch=e):  # B 组:同步调 Timer(倒计时长 Timer 自取配置)
                 self.timer.on_turn_changed(r, n, e)

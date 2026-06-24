@@ -58,6 +58,24 @@ def test_persist_goes_to_buffer():
     sh = Shell(_world())
     sh.dispatcher.dispatch(Persist(payload=PointsWrite(uid=1, points=400)))
     assert len(sh.persist) == 1
+    assert sh.persist.snapshot()[0] == PointsWrite(uid=1, points=400)  # 非手牌记录不盖戳,原样入缓冲
+
+
+def test_persist_hand_record_stamps_end_time():
+    # 手牌记录的 end_time core 留 None,shell 在 dispatch 盖墙钟(注入定值时钟验确切值)。
+    from datetime import datetime, timezone
+
+    from app.core.records import HandRecordWrite
+    from app.shell.dispatch import Dispatcher
+
+    world = _world()
+    sh = Shell(world)
+    t = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    d = Dispatcher(world, sh.conns, sh.persist, sh.timer, sh.inbox, now=lambda: t)
+    d.dispatch(Persist(payload=HandRecordWrite(dedupe_key="r1:1", start_time=t, final_pot=0, participants=())))
+    buffered = sh.persist.snapshot()
+    assert len(buffered) == 1
+    assert buffered[0].end_time == t  # shell 盖了手结束墙钟
 
 
 def test_turn_changed_and_clear_action_drive_timer(monkeypatch):
