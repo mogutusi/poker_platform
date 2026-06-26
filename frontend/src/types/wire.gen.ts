@@ -153,6 +153,12 @@ export interface ChatMessage {
   text: string;
 }
 
+export interface RoomChatHistory {
+  type: "room_chat_history";
+  room: string;
+  messages: ChatMessage[];
+}
+
 export interface FreeEntryVoteUpdated {
   type: "free_entry_vote_updated";
   candidates: string[];
@@ -226,6 +232,11 @@ export interface JoinRoom {
   room: string;
 }
 
+export interface FetchRoomChat {
+  type: "fetch_room_chat";
+  room: string;
+}
+
 // ── discriminated unions ──
 
 export type ServerMessage =
@@ -241,6 +252,7 @@ export type ServerMessage =
   | PlayerBoughtIn
   | StateSnapshot
   | ChatMessage
+  | RoomChatHistory
   | FreeEntryVoteUpdated
   | FreeEntryVoteClosed
   | ErrorMessage;
@@ -255,7 +267,8 @@ export type ClientMessage =
   | RoomChat
   | OpenFreeEntryVote
   | VoteFreeEntry
-  | JoinRoom;
+  | JoinRoom
+  | FetchRoomChat;
 
 // ── emoji catalog (chat render; backend passthrough, see messaging.md / changes/0034) ──
 

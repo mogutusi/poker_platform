@@ -15,10 +15,11 @@ from app.core.commands import Command, Connect, Disconnect, JoinRoom, RoomChat
 from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
+from app.shell.history import RoomChatBuffer
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
 from app.wire import client as wire_client
-from app.wire.server import ErrorMessage
+from app.wire.server import ErrorMessage, RoomChatHistory
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ async def run_receiver(
     inbox: "asyncio.Queue[Command]",
     timer: Timer,
     sessionmaker: async_sessionmaker[AsyncSession],
+    history: RoomChatBuffer,
 ) -> None:
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
     if old is not None:
@@ -42,7 +44,7 @@ async def run_receiver(
         while True:
             raw = await conn.ws.receive_text()  # 让出点
             timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick)
-            cmd = await _frame_to_command(conn, raw, sessionmaker)
+            cmd = await _frame_to_command(conn, raw, sessionmaker, history)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -60,7 +62,7 @@ async def run_receiver(
 
 
 async def _frame_to_command(
-    conn: Connection, raw: str, sessionmaker: async_sessionmaker[AsyncSession]
+    conn: Connection, raw: str, sessionmaker: async_sessionmaker[AsyncSession], history: RoomChatBuffer
 ) -> Command | None:
     # 明文帧 → Command:解析失败(非法 JSON / 未知 type / 字段不合法)直接回发 ErrorMessage(error.md),不进 reduce。
     try:
@@ -73,6 +75,9 @@ async def _frame_to_command(
         return await _build_join(conn, msg, sessionmaker)  # JoinRoom 需读 DB 富化 uid/loaded(见 changes/0030)
     if isinstance(msg, wire_client.RoomChat):
         return _guard_room_chat(conn, msg)  # 房聊进 reduce 前过文本防护 + 限速(见 changes/0033 / messaging.md)
+    if isinstance(msg, wire_client.FetchRoomChat):
+        _serve_room_chat_history(conn, msg, history)  # 房聊历史 shell 直服务(读环形缓冲回 outbound,见 changes/0036)
+        return None
     # 身份盖 origin=会话 nick(不信报文);墙钟 now 由 shell 盖(core 不读钟,仅 StartHand 用,见 wire/client）。
     return wire_client.to_command(msg, origin=conn.nick, now=datetime.now(timezone.utc))
 
@@ -94,6 +99,12 @@ def _guard_room_chat(conn: Connection, msg: wire_client.RoomChat) -> Command | N
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.RATE_LIMITED, "房聊发送过频,请稍候")))
         return None
     return RoomChat(origin=conn.nick, text=msg.text)  # 广播原文,不改用户内容
+
+
+def _serve_room_chat_history(conn: Connection, msg: wire_client.FetchRoomChat, history: RoomChatBuffer) -> None:
+    # 房聊历史拉取(messaging.md §持久化 / changes/0036):shell 直服务、不进 GameLoop——读环形缓冲回该连接 outbound。
+    # 房名取自报文(shell 不读 world、无法解析当前房;同 JoinRoom 带 room)。历史是公开房聊、非敏感,v1 不校验成员资格。
+    conn.outbound.put_nowait(RoomChatHistory(room=msg.room, messages=history.recent(msg.room)))
 
 
 async def _build_join(

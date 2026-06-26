@@ -21,6 +21,7 @@ from app.db.orm_persister import OrmPersister
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
+from app.shell.history import RoomChatBuffer
 from app.shell.logsetup import setup_logging
 from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.receiver import run_receiver
@@ -67,6 +68,7 @@ class DevShell:
         # 接真 OrmPersister(替 NullPersister):周期 swap → 落 DB;stop 时 drain。
         self.persistwriter = PersistWriter(self.persist, OrmPersister(self.sessionmaker))
         self.timer = Timer(self.inbox)
+        self.history = RoomChatBuffer()  # 房聊环形缓冲:dispatch 写 / Receiver 的 FetchRoomChat 读
         # world 及其依赖(dispatcher/gameloop)在 setup() 从 DB 载入后建。
         self.world: World | None = None
         self.dispatcher: Dispatcher | None = None
@@ -78,7 +80,7 @@ class DevShell:
         await create_all(self.engine)
         await seed_dev_users(self.sessionmaker)
         self.world = build_dev_world()
-        self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox)
+        self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox, self.history)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
 
     def start(self) -> None:
@@ -130,7 +132,7 @@ def create_app() -> FastAPI:
             await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)
-        await run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker)
+        await run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history)
 
     return app
 

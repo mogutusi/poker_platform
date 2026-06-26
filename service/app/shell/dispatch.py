@@ -13,9 +13,10 @@ from app.core.errors import Err
 from app.core.events import Broadcast, ClearAction, Event, Personal, Persist, TurnChanged
 from app.core.records import HandRecordWrite
 from app.shell.connection import Connection, ConnectionManager
+from app.shell.history import RoomChatBuffer
 from app.shell.persist import WriteBuffer
 from app.shell.timer import Timer
-from app.wire.server import ErrorMessage, ServerMessage
+from app.wire.server import ChatMessage, ErrorMessage, ServerMessage
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class Dispatcher:
         persist: WriteBuffer,
         timer: Timer,
         inbox: "asyncio.Queue[Command]",
+        history: RoomChatBuffer,
         *,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -40,6 +42,7 @@ class Dispatcher:
         self.persist = persist
         self.timer = timer
         self.inbox = inbox
+        self.history = history  # 房聊环形缓冲(写者:本 dispatch;读者:Receiver 的 FetchRoomChat,见 history.py)
         self._now = now or _utcnow  # 盖 end_time 用的墙钟;可注入供测试定值(core 不读钟,墙钟只在 shell)
 
     def dispatch(self, ev: Event) -> None:
@@ -52,6 +55,8 @@ class Dispatcher:
                     conn = self.conns.get(nick)
                     if conn is not None:
                         self._enqueue(conn, m)
+                if isinstance(m, ChatMessage):  # 房聊广播 → 入环形缓冲(进/重进房经 FetchRoomChat 拉,见 messaging.md)
+                    self.history.append(r, m)
             case Personal(nick=n, msg=m):  # 底牌 / StateSnapshot / 离开者回执,按 nick 私发
                 conn = self.conns.get(n)
                 if conn is not None:

@@ -11,7 +11,7 @@ from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.shell.connection import Connection
 from app.shell.receiver import run_receiver
-from app.wire.server import ChatMessage, ErrorMessage, StateSnapshot, UserStatusChanged
+from app.wire.server import ChatMessage, ErrorMessage, RoomChatHistory, StateSnapshot, UserStatusChanged
 from tests.builders import make_world, room_with
 from tests.shell._fakes import FakeWS, Shell
 
@@ -64,7 +64,7 @@ async def _run_one_frame(frame: str):
     sh = Shell(world)
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm()))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history))
     await asyncio.sleep(0)  # 让 receiver 登记 + 起 sender + 投 Connect,停在 receive_text
     conn.ws.feed(frame)
     # alice 预置在房在线 → 初始 Connect 先回一帧 takeover StateSnapshot(0031);等「喂入帧的响应」=
@@ -105,6 +105,69 @@ async def test_room_chat_frame_passes_guard_and_broadcasts_chat_message():
         await _shutdown(tasks)
 
 
+async def test_fetch_room_chat_returns_recent_history_in_order():
+    # 端到端:连聊两句(广播 → 入环形缓冲)→ fetch_room_chat → shell 直服务回 RoomChatHistory(旧→新有序)。
+    world = _world()  # alice WATCHING in r1
+    sh = Shell(world)
+    gl = asyncio.create_task(sh.gameloop.run())
+    conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history))
+    await asyncio.sleep(0)
+    conn.ws.feed('{"type":"room_chat","text":"hello"}')  # → reduce → Broadcast(ChatMessage) → 入缓冲
+    conn.ws.feed('{"type":"room_chat","text":"world"}')
+    await _settle(lambda: sum('"type":"chat_message"' in s for s in conn.ws.sent) >= 2)  # 两条都已广播+入缓冲
+    conn.ws.feed('{"type":"fetch_room_chat","room":"r1"}')  # → shell 直服务(不进 GameLoop)
+    await _settle(lambda: any('"type":"room_chat_history"' in s for s in conn.ws.sent))
+    try:
+        hist = RoomChatHistory.model_validate_json(
+            next(s for s in conn.ws.sent if '"type":"room_chat_history"' in s)
+        )
+        assert hist.room == "r1"
+        # 旧→新有序(端到端穿 reduce→buffer→Sender),非只单条
+        assert tuple((m.from_nick, m.text) for m in hist.messages) == (("alice", "hello"), ("alice", "world"))
+    finally:
+        await _shutdown((rx, gl))
+
+
+async def test_fetch_room_chat_serves_room_not_a_member_of():
+    # v1 不校验成员资格(changes/0036 决策 5):alice 在 r1,却能拉到 r2 的历史(房聊公开非敏感)。
+    world = _world()  # alice WATCHING in r1(不在 r2)
+    sh = Shell(world)
+    sh.history.append("r2", ChatMessage(from_nick="bob", text="hi r2"))  # r2 已有历史,alice 非成员
+    gl = asyncio.create_task(sh.gameloop.run())
+    conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history))
+    await asyncio.sleep(0)
+    conn.ws.feed('{"type":"fetch_room_chat","room":"r2"}')  # 拉非自己房的历史
+    await _settle(lambda: any('"type":"room_chat_history"' in s for s in conn.ws.sent))
+    try:
+        hist = RoomChatHistory.model_validate_json(
+            next(s for s in conn.ws.sent if '"type":"room_chat_history"' in s)
+        )
+        assert hist.room == "r2" and tuple((m.from_nick, m.text) for m in hist.messages) == (("bob", "hi r2"),)
+    finally:
+        await _shutdown((rx, gl))
+
+
+async def test_fetch_room_chat_unknown_room_returns_empty():
+    # 拉无记录的房(从未聊过 / 不存在)→ 空历史(shell 不读 world,不校验房存在;benign 空回)。
+    world = _world()
+    sh = Shell(world)
+    gl = asyncio.create_task(sh.gameloop.run())
+    conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history))
+    await asyncio.sleep(0)
+    conn.ws.feed('{"type":"fetch_room_chat","room":"ghost"}')
+    await _settle(lambda: any('"type":"room_chat_history"' in s for s in conn.ws.sent))
+    try:
+        hist = RoomChatHistory.model_validate_json(
+            next(s for s in conn.ws.sent if '"type":"room_chat_history"' in s)
+        )
+        assert hist.room == "ghost" and hist.messages == ()
+    finally:
+        await _shutdown((rx, gl))
+
+
 async def test_room_chat_empty_frame_rejected_in_guard_before_reduce():
     # 空文本帧被 Receiver 文本防护拦下(回 INVALID_MESSAGE),根本不进 reduce/world。
     world, sh, conn, tasks = await _run_one_frame('{"type":"room_chat","text":"   "}')
@@ -142,7 +205,7 @@ async def test_join_room_frame_loads_user_from_db():
     sm = await _seeded_sm({"alice": (7, 888)})  # DB 里 alice uid=7 points=888
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await asyncio.sleep(0)  # 登记 + 投 Connect(大厅 no-op)
     conn.ws.feed('{"type":"join_room","room":"dev"}')
     await _settle(lambda: "alice" in world.users)
@@ -162,7 +225,7 @@ async def test_join_room_unknown_user_errors_internal_keeps_conn():
     sm = await _seeded_sm({"bob": (2, 100)})
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await asyncio.sleep(0)
     conn.ws.feed('{"type":"join_room","room":"dev"}')
     await _settle(lambda: len(conn.ws.sent) >= 1)
@@ -181,7 +244,7 @@ async def test_join_room_db_error_errors_internal_keeps_conn():
     sm = _sm()  # 未 create_all:查 User 表即抛
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await asyncio.sleep(0)
     conn.ws.feed('{"type":"join_room","room":"dev"}')
     await _settle(lambda: len(conn.ws.sent) >= 1)
@@ -199,7 +262,7 @@ async def test_join_room_nonexistent_room_errors_to_origin():
     sm = await _seeded_sm({"alice": (1, 500)})
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await asyncio.sleep(0)
     conn.ws.feed('{"type":"join_room","room":"ghost"}')  # world 无 ghost 房
     await _settle(lambda: len(conn.ws.sent) >= 1)
@@ -217,7 +280,7 @@ async def test_join_room_twice_errors_already_in_room():
     sm = await _seeded_sm({"alice": (1, 500)})
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await asyncio.sleep(0)
     conn.ws.feed('{"type":"join_room","room":"dev"}')  # 第一次:成功装入
     await _settle(lambda: "alice" in world.users)
@@ -241,11 +304,11 @@ async def test_async_displacement_old_connection_exits_silently():
     sm = _sm()
     gl = asyncio.create_task(sh.gameloop.run())
     c1 = Connection.create(nick="alice", session_id="s1", ws=FakeWS())
-    rx1 = asyncio.create_task(run_receiver(c1, sh.conns, sh.inbox, sh.timer, sm))
+    rx1 = asyncio.create_task(run_receiver(c1, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await _settle(lambda: sh.conns.is_current(c1))
 
     c2 = Connection.create(nick="alice", session_id="s2", ws=FakeWS())
-    rx2 = asyncio.create_task(run_receiver(c2, sh.conns, sh.inbox, sh.timer, sm))
+    rx2 = asyncio.create_task(run_receiver(c2, sh.conns, sh.inbox, sh.timer, sm, sh.history))
     await _settle(lambda: sh.conns.is_current(c2) and c1.ws.closed and rx1.done())
     try:
         assert sh.conns.is_current(c2)  # 新连接上位

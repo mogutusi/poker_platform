@@ -19,6 +19,7 @@ from app.db.orm_persister import OrmPersister
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
+from app.shell.history import RoomChatBuffer
 from app.shell.lifespan import DevShell
 from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.receiver import run_receiver
@@ -94,7 +95,7 @@ async def test_e2e_connect_join_buy_through_dev_shell():
     gl = asyncio.create_task(shell.gameloop.run())  # 只起 gameloop(persistwriter 手动 flush 求确定性)
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
     rx = asyncio.create_task(
-        run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker)
+        run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history)
     )
     try:
         await asyncio.sleep(0)  # 登记 + 投 Connect(大厅 no-op,alice 尚不在 world)
@@ -158,7 +159,7 @@ def _harness(world, sm):
     # 最小真 shell 接线(OrmPersister 落 DB):gameloop 同步驱动 + writer.flush_once 手动落库。
     inbox: "asyncio.Queue" = asyncio.Queue()
     persist = WriteBuffer()
-    dispatcher = Dispatcher(world, ConnectionManager(), persist, Timer(inbox), inbox)
+    dispatcher = Dispatcher(world, ConnectionManager(), persist, Timer(inbox), inbox, RoomChatBuffer())
     gameloop = GameLoop(world, inbox, dispatcher)
     writer = PersistWriter(persist, OrmPersister(sm), flush_interval_s=0.001, drain_timeout_s=0.5)
     return gameloop, writer

@@ -157,6 +157,12 @@ class ChatMessage(ServerMessage):
     text: str  # 聊天正文;不含游戏隐私(hole_cards/deck),结构上无此字段(messaging.md 脱敏红线)
 
 
+class RoomChatHistory(ServerMessage):
+    type: Literal["room_chat_history"] = "room_chat_history"
+    room: str  # 历史所属房名(= 请求的房;客户端据它对号入座)
+    messages: tuple[ChatMessage, ...]  # 该房最近 N 条房聊(旧→新);shell 直发,不进 reduce(见 changes/0036)
+
+
 class FreeEntryVoteUpdated(ServerMessage):
     type: Literal["free_entry_vote_updated"] = "free_entry_vote_updated"
     candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
@@ -195,6 +201,7 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     PlayerBoughtIn,
     StateSnapshot,
     ChatMessage,
+    RoomChatHistory,
     FreeEntryVoteUpdated,
     FreeEntryVoteClosed,
     ErrorMessage,

@@ -74,6 +74,11 @@ class JoinRoom(ClientMessage):
     room: str  # 目标房名;uid/loaded 不进报文——Receiver 按连接 nick 读 DB 富化(见 changes/0030 决策 1)
 
 
+class FetchRoomChat(ClientMessage):
+    type: Literal["fetch_room_chat"] = "fetch_room_chat"
+    room: str  # 要拉历史的房名;shell 不读 world 无法解析当前房,故带房名(同 JoinRoom),走 shell 直服务(见 changes/0036)
+
+
 # codegen 注册表 + parse 可辨识联合的成员(scripts/gen_wire_ts.py 据此生成);新增报文须登记。
 CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
@@ -86,11 +91,12 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     OpenFreeEntryVote,
     VoteFreeEntry,
     JoinRoom,
+    FetchRoomChat,
 )
 
 _ClientMessageUnion = Annotated[
     Union[
-        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom
+        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat
     ],
     Field(discriminator="type"),
 ]
@@ -129,4 +135,7 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
         case JoinRoom():
             # JoinRoom 需 DB 富化 uid/loaded(身份/积分不进报文),由 Receiver 异步读 DB 构造,不经此(见 changes/0030 决策 1)。
             raise AssertionError("JoinRoom 须由 Receiver 经 DB 富化构造,不走 to_command")
+        case FetchRoomChat():
+            # FetchRoomChat 走 shell 直服务(读房聊环形缓冲回 outbound),不映射 Command、不进 reduce(见 changes/0036)。
+            raise AssertionError("FetchRoomChat 走 shell 路由,不走 to_command")
     raise AssertionError(f"unmapped client message: {type(msg).__name__}")  # 不可达:CLIENT_MESSAGES 穷尽

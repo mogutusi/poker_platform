@@ -54,14 +54,17 @@
 
 > 落定本篇的持久化决策(取代旧「待定·持久化 / 新进房看历史」)。一句话:**房聊只在内存留最近 N 条(不落库)、私信落库做「未读收件箱 + 完整已读回执」**。判据延续分两路那条——房聊是「此刻在场」的同步消息,离线即错过、阅后即焚足矣;私信点对点、天然异步,好友离线也得收到。
 
-### 房聊:shell 内存环形缓冲(不持久化)
+### 房聊:shell 内存环形缓冲(不持久化,已落地 [changes/0036](refactor/changes/0036-room-chat-history.md))
 
-- **存哪**:shell 持有 `room_chat: dict[room, deque(maxlen=ROOM_CHAT_HISTORY_SIZE)]`——每房一个定长环形缓冲,**只在内存,不进 world、不落库**。
+- **存哪**:shell [`RoomChatBuffer`](../app/shell/history.py) 持 `dict[room, deque(maxlen=ROOM_CHAT_HISTORY_SIZE)]`——每房一个定长环形缓冲,**只在内存,不进 world、不落库**。
 - **决策(可改)· 放 shell 不放 world**:这样 `RoomChat` 的 reduce 维持**只读**(只产 `Broadcast(ChatMessage)`、不改状态,见上「房间聊天」/[storage.md](storage.md))。备选「`chat_log` 放 `world.rooms[room]`」会让 RoomChat 变写命令、把非游戏状态塞进 core 域模型——否决。
-- **写入**:dispatch 派发 `Broadcast(room, msg)` 时,`msg` 是 `ChatMessage` 就 `room_chat[room].append(msg)`(一处 `isinstance`;RoomChat reduce 只产这一种 chat 广播)。次序由 GameLoop 串行保证。
-- **看历史(新进房 / 重连)**:客户端 (重)进房后发 `FetchRoomChat`(ws),**Receiver/shell 直接处理、不进 GameLoop**(同私聊走 shell 路由的理由),回 `Personal(RoomChatHistory{最近 N 条})`。决策(可改):拉取式比「dispatch 发 `StateSnapshot` 时自动附带」更解耦——shell 不必判断「这条快照是不是新进房触发」。
-- **清理**:房间销毁(最后一人离开)时随连接表 `del room_chat[room]`(或惰性:`FetchRoomChat` 见房已不在 `world.rooms` 即回空 + 删)。
-- **容量 / 崩溃**:`ROOM_CHAT_HISTORY_SIZE` 进 [config.md](config.md)(默认 50)。进程崩 → 缓冲全丢;房聊本就 ephemeral,接受([storage.md](storage.md) 崩溃语义)。
+- **写入**:dispatch 派发 `Broadcast(room, msg)` 时,`msg` 是 `ChatMessage` 就 `buffer.append(room, msg)`(一处 `isinstance`;RoomChat reduce 只产这一种 chat 广播)。次序由 GameLoop 串行保证;房已销毁(`rooms.get` 为 None)早退不入。
+- **看历史(新进房 / 重连)**:客户端 (重)进房后发 `FetchRoomChat{room}`(ws),**Receiver/shell 直接处理、不进 GameLoop**,**直接 enqueue `RoomChatHistory{room, messages}`** 到该连接 `outbound`(非 `Personal` 事件——同私聊 `DMDelivered` / Receiver 错误回执的直发路径)。决策(可改):拉取式比「dispatch 发 `StateSnapshot` 时自动附带」更解耦。
+  - **`room` 进报文(修订 0036)**:私聊只需 `conns.get(nick)`(shell 表),但房聊历史需目标房,而房在 `world.users[nick].room`(world 态)——**shell 协程不得读 world(不变量 2)**。故 `FetchRoomChat` 带房名(同 `JoinRoom`),shell 据报文房名直读缓冲,**不读 world、不进 GameLoop**。
+  - **v1 不校验成员资格**:跨房拉历史可接受——房聊是**公开非敏感**态(privacy 红线只护 hole_cards/deck)、≤20 内网、拉者本可进该房看。严格成员校验需走 reduce 解 world(本批不做,见 [changes/0036](refactor/changes/0036-room-chat-history.md) 决策 5)。
+- **跨协程共享安全**:dispatch(GameLoop 协程)写 / Receiver(自协程)读——单线程 asyncio 下两端皆无 `await` 同步访问、不中途交错(同 [timer.md](timer.md) dispatch 写 / Timer 读 `_action` 表)。`recent` 返回 tuple 快照。
+- **清理**:**v1 房静态预置([lobby.md](lobby.md))→ 不销毁 → 无需清理**;缓冲键于固定房集。动态建房(future)时由销毁处删(shell 不读 world,故由 reduce/GameLoop 侧信号触发,非惰性查 `world.rooms`)。
+- **容量 / 崩溃**:`ROOM_CHAT_HISTORY_SIZE` 进 [config.md](config.md)(默认 50;现 dev 常量、P8 env 化)。进程崩 → 缓冲全丢;房聊本就 ephemeral,接受([storage.md](storage.md) 崩溃语义)。
 
 ### 私信:落库的「未读收件箱 + 完整已读回执」
 

@@ -42,6 +42,7 @@
 | `room_chat` | `text` | 房间聊天(广播给全房,含观战者);后端文本防护把关:空→`error(INVALID_MESSAGE)`、超长→`error(MESSAGE_TOO_LONG)`、刷屏→`error(RATE_LIMITED)`(见 0033)|
 | `open_free_entry_vote` | — | 为当前新玩家开一次免盲投票(有新人 + 有合格投票人时;否则回 `error`) |
 | `vote_free_entry` | `approve` | 对免盲投票表态;**全体投票人 approve 才免**、任一 `false` 即失败 |
+| `fetch_room_chat` | `room` | 拉该房最近 N 条房聊(进/重进房对齐历史);后端 shell 直回 `room_chat_history`(不进游戏循环,见 0036)|
 
 发送:`ws.send(JSON.stringify(msg))`。非法报文/字段后端回 `error`。
 
@@ -63,6 +64,7 @@
 | `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
 | `state_snapshot` | `seats`(仅已占座,各带 `seat_position`)/`max_seats`/`watchers`/`button_position`/`board`/`pot`/`acting_position`/`players`(行动序,不含底牌)/`your_hole_cards`(只你自己,在手才有)… | **私发**:进房/重连一次性对齐整桌;空座由 `max_seats` 渲染 |
+| `room_chat_history` | `room`、`messages[]`(该房最近 N 条 `chat_message`,旧→新) | **私发**:`fetch_room_chat` 的回应,渲进聊天区 |
 | `player_bought_in` | `nickname`/`seat_position`/`amount`/`seat_points` | 谁买入、座位新筹码 |
 | `free_entry_vote_updated` | `candidates`/`voters`/`approvals` | 免盲投票当前态(开票=`approvals` 空,逐票累加);给投票人显示进度/提示 |
 | `free_entry_vote_closed` | `passed`/`waived` | 投票终结:`passed=true` 时 `waived` 为本手免费入局者快照,失败为空 |
