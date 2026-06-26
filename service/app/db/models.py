@@ -32,3 +32,16 @@ class HandParticipant(SQLModel, table=True):
     uid: int = Field(foreign_key="user.id", primary_key=True)  # 参与者不可变账号主键(FK → user.id)
     initial_points: int  # 开局锁入本手的筹码(in_game_points 快照)
     final_points: int  # 结算后还回座位的筹码
+
+
+class DMMessage(SQLModel, table=True):
+    # 一条私信(事件写,追加;对齐 dm_records.DMWrite)。DB 权威(非内存权威):发即落库 = 未读,
+    # 读由 0039 的游标推进;在线实时投递只是叠加其上的优化(见 messaging.md §私信)。隐私:正文不含底牌/牌堆。
+    id: Optional[int] = Field(default=None, primary_key=True)  # 自增主键
+    dedupe_key: str = Field(max_length=128, unique=True, index=True)  # = msg_id;幂等 INSERT 唯一键
+    from_uid: int = Field(foreign_key="user.id")  # 发件人不可变账号主键(FK → user.id)
+    to_uid: int = Field(foreign_key="user.id", index=True)  # 收件人(FK → user.id;0039 按 to_uid 查未读,故索引)
+    text: str  # 私信正文(无 max_length;单条长度由 shell DM_MAX_TEXT_LEN 防护)
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )  # shell 盖墙钟;排序 + 0039 未读/已读比较与保留清理键

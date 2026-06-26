@@ -8,6 +8,7 @@
 # HoleCards(Personal 私发本人)、ShowdownReveal(HandShowDown 揭示未弃牌者);其余 DTO **结构上无**
 # 此字段(结构性缺位即隐私兜底,见 changes/0017)。
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -163,6 +164,21 @@ class RoomChatHistory(ServerMessage):
     messages: tuple[ChatMessage, ...]  # 该房最近 N 条房聊(旧→新);shell 直发,不进 reduce(见 changes/0036)
 
 
+class DMDelivered(ServerMessage):
+    # 私信投递给收件人(messaging.md §私信):在线实时投 / 登录补收(0039)均用此形,前端按 msg_id 去重对齐。
+    type: Literal["dm_delivered"] = "dm_delivered"
+    msg_id: str  # 私信幂等键(= DMWrite.dedupe_key);前端去重 / 引用 / 跨实时与补收对齐
+    from_nick: str  # 发件人(发件连接绑定身份,不信报文自报)
+    text: str  # 私信正文;结构上无 hole_cards/deck(脱敏红线)
+    created_at: datetime  # 服务端盖墙钟(展示时间 + 未读/已读比较键,见 messaging.md / db.md);JSON 序列化为 ISO 串
+
+
+class DMUndelivered(ServerMessage):
+    # 私信投递硬失败回发件人——仅「对端根本不存在」这种错(messaging.md §私信)。离线不算:落库未读、登录补收。
+    type: Literal["dm_undelivered"] = "dm_undelivered"
+    to_nick: str  # 投递失败的目标昵称;前端据它把该条外发标失败
+
+
 class FreeEntryVoteUpdated(ServerMessage):
     type: Literal["free_entry_vote_updated"] = "free_entry_vote_updated"
     candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
@@ -202,6 +218,8 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     StateSnapshot,
     ChatMessage,
     RoomChatHistory,
+    DMDelivered,
+    DMUndelivered,
     FreeEntryVoteUpdated,
     FreeEntryVoteClosed,
     ErrorMessage,

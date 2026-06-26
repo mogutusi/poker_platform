@@ -19,7 +19,7 @@ export type UserStatus = "watching" | "offline" | "sitting_in" | "ready_to_play"
 
 export type RoomStatus = "pending_start" | "hand_started";
 
-export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE" | "MESSAGE_TOO_LONG" | "RATE_LIMITED";
+export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE" | "MESSAGE_TOO_LONG" | "RATE_LIMITED" | "CANNOT_DM_SELF";
 
 // ── value objects ──
 
@@ -159,6 +159,19 @@ export interface RoomChatHistory {
   messages: ChatMessage[];
 }
 
+export interface DMDelivered {
+  type: "dm_delivered";
+  msg_id: string;
+  from_nick: string;
+  text: string;
+  created_at: string;
+}
+
+export interface DMUndelivered {
+  type: "dm_undelivered";
+  to_nick: string;
+}
+
 export interface FreeEntryVoteUpdated {
   type: "free_entry_vote_updated";
   candidates: string[];
@@ -237,6 +250,12 @@ export interface FetchRoomChat {
   room: string;
 }
 
+export interface DirectMessage {
+  type: "direct_message";
+  to_nick: string;
+  text: string;
+}
+
 // ── discriminated unions ──
 
 export type ServerMessage =
@@ -253,6 +272,8 @@ export type ServerMessage =
   | StateSnapshot
   | ChatMessage
   | RoomChatHistory
+  | DMDelivered
+  | DMUndelivered
   | FreeEntryVoteUpdated
   | FreeEntryVoteClosed
   | ErrorMessage;
@@ -268,7 +289,8 @@ export type ClientMessage =
   | OpenFreeEntryVote
   | VoteFreeEntry
   | JoinRoom
-  | FetchRoomChat;
+  | FetchRoomChat
+  | DirectMessage;
 
 // ── emoji catalog (chat render; backend passthrough, see messaging.md / changes/0034) ──
 

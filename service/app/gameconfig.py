@@ -20,6 +20,12 @@ ROOM_CHAT_RATE_BURST: float = 5.0  # 令牌桶容量(突发上限):静默后最�
 ROOM_CHAT_RATE_PER_SEC: float = 1.0  # 令牌桶稳态补充速率(每秒令牌数 = 每秒可发条数)
 ROOM_CHAT_HISTORY_SIZE: int = 50  # 每房内存环形缓冲保留的最近房聊条数(不落库;进/重进房经 FetchRoomChat 拉,见 messaging.md)
 
+# ── 私信 DM 文本防护 / 限速(见 messaging.md §私信;shell 进路由前防护;P8 接 poker.env + bounds)──
+DM_MAX_TEXT_LEN: int = 1000  # 私信单条正文最大字符数;超则 shell DM 路由拒(MESSAGE_TOO_LONG)
+DM_RATE_BURST: float = 5.0  # 私信令牌桶容量(突发上限):静默后最多连发几条
+DM_RATE_PER_SEC: float = 1.0  # 私信令牌桶稳态补充速率(每秒可发条数)
+# 注:已读保留清理参数(DM_READ_RETENTION_SECONDS / DM_CLEANUP_INTERVAL_SECONDS)随 0039 已读游标落地(见 db.md)
+
 # ── 日志(见 log.md;P8 接 poker.env + bounds)──
 LOG_LEVEL: str = "INFO"  # root 级别:DEBUG=全量审计(开发/排障)/ INFO=业务里程碑 / WARNING+=异常路径
 LOG_FORMAT: str = "console"  # "json"=结构化一行一条(生产,jq 过滤)/ "console"=人类友好单行(本地)

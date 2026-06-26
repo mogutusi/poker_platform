@@ -19,6 +19,7 @@ import json
 import sys
 import types as _types
 import typing
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Union, get_args, get_origin
 
@@ -94,6 +95,8 @@ def _ts_type(ann: object) -> str:
         return "string"
     if ann is bool:
         return "boolean"
+    if ann is datetime:
+        return "string"  # Pydantic JSON 把 datetime 序列化为 ISO 8601 串(如 DMDelivered.created_at)
     if _is_named(ann):
         return ann.__name__  # type: ignore[union-attr]
     raise TypeError(f"gen_wire_ts: unmapped annotation {ann!r}")

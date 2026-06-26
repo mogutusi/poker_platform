@@ -12,6 +12,7 @@ from typing import Protocol
 from app import gameconfig
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
+from app.db.dm_records import DMWrite
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ def _state_key(payload: PersistPayload) -> StateKey | None:
             return ("user", str(payload.uid))
         case HandRecordWrite():
             return None  # 手牌记录是事件写,逐条追加(dedupe_key 幂等,内存不去重)
+        case DMWrite():
+            return None  # 私信是事件写,逐条追加(dedupe_key=msg_id 幂等;shell 私信路由直 put,见 messaging.md)
         case _:
             log.warning("unknown Persist payload %s, defaulting to event write (append)", type(payload).__name__)
             return None

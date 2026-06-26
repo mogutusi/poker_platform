@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
-from app.db.models import HandParticipant, HandRecord, User
+from app.db.dm_records import DMWrite
+from app.db.models import DMMessage, HandParticipant, HandRecord, User
 
 log = logging.getLogger(__name__)
 
@@ -47,8 +48,29 @@ class OrmPersister:
         match payload:
             case HandRecordWrite():
                 await self._insert_hand_record(session, payload)
+            case DMWrite():
+                await self._insert_dm(session, payload)
             case _:
                 log.warning("OrmPersister unknown event write %s, skipped", type(payload).__name__)
+
+    async def _insert_dm(self, session: AsyncSession, payload: DMWrite) -> None:
+        # 私信幂等 INSERT(同 _insert_hand_record):唯一写者 ⇒ 先 SELECT dedupe_key 在不在、不在才插
+        # (race-free、跨方言;unique 索引兜底)。重放(drain / 崩溃后重试)安全跳过。FK(from/to_uid→user)
+        # 由方言强制(sqlite 装 PRAGMA),坏 uid → IntegrityError → 整批回滚。
+        existing = await session.scalar(
+            select(DMMessage.id).where(DMMessage.dedupe_key == payload.dedupe_key)
+        )
+        if existing is not None:
+            return
+        session.add(
+            DMMessage(
+                dedupe_key=payload.dedupe_key,
+                from_uid=payload.from_uid,
+                to_uid=payload.to_uid,
+                text=payload.text,
+                created_at=payload.created_at,
+            )
+        )
 
     async def _insert_hand_record(self, session: AsyncSession, payload: HandRecordWrite) -> None:
         # 幂等:全进程唯一写者 ⇒ 先查 dedupe_key 在不在、不在才插,无并发竞争(race-free)、跨方言(免 sqlite/pg 的 ON CONFLICT 二分)。

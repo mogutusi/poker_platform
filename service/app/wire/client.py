@@ -79,6 +79,12 @@ class FetchRoomChat(ClientMessage):
     room: str  # 要拉历史的房名;shell 不读 world 无法解析当前房,故带房名(同 JoinRoom),走 shell 直服务(见 changes/0036)
 
 
+class DirectMessage(ClientMessage):
+    type: Literal["direct_message"] = "direct_message"
+    to_nick: str  # 收件人昵称(shell 解析 uid + 在线判断;不存在→DMUndelivered);发件人身份不进报文,取连接 nick
+    text: str  # 私信正文(非空/长度/限速由 shell 防护;不含 hole_cards/deck);走 shell 路由不进 reduce(见 changes/0038)
+
+
 # codegen 注册表 + parse 可辨识联合的成员(scripts/gen_wire_ts.py 据此生成);新增报文须登记。
 CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
@@ -92,11 +98,12 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     VoteFreeEntry,
     JoinRoom,
     FetchRoomChat,
+    DirectMessage,
 )
 
 _ClientMessageUnion = Annotated[
     Union[
-        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat
+        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat, DirectMessage
     ],
     Field(discriminator="type"),
 ]
@@ -138,4 +145,7 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
         case FetchRoomChat():
             # FetchRoomChat 走 shell 直服务(读房聊环形缓冲回 outbound),不映射 Command、不进 reduce(见 changes/0036)。
             raise AssertionError("FetchRoomChat 走 shell 路由,不走 to_command")
+        case DirectMessage():
+            # 私信走 shell 路由(messaging.md §私信):解析 uid + 落库 DMWrite + 在线投 DMDelivered,不进 reduce(见 changes/0038)。
+            raise AssertionError("DirectMessage 走 shell 路由,不走 to_command")
     raise AssertionError(f"unmapped client message: {type(msg).__name__}")  # 不可达:CLIENT_MESSAGES 穷尽

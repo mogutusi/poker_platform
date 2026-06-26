@@ -45,6 +45,8 @@ def _broadcast_samples() -> list[S.ServerMessage]:
         S.FreeEntryVoteClosed(passed=True, waived=("D",)),
         S.ChatMessage(from_nick="A", text="nh"),
         S.RoomChatHistory(room="r1", messages=(S.ChatMessage(from_nick="A", text="nh"),)),
+        S.DMDelivered(msg_id="m1", from_nick="A", text="hey", created_at=_NOW),
+        S.DMUndelivered(to_nick="ghost"),
         S.ErrorMessage.from_err(Err(ErrorCode.NOT_YOUR_TURN, "non-A turn")),
     ]
 
@@ -151,12 +153,13 @@ def test_client_registry_covered_by_to_command():
         C.VoteFreeEntry: C.VoteFreeEntry(approve=True),
         C.JoinRoom: C.JoinRoom(room="dev"),
         C.FetchRoomChat: C.FetchRoomChat(room="dev"),
+        C.DirectMessage: C.DirectMessage(to_nick="bob", text="hi"),
     }
     assert set(samples) == set(C.CLIENT_MESSAGES)  # 防新增报文漏测
     assert C.parse('{"type":"join_room","room":"dev"}') == C.JoinRoom(room="dev")  # parse 往返
     for cls, msg in samples.items():
-        if cls in (C.JoinRoom, C.FetchRoomChat):
-            with pytest.raises(AssertionError):  # JoinRoom 走 DB 富化 / FetchRoomChat 走 shell 路由,均不走 to_command(契约)
+        if cls in (C.JoinRoom, C.FetchRoomChat, C.DirectMessage):
+            with pytest.raises(AssertionError):  # JoinRoom 走 DB 富化 / FetchRoomChat·DirectMessage 走 shell 路由,均不走 to_command(契约)
                 C.to_command(msg, origin="A", now=_NOW)
             continue
         cmd = C.to_command(msg, origin="A", now=_NOW)

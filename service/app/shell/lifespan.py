@@ -135,7 +135,9 @@ def create_app() -> FastAPI:
             await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)
-        await run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history)
+        await run_receiver(
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist
+        )
 
     return app
 

@@ -12,13 +12,15 @@ from sqlalchemy import func, select
 from sqlalchemy.pool import StaticPool
 
 from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
+from app.db.dm_records import DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
-from app.db.models import HandParticipant, HandRecord, User
+from app.db.models import DMMessage, HandParticipant, HandRecord, User
 from app.db.orm_persister import OrmPersister
 from app.shell.persist import PersistWriter, WriteBuffer
 
 T_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 T_END = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+T_DM = datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc)
 
 
 async def _setup(seed=((1, "alice", 1000), (2, "bob", 1000))):
@@ -148,6 +150,47 @@ async def test_participant_fk_violation_raises_and_rolls_back():
         await OrmPersister(sm).flush({}, [rec])
     async with sm() as s:
         assert await s.scalar(select(func.count()).select_from(HandRecord)) == 0
+
+
+# ── 私信事件写:DMWrite → DMMessage INSERT,字段对齐(changes/0038)──
+async def test_dm_write_inserts_message():
+    sm = await _setup()
+    dm = DMWrite(dedupe_key="m1", from_uid=1, to_uid=2, text="hey bob", created_at=T_DM)
+    await OrmPersister(sm).flush({}, [dm])
+    async with sm() as s:
+        row = (await s.execute(select(DMMessage).where(DMMessage.dedupe_key == "m1"))).scalar_one()
+        assert (row.from_uid, row.to_uid, row.text) == (1, 2, "hey bob")
+        assert _naive(row.created_at) == _naive(T_DM)
+
+
+# ── 私信幂等:同 dedupe_key 落两次 → 只一行(SELECT-then-INSERT 跳过,同手牌记录)──
+async def test_dm_write_idempotent_on_dedupe_key():
+    sm = await _setup()
+    dm = DMWrite(dedupe_key="m1", from_uid=1, to_uid=2, text="hi", created_at=T_DM)
+    p = OrmPersister(sm)
+    await p.flush({}, [dm])
+    await p.flush({}, [dm])  # 重放(drain / 崩溃后)
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
+
+
+# ── 私信幂等:同 dedupe_key 同一批两份 → 只一行(批内 SELECT 见刚 add 的行)──
+async def test_dm_write_dedupe_within_single_batch():
+    sm = await _setup()
+    dm = DMWrite(dedupe_key="m1", from_uid=1, to_uid=2, text="hi", created_at=T_DM)
+    await OrmPersister(sm).flush({}, [dm, dm])
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
+
+
+# ── 私信 FK 强制:to_uid 无对应 user → IntegrityError,整批回滚(无行落库)──
+async def test_dm_write_fk_violation_raises_and_rolls_back():
+    sm = await _setup()
+    dm = DMWrite(dedupe_key="m1", from_uid=1, to_uid=999, text="hi", created_at=T_DM)  # to_uid=999 无此 user
+    with pytest.raises(Exception):  # noqa: B017  IntegrityError(FK)
+        await OrmPersister(sm).flush({}, [dm])
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 0
 
 
 # ── 端到端:PersistWriter.flush_once 把缓冲一批经 OrmPersister 落库并清空 ──

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
+from app.db.dm_records import DMWrite
 from app.shell.persist import WriteBuffer
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -19,6 +20,10 @@ def _points(uid: int, points: int) -> PointsWrite:
 
 def _record(key: str) -> HandRecordWrite:
     return HandRecordWrite(dedupe_key=key, start_time=T0, final_pot=0, participants=())
+
+
+def _dm(key: str) -> DMWrite:
+    return DMWrite(dedupe_key=key, from_uid=1, to_uid=2, text="hi", created_at=T0)
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,16 @@ def test_unknown_payload_defaults_to_append():
     buf.put(_UnknownWrite(tag="x"))
     dirty, appends = buf.swap()
     assert dirty == {} and len(appends) == 1  # 未归类 → 追加,不覆盖
+
+
+# ── 分类:私信 DMWrite 是事件写(逐条追加,不覆盖;dedupe_key=msg_id 幂等,见 changes/0038)──
+def test_dm_write_classified_as_event_write():
+    buf = WriteBuffer()
+    buf.put(_dm("m1"))
+    buf.put(_dm("m2"))  # 不同 msg_id 各占一条(绝不像状态写那样按键覆盖)
+    dirty, appends = buf.swap()
+    assert dirty == {}  # 无状态写
+    assert [p.dedupe_key for p in appends] == ["m1", "m2"]  # 逐条追加
 
 
 # ── is_empty / 向后兼容 snapshot ──

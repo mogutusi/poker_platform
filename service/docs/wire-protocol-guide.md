@@ -43,6 +43,7 @@
 | `open_free_entry_vote` | — | 为当前新玩家开一次免盲投票(有新人 + 有合格投票人时;否则回 `error`) |
 | `vote_free_entry` | `approve` | 对免盲投票表态;**全体投票人 approve 才免**、任一 `false` 即失败 |
 | `fetch_room_chat` | `room` | 拉该房最近 N 条房聊(进/重进房对齐历史);后端 shell 直回 `room_chat_history`(不进游戏循环,见 0036)|
+| `direct_message` | `to_nick, text` | 私聊某人(跨房/大厅均可);后端 shell 路由:落库(未读)+ 对方在线即投 `dm_delivered`,不进游戏循环(见 0038)。对端不存在→`dm_undelivered`;空/超长/发给自己/刷屏→`error`(`INVALID_MESSAGE`/`MESSAGE_TOO_LONG`/`CANNOT_DM_SELF`/`RATE_LIMITED`)|
 
 发送:`ws.send(JSON.stringify(msg))`。非法报文/字段后端回 `error`。
 
@@ -65,6 +66,8 @@
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
 | `state_snapshot` | `seats`(仅已占座,各带 `seat_position`)/`max_seats`/`watchers`/`button_position`/`board`/`pot`/`acting_position`/`players`(行动序,不含底牌)/`your_hole_cards`(只你自己,在手才有)… | **私发**:进房/重连一次性对齐整桌;空座由 `max_seats` 渲染 |
 | `room_chat_history` | `room`、`messages[]`(该房最近 N 条 `chat_message`,旧→新) | **私发**:`fetch_room_chat` 的回应,渲进聊天区 |
+| `dm_delivered` | `msg_id`/`from_nick`/`text`/`created_at` | **私发**:收到一条私信(在线实时投 / 登录补收均用此形);按 `msg_id` 去重 |
+| `dm_undelivered` | `to_nick` | **私发回发件人**:私信对端**根本不存在**(离线不算——离线落库后由对方登录补收) |
 | `player_bought_in` | `nickname`/`seat_position`/`amount`/`seat_points` | 谁买入、座位新筹码 |
 | `free_entry_vote_updated` | `candidates`/`voters`/`approvals` | 免盲投票当前态(开票=`approvals` 空,逐票累加);给投票人显示进度/提示 |
 | `free_entry_vote_closed` | `passed`/`waived` | 投票终结:`passed=true` 时 `waived` 为本手免费入局者快照,失败为空 |
@@ -109,8 +112,10 @@
 
 **已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
+**已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`;后端落库 + 在线实时投,见 0038)**。
+
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- 大厅房间列表(REST)、私聊(`direct_message`)、房配置(设盲注/买入额)。
+- 大厅房间列表(REST)、私聊「读」路(`dm_mark_read` ↔ `dm_read` 已读回执 + 登录补收未读,0039)、房配置(设盲注/买入额)。
 
 ## 9. 怎么连(Phase D · 即将)
 

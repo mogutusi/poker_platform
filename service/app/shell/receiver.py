@@ -16,6 +16,8 @@ from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.history import RoomChatBuffer
+from app.shell.messaging import route_direct_message
+from app.shell.persist import WriteBuffer
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
 from app.wire import client as wire_client
@@ -31,6 +33,7 @@ async def run_receiver(
     timer: Timer,
     sessionmaker: async_sessionmaker[AsyncSession],
     history: RoomChatBuffer,
+    persist: WriteBuffer,
 ) -> None:
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
     if old is not None:
@@ -44,7 +47,7 @@ async def run_receiver(
         while True:
             raw = await conn.ws.receive_text()  # 让出点
             timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick)
-            cmd = await _frame_to_command(conn, raw, sessionmaker, history)
+            cmd = await _frame_to_command(conn, raw, conns, persist, sessionmaker, history)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -62,7 +65,12 @@ async def run_receiver(
 
 
 async def _frame_to_command(
-    conn: Connection, raw: str, sessionmaker: async_sessionmaker[AsyncSession], history: RoomChatBuffer
+    conn: Connection,
+    raw: str,
+    conns: ConnectionManager,
+    persist: WriteBuffer,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    history: RoomChatBuffer,
 ) -> Command | None:
     # 明文帧 → Command:解析失败(非法 JSON / 未知 type / 字段不合法)直接回发 ErrorMessage(error.md),不进 reduce。
     try:
@@ -77,6 +85,10 @@ async def _frame_to_command(
         return _guard_room_chat(conn, msg)  # 房聊进 reduce 前过文本防护 + 限速(见 changes/0033 / messaging.md)
     if isinstance(msg, wire_client.FetchRoomChat):
         _serve_room_chat_history(conn, msg, history)  # 房聊历史 shell 直服务(读环形缓冲回 outbound,见 changes/0036)
+        return None
+    if isinstance(msg, wire_client.DirectMessage):
+        # 私信 shell 路由:防护 → 解析 uid → 落库 DMWrite → 在线投 DMDelivered,不进 GameLoop(见 changes/0038)。
+        await route_direct_message(conn, msg, conns=conns, persist=persist, sessionmaker=sessionmaker)
         return None
     # 身份盖 origin=会话 nick(不信报文);墙钟 now 由 shell 盖(core 不读钟,仅 StartHand 用,见 wire/client）。
     return wire_client.to_command(msg, origin=conn.nick, now=datetime.now(timezone.utc))

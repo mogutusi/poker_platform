@@ -5,7 +5,7 @@
 **delayDB 是「内存权威 → DB」的滞后落库写通道。** `reduce` 改的是内存(经工作副本 commit),改动以 `Persist` 事件交给本通道,由 **PersistWriter**(全进程唯一 DB 写者)**周期批量**落库,异步追平 DB。core 不碰 DB,只产出 `Persist`;一切落库都在 shell。
 
 > 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;**表结构(`app/db/` 模型)与 Alembic 迁移用法**见 **[db-migrations.md](db-migrations.md)**;前置概念在那里。
-> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` + 状态写 `DMReadCursorWrite`,见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
+> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` 已落地 [0038](refactor/changes/0038-dm-send-deliver.md) + 状态写 `DMReadCursorWrite` 随 0039,见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
 
 ## 两类写(接入新实体先归类)
 
@@ -109,6 +109,8 @@ drain 落库仍可能失败:有限重试(`DB_DRAIN_TIMEOUT_MS` 上限)后放弃�
 
 ## `Persist` 接口(core ↔ 本模块的契约)
 
+> **下方 `class X(BaseModel)` 是示意**:精确签名以代码为准——所有 Write 载荷实为 **frozen dataclass**(`PointsWrite`/`HandRecordWrite` 在 [core/records.py](../app/core/records.py),`DMWrite` 在 [app/db/dm_records.py](../app/db/dm_records.py),共享基类 `PersistPayload`)。**core 产 vs shell 产**:`PointsWrite`/`HandRecordWrite` 由 reduce 产、置 core;`DMWrite`/`DMReadCursorWrite` 由 **shell 私信路由产、core 永不碰**,故置 db 层(`dm_records.py`),不入 core/records.py。
+
 ```python
 # 状态写(覆盖)
 class PointsWrite(BaseModel):
@@ -123,9 +125,9 @@ class HandRecordWrite(BaseModel):
     final_pot: int
     participants: list[ParticipantWrite]   # 每个含 uid / initial_points / final_points(uid = 不可变 User.id)
 
-# 事件写(追加)· 私信一条(见 messaging.md「私信:未读收件箱」)
+# 事件写(追加)· 私信一条(见 messaging.md「私信:未读收件箱」;已落地 0038,app/db/dm_records.py)
 class DMWrite(BaseModel):
-    dedupe_key: str       # = msg_id,shell 生成(如 f"{from_uid}:{微秒}");幂等 INSERT
+    dedupe_key: str       # = msg_id,shell 生成(uuid4().hex;比 f"{from_uid}:{微秒}" 稳,免同微秒撞键);幂等 INSERT
     from_uid: int         # 发件人不可变 User.id(绝不用可变 nickname)
     to_uid: int           # 收件人不可变 User.id
     text: str             # 私信正文;不得带 hole_cards/deck(log.md 红线)

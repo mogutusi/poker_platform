@@ -95,7 +95,7 @@ async def test_e2e_connect_join_buy_through_dev_shell():
     gl = asyncio.create_task(shell.gameloop.run())  # 只起 gameloop(persistwriter 手动 flush 求确定性)
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
     rx = asyncio.create_task(
-        run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history)
+        run_receiver(conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist)
     )
     try:
         await asyncio.sleep(0)  # 登记 + 投 Connect(大厅 no-op,alice 尚不在 world)

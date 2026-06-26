@@ -24,13 +24,19 @@
 
 ## 私聊(shell 路由,不进 GameLoop)
 
-- **报文** `DirectMessage{to_nick, text}` → **Receiver(shell)直接处理,不投 `inbox`**。
-- **路由**:`conns.get(to_nick)`(见 [connection.md](connection.md) 的全局 nick 表):
-  - **在线** → `enqueue(对方连接, DMDelivered{from_nick, text})`,并可回发件人一个回执。
-  - **离线** → **不再直接丢**:仍 `put(DMWrite)`(事件写)落库进未读收件箱,对方登录补收(见下「持久化与离线送达」)。`DMUndelivered{to_nick}` 只在 `to_nick` 根本不存在这种硬错误时回。
-- **身份**:发件人 = **连接绑定的 nick**(不信报文自报);收件人 = `to_nick`;禁止发给自己;`to_nick` 不存在则回 `Err`。
+> **「发」路已落地 [changes/0038](refactor/changes/0038-dm-send-deliver.md)**:`DirectMessage` → shell 路由([`route_direct_message`](../app/shell/messaging.py),Receiver 拦截、不投 `inbox`)→ 防护 → 解析 uid → `put(DMWrite)`(必落 = 未读)→ 在线再投 `DMDelivered`。「读」路(`DMMarkRead`/`DMRead` + 登录补收 + 保留清理)随 **0039**。
+
+- **报文** `DirectMessage{to_nick, text}` → **shell 路由 [`route_direct_message`](../app/shell/messaging.py) 直接处理,不投 `inbox`**(Receiver 拦截,同 `FetchRoomChat`)。
+- **路由**(`conns.get(to_nick)`,见 [connection.md](connection.md) 的全局 nick 表):**无论在线与否,先 `put(DMWrite)` 必落库**(事件写,= 未读;`dedupe_key = msg_id`,幂等);再按在线态叠加实时投递——
+  - **在线** → `enqueue(对方连接, DMDelivered{msg_id, from_nick, text, created_at})`。**实时投递尽力而为**:对方 `outbound` 满(慢客户端)→ 丢这次实时投递 + WARNING,**不丢消息**(已落库,登录补收兜);**不在此 drop 收件人连接**(本协程是发件人 Receiver,drop 收件人是 GameLoop/其自身背压职责)。
+  - **离线** → 仅落库,对方登录补收(见下「持久化与离线送达」)。
+- **失败回执二分(0038 落定,澄清本文早先口径)**:
+  - **对端根本不存在**(`to_nick` 无 DB 行)→ `DMUndelivered{to_nick}`(投递结果,带 `to_nick` 供前端把该条外发标失败;**不落库**)。
+  - **空 / 超长 / 发给自己 / 限速**(校验错)→ `ErrorMessage`(`INVALID_MESSAGE` / `MESSAGE_TOO_LONG` / `CANNOT_DM_SELF` / `RATE_LIMITED`,同 [0033](refactor/changes/0033-room-chat-text-guard.md) 房聊防护回执通道)。
+- **身份**:发件人 = **连接绑定的 nick**(不信报文自报);收件人 = `to_nick`;**禁止发给自己**(`CANNOT_DM_SELF`)。`msg_id = uuid4().hex`(shell 生成,比 `from_uid:微秒` 稳——免同微秒撞键);`created_at` = shell 墙钟。**v1 发件人成功路径零回包**(本地乐观渲染;送达确认走 0039 `DMRead` 已读回执)。
+- **防护序(同 0033)**:空 → 超长 → 自发 → 限速 **先拒**(廉价、不耗令牌、不读 DB),合法**再**过令牌桶(每连接 `dm_bucket`),过桶**才**读 DB 解析 uid(贵)。
 - **第二个 outbound 生产者**:私聊路由和 GameLoop 都 `put_nowait` 到 `outbound`——单线程 asyncio 下安全;私聊与游戏消息之间**不保证相对顺序**(对聊天无所谓,可接受)。**仍只经 `outbound` → Sender**,不旁路 `ws.send`(守不变量 4/6)。
-- **限速**:同样在 shell(发件人维度令牌桶),进配置。
+- **限速**:在 shell(发件人维度令牌桶 `dm_bucket`,与房聊 `chat_bucket` 各一桶),阈值 `DM_MAX_TEXT_LEN`/`DM_RATE_BURST`/`DM_RATE_PER_SEC` 进 [config.md](config.md)(现 dev 常量、P8 env 化)。
 
 ## 表情(emoji,见 [changes/0034](refactor/changes/0034-emoji-catalog-design.md))
 
@@ -76,9 +82,9 @@
 
 | 时机 | shell 动作 |
 |---|---|
-| **发** `DirectMessage{to_nick, text}` | `to_nick→to_uid`(读路径;不存在→`Err`)→ 生成 `msg_id` → **`put(DMWrite)`**(事件写,必落、未读)→ 若 `conns.get(to_nick)` 在线再 `enqueue(DMDelivered)` 实时投 |
-| **读** `DMMarkRead{peer_nick, read_through}` | **`put(DMReadCursorWrite)`**(状态写,`_state_key` 按 `(reader,peer)` 覆盖只留最新)推进「我读 ta 的进度」→ 发件人在线则 `enqueue(DMRead)` 回执 |
-| **登录补收** | shell 读 DB:对每个对端取 `created_at > 游标` 的未读 → `DMDelivered` 列表 + 未读数;再读 `游标 where peer=自己` 得「对方已读到哪」补回执 |
+| **发**(已落地 [0038](refactor/changes/0038-dm-send-deliver.md))`DirectMessage{to_nick, text}` | `from/to nick→uid`(读路径 `load_uids_by_nicks`;对端不存在→`DMUndelivered`)→ 生成 `msg_id=uuid4` → **`put(DMWrite)`**(事件写,必落、未读)→ 若 `conns.get(to_nick)` 在线再 `enqueue(DMDelivered)` 实时投(尽力而为) |
+| **读**(0039)`DMMarkRead{peer_nick, read_through}` | **`put(DMReadCursorWrite)`**(状态写,`_state_key` 按 `(reader,peer)` 覆盖只留最新)推进「我读 ta 的进度」→ 发件人在线则 `enqueue(DMRead)` 回执 |
+| **登录补收**(0039) | shell 读 DB:对每个对端取 `created_at > 游标` 的未读 → `DMDelivered` 列表 + 未读数;再读 `游标 where peer=自己` 得「对方已读到哪」补回执 |
 
 - **写缓冲的第二个生产者(新不变量)**:私信路由 `put(DMWrite)`/`put(DMReadCursorWrite)` 进写缓冲——`put` 同步无 `await`([db.md](db.md)),asyncio 单线程下与 GameLoop.dispatch 的 put **不交错**;唯一**写库者**仍是 PersistWriter。这是「私聊是 outbound 第二生产者」(契约 3)向写缓冲的自然延伸。**绝不在路由里 `await commit`**(否则出现第二个 DB 写者、破 [db.md](db.md) 不变量 5)。
 - **键用不可变 `uid` 不用 `nick`**:落库与游标都按 `User.id`(同 [db.md](db.md) `PointsWrite.uid`——nick 可改名,见 [presence.md](presence.md));wire 上用 nick(显示),收发边界做 nick↔uid 转换。

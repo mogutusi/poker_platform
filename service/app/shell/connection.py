@@ -18,18 +18,21 @@ class Connection:
     outbound: "asyncio.Queue[Any]"  # 有界;装明文 ServerMessage,满 = 慢客户端(见 dispatch._enqueue)
     sender_task: asyncio.Task | None = None  # 本连接 Sender 协程句柄;起 Sender 前为 None,退出/顶替时 cancel
     chat_bucket: TokenBucket | None = None  # 房聊发件人维度令牌桶(每连接,见 messaging.md / ratelimit);create 时建满桶
+    dm_bucket: TokenBucket | None = None  # 私信发件人维度令牌桶(每连接,见 messaging.md §私信);与房聊各一桶
     # 注:用户在哪个房间是 world.users[nick].room,不是连接字段(连接绑 nick、不绑房)。
 
     @classmethod
     def create(cls, nick: str, session_id: str, ws: Any) -> "Connection":
+        now = time.monotonic()
         return cls(
             nick=nick,
             session_id=session_id,
             ws=ws,
             outbound=asyncio.Queue(maxsize=gameconfig.OUTBOUND_MAX),
             chat_bucket=TokenBucket.create(
-                gameconfig.ROOM_CHAT_RATE_BURST, gameconfig.ROOM_CHAT_RATE_PER_SEC, time.monotonic()
+                gameconfig.ROOM_CHAT_RATE_BURST, gameconfig.ROOM_CHAT_RATE_PER_SEC, now
             ),
+            dm_bucket=TokenBucket.create(gameconfig.DM_RATE_BURST, gameconfig.DM_RATE_PER_SEC, now),
         )
 
 
