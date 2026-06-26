@@ -5,16 +5,18 @@
 **delayDB 是「内存权威 → DB」的滞后落库写通道。** `reduce` 改的是内存(经工作副本 commit),改动以 `Persist` 事件交给本通道,由 **PersistWriter**(全进程唯一 DB 写者)**周期批量**落库,异步追平 DB。core 不碰 DB,只产出 `Persist`;一切落库都在 shell。
 
 > 本文只讲「`Persist` 出来之后怎么落库」。整体存储模型(内存权威、载入一次、工作副本回滚)见 **[storage.md](storage.md)**;**表结构(`app/db/` 模型)与 Alembic 迁移用法**见 **[db-migrations.md](db-migrations.md)**;前置概念在那里。
-> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` 已落地 [0038](refactor/changes/0038-dm-send-deliver.md) + 状态写 `DMReadCursorWrite` 随 0039,见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
+> 当前实例:**全局积分**(状态写)、**手牌记录**(事件写)、**私信**(事件写 `DMWrite` 已落地 [0038](refactor/changes/0038-dm-send-deliver.md) + 状态写 `DMReadCursorWrite` 已落地 [0039](refactor/changes/0039-dm-read-cursor.md),见 [messaging.md](messaging.md))。新实体按下文「两类写」归类即可接入,不新增通道。
 
 ## 两类写(接入新实体先归类)
 
 | 类别 | 语义 | 例子 | 落库 | 能否覆盖 | 键 |
 |---|---|---|---|---|---|
-| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` | 定向 UPDATE by 主键(只盖 Write 携带列) | **可覆盖**(同键只留最新) | `(table, pk)` |
-| **事件写**(append-write) | 「发生过一件事」 | 手牌记录 + 参与者 | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
+| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` / 已读游标 `DMReadCursorWrite` | 定向 UPDATE 或 UPSERT(见下「行是否预存」) | **可覆盖**(同键只留最新) | `(table, pk)` |
+| **事件写**(append-write) | 「发生过一件事」 | 手牌记录 + 参与者 / 私信 `DMWrite` | INSERT | **不可覆盖**(每条都落) | 业务唯一键(幂等) |
 
 判据:**描述「实体当前状态」(可覆盖)还是「一次已发生的事实」(必追加)?** 拿不准默认归事件写——覆盖一个本该追加的实体会**静默丢数据**,代价远高于多落几条。
+
+> **状态写「行是否预存」两子情形(0039 落定)**:① **行必预存**(`PointsWrite`:User 行 seed/载入一次必在)→ **定向 UPDATE**(只盖携带列、保住其它列);② **行非必存**(`DMReadCursorWrite`:首次读某会话时 `(reader,peer)` 行尚无)→ **UPSERT**(唯一写者下 SELECT-by-PK → 无则 INSERT、有则 UPDATE,race-free、跨方言,同事件写幂等思路)。两者都满足「同键覆盖只留最新」的状态写语义,差别只在落库时行在不在。
 
 **为什么状态写要覆盖而非 FIFO**:内存是权威,DB 只需追平到当前值。用户一秒内买入两次再退分,DB 只关心最终值;中间值落库是纯浪费。同键后写直接盖前写,N 次变更合成 1 次落库。
 
@@ -133,7 +135,7 @@ class DMWrite(BaseModel):
     text: str             # 私信正文;不得带 hole_cards/deck(log.md 红线)
     created_at: datetime  # shell 盖墙钟;既是展示时间,也是「未读/已读」比较与保留清理的排序键
 
-# 状态写(覆盖)· 已读游标:某收件人读某对端读到了几时
+# 状态写(覆盖)· 已读游标:某收件人读某对端读到了几时(已落地 0039,app/db/dm_records.py;行非必存 ⇒ UPSERT)
 class DMReadCursorWrite(BaseModel):
     reader_uid: int          # 读者(收件人)User.id —— StateKey 之一
     peer_uid: int            # 对端(发件人)User.id —— key=("dm_cursor", reader_uid, peer_uid)

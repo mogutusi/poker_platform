@@ -16,7 +16,7 @@ from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.history import RoomChatBuffer
-from app.shell.messaging import route_direct_message
+from app.shell.messaging import route_direct_message, route_dm_mark_read
 from app.shell.persist import WriteBuffer
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
@@ -89,6 +89,10 @@ async def _frame_to_command(
     if isinstance(msg, wire_client.DirectMessage):
         # 私信 shell 路由:防护 → 解析 uid → 落库 DMWrite → 在线投 DMDelivered,不进 GameLoop(见 changes/0038)。
         await route_direct_message(conn, msg, conns=conns, persist=persist, sessionmaker=sessionmaker)
+        return None
+    if isinstance(msg, wire_client.DMMarkRead):
+        # 标记已读 shell 路由:解析 uid → put 已读游标 → 在线回执 DMRead,不进 GameLoop(见 changes/0039)。
+        await route_dm_mark_read(conn, msg, conns=conns, persist=persist, sessionmaker=sessionmaker)
         return None
     # 身份盖 origin=会话 nick(不信报文);墙钟 now 由 shell 盖(core 不读钟,仅 StartHand 用,见 wire/client）。
     return wire_client.to_command(msg, origin=conn.nick, now=datetime.now(timezone.utc))

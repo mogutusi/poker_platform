@@ -85,6 +85,12 @@ class DirectMessage(ClientMessage):
     text: str  # 私信正文(非空/长度/限速由 shell 防护;不含 hole_cards/deck);走 shell 路由不进 reduce(见 changes/0038)
 
 
+class DMMarkRead(ClientMessage):
+    type: Literal["dm_mark_read"] = "dm_mark_read"
+    peer_nick: str  # 对端昵称(把和 ta 的会话标读;读者身份不进报文,取连接 nick);不存在→error
+    read_through: datetime  # 读到此刻为止(含);客户端回传(源自收到的 DMDelivered.created_at);走 shell 路由(见 changes/0039)
+
+
 # codegen 注册表 + parse 可辨识联合的成员(scripts/gen_wire_ts.py 据此生成);新增报文须登记。
 CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
@@ -99,11 +105,12 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     JoinRoom,
     FetchRoomChat,
     DirectMessage,
+    DMMarkRead,
 )
 
 _ClientMessageUnion = Annotated[
     Union[
-        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat, DirectMessage
+        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat, DirectMessage, DMMarkRead
     ],
     Field(discriminator="type"),
 ]
@@ -148,4 +155,7 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
         case DirectMessage():
             # 私信走 shell 路由(messaging.md §私信):解析 uid + 落库 DMWrite + 在线投 DMDelivered,不进 reduce(见 changes/0038)。
             raise AssertionError("DirectMessage 走 shell 路由,不走 to_command")
+        case DMMarkRead():
+            # 标记已读走 shell 路由(messaging.md §私信):put 已读游标 + 在线回执 DMRead,不进 reduce(见 changes/0039)。
+            raise AssertionError("DMMarkRead 走 shell 路由,不走 to_command")
     raise AssertionError(f"unmapped client message: {type(msg).__name__}")  # 不可达:CLIENT_MESSAGES 穷尽

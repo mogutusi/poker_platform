@@ -172,6 +172,12 @@ export interface DMUndelivered {
   to_nick: string;
 }
 
+export interface DMRead {
+  type: "dm_read";
+  reader_nick: string;
+  read_through: string;
+}
+
 export interface FreeEntryVoteUpdated {
   type: "free_entry_vote_updated";
   candidates: string[];
@@ -256,6 +262,12 @@ export interface DirectMessage {
   text: string;
 }
 
+export interface DMMarkRead {
+  type: "dm_mark_read";
+  peer_nick: string;
+  read_through: string;
+}
+
 // ── discriminated unions ──
 
 export type ServerMessage =
@@ -274,6 +286,7 @@ export type ServerMessage =
   | RoomChatHistory
   | DMDelivered
   | DMUndelivered
+  | DMRead
   | FreeEntryVoteUpdated
   | FreeEntryVoteClosed
   | ErrorMessage;
@@ -290,7 +303,8 @@ export type ClientMessage =
   | VoteFreeEntry
   | JoinRoom
   | FetchRoomChat
-  | DirectMessage;
+  | DirectMessage
+  | DMMarkRead;
 
 // ── emoji catalog (chat render; backend passthrough, see messaging.md / changes/0034) ──
 

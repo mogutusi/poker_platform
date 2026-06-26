@@ -24,7 +24,8 @@
 
 ## 私聊(shell 路由,不进 GameLoop)
 
-> **「发」路已落地 [changes/0038](refactor/changes/0038-dm-send-deliver.md)**:`DirectMessage` → shell 路由([`route_direct_message`](../app/shell/messaging.py),Receiver 拦截、不投 `inbox`)→ 防护 → 解析 uid → `put(DMWrite)`(必落 = 未读)→ 在线再投 `DMDelivered`。「读」路(`DMMarkRead`/`DMRead` + 登录补收 + 保留清理)随 **0039**。
+> **「发」路已落地 [changes/0038](refactor/changes/0038-dm-send-deliver.md)**:`DirectMessage` → shell 路由([`route_direct_message`](../app/shell/messaging.py),Receiver 拦截、不投 `inbox`)→ 防护 → 解析 uid → `put(DMWrite)`(必落 = 未读)→ 在线再投 `DMDelivered`。
+> **「读」路·游标写已落地 [changes/0039](refactor/changes/0039-dm-read-cursor.md)**:`DMMarkRead` → [`route_dm_mark_read`](../app/shell/messaging.py) → `put(DMReadCursorWrite)`(状态写,按 `(reader,peer)` 覆盖)→ 对端在线再回 `DMRead` 回执。**登录补收**(读未读 + 回执)随 **0040**、**保留清理**随 **0041/future**。
 
 - **报文** `DirectMessage{to_nick, text}` → **shell 路由 [`route_direct_message`](../app/shell/messaging.py) 直接处理,不投 `inbox`**(Receiver 拦截,同 `FetchRoomChat`)。
 - **路由**(`conns.get(to_nick)`,见 [connection.md](connection.md) 的全局 nick 表):**无论在线与否,先 `put(DMWrite)` 必落库**(事件写,= 未读;`dedupe_key = msg_id`,幂等);再按在线态叠加实时投递——
@@ -83,15 +84,15 @@
 | 时机 | shell 动作 |
 |---|---|
 | **发**(已落地 [0038](refactor/changes/0038-dm-send-deliver.md))`DirectMessage{to_nick, text}` | `from/to nick→uid`(读路径 `load_uids_by_nicks`;对端不存在→`DMUndelivered`)→ 生成 `msg_id=uuid4` → **`put(DMWrite)`**(事件写,必落、未读)→ 若 `conns.get(to_nick)` 在线再 `enqueue(DMDelivered)` 实时投(尽力而为) |
-| **读**(0039)`DMMarkRead{peer_nick, read_through}` | **`put(DMReadCursorWrite)`**(状态写,`_state_key` 按 `(reader,peer)` 覆盖只留最新)推进「我读 ta 的进度」→ 发件人在线则 `enqueue(DMRead)` 回执 |
-| **登录补收**(0039) | shell 读 DB:对每个对端取 `created_at > 游标` 的未读 → `DMDelivered` 列表 + 未读数;再读 `游标 where peer=自己` 得「对方已读到哪」补回执 |
+| **读**(已落地 [0039](refactor/changes/0039-dm-read-cursor.md))`DMMarkRead{peer_nick, read_through}` | `reader/peer nick→uid`(`load_uids_by_nicks`;peer 不存在→`error(INVALID_MESSAGE)`、=自己→`CANNOT_DM_SELF`)→ **`put(DMReadCursorWrite)`**(状态写,`_state_key` 按 `(reader,peer)` 覆盖只留最新;OrmPersister UPSERT,行非必存)推进「我读 ta 的进度」→ 发件人在线则 `enqueue(DMRead)` 回执(尽力而为) |
+| **登录补收**(0040) | shell 读 DB:对每个对端取 `created_at > 游标` 的未读 → `DMDelivered` 列表 + 未读数;再读 `游标 where peer=自己` 得「对方已读到哪」补回执 |
 
 - **写缓冲的第二个生产者(新不变量)**:私信路由 `put(DMWrite)`/`put(DMReadCursorWrite)` 进写缓冲——`put` 同步无 `await`([db.md](db.md)),asyncio 单线程下与 GameLoop.dispatch 的 put **不交错**;唯一**写库者**仍是 PersistWriter。这是「私聊是 outbound 第二生产者」(契约 3)向写缓冲的自然延伸。**绝不在路由里 `await commit`**(否则出现第二个 DB 写者、破 [db.md](db.md) 不变量 5)。
 - **键用不可变 `uid` 不用 `nick`**:落库与游标都按 `User.id`(同 [db.md](db.md) `PointsWrite.uid`——nick 可改名,见 [presence.md](presence.md));wire 上用 nick(显示),收发边界做 nick↔uid 转换。
 - **游标表一表两用**:未读 = `created_at > dm_read_cursor[reader=我, peer=对方].read_through_ts` 的行(未读数跨对端求和);**发件人的已读回执** = 查 `dm_read_cursor where peer=我`——「对方把我发的读到了几时」,回执无需另存,游标即真源。
 - **时间游标而非自增 id**:用 shell 盖的墙钟 `created_at` 排序/比较(同 [db.md](db.md)「墙钟由 shell 盖」),躲开「自增 id 跨重启不单调」的坑;`msg_id` 只作 `DMWrite` 的 `dedupe_key`(幂等 INSERT)+ wire 引用。
 
-保留多久(「已读即删 + 未读保活」,且**时间可配**):
+保留多久(「已读即删 + 未读保活」,且**时间可配**;**清理随 0041/future,游标判据由 0039 落地**):
 
 - **未读**:保留**直到被读**。**已读**:再留 `DM_READ_RETENTION_SECONDS`(默认 7 天;**进 [config.md](config.md),不硬编码**)后清。
 - **清理归唯一写者**:PersistWriter 周期里附带一趟保留清理(`DELETE` 已读且 `created_at < now - 保留期`),周期 `DM_CLEANUP_INTERVAL_SECONDS`。DELETE 也是 DB 写、归唯一写者,**不另起协程写库**(守 [db.md](db.md) 唯一写者)。

@@ -12,12 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
 from app.core.errors import Err, ErrorCode
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.queries import load_uids_by_nicks
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.persist import WriteBuffer
 from app.wire import client as wire_client
-from app.wire.server import DMDelivered, DMUndelivered, ErrorMessage
+from app.wire.server import DMDelivered, DMRead, DMUndelivered, ErrorMessage, ServerMessage
 
 log = logging.getLogger(__name__)
 
@@ -78,11 +78,51 @@ async def route_direct_message(
         )
 
 
-def _try_deliver(recipient: Connection, dm: DMDelivered) -> None:
-    # 实时投递尽力而为:收件人 outbound 满(慢客户端)→ 丢这次实时投递 + WARNING,**不丢消息**(已落库,
-    # 登录补收兜,0039)。不在此 drop 收件人连接——本协程是发件人的 Receiver,drop 收件人(投 Disconnect)
+async def route_dm_mark_read(
+    conn: Connection,
+    msg: wire_client.DMMarkRead,
+    *,
+    conns: ConnectionManager,
+    persist: WriteBuffer,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    # 标记已读(messaging.md §私信):reader=连接 nick(不信报文)、peer=msg.peer_nick、read_through=客户端回传。
+    # 解析 uid → put(DMReadCursorWrite)(状态写,按 (reader,peer) 覆盖)→ peer 在线则 enqueue(DMRead) 回执。
+    # v1 不限速:游标状态写幂等(同键覆盖,刷 N 次只落 1 次)、廉价,同 FetchRoomChat 免限速判据(背压兜洪泛)。
+    if msg.peer_nick == conn.nick:  # 无自己↔自己会话(对称 DM 禁自发)
+        conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.CANNOT_DM_SELF, "不能标记与自己的会话已读")))
+        return
+    try:
+        uids = await load_uids_by_nicks(sessionmaker, (conn.nick, msg.peer_nick))
+    except Exception:
+        log.exception("dm_mark_read DB read failed reader=%s peer=%s", conn.nick, msg.peer_nick)
+        conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "标记已读读 DB 失败")))
+        return
+    peer_uid = uids.get(msg.peer_nick)
+    if peer_uid is None:  # 标读一个不存在的会话 = 畸形请求(非投递语义,故 INVALID_MESSAGE 而非 DMUndelivered)
+        conn.outbound.put_nowait(
+            ErrorMessage.from_err(Err(ErrorCode.INVALID_MESSAGE, f"未知对端 {msg.peer_nick}"))
+        )
+        return
+    reader_uid = uids.get(conn.nick)
+    if reader_uid is None:  # 鉴权说有读者、DB 无行 = 内部不一致(同 route_direct_message)
+        conn.outbound.put_nowait(
+            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {conn.nick} 无 DB 账号行"))
+        )
+        return
+    persist.put(
+        DMReadCursorWrite(reader_uid=reader_uid, peer_uid=peer_uid, read_through_ts=msg.read_through)
+    )  # 状态写:按 (reader,peer) 覆盖只留最新进度
+    peer = conns.get(msg.peer_nick)  # 发件人(对端)在线判断
+    if peer is not None:  # 在线 → 实时回执(尽力而为,同 DMDelivered)
+        _try_deliver(peer, DMRead(reader_nick=conn.nick, read_through=msg.read_through))
+
+
+def _try_deliver(recipient: Connection, msg: ServerMessage) -> None:
+    # 实时投递/回执尽力而为:收件人 outbound 满(慢客户端)→ 丢这次实时投递 + WARNING,**不丢数据**(消息/游标
+    # 已落库,登录补收兜,0040)。不在此 drop 收件人连接——本协程是发起方的 Receiver,drop 对方(投 Disconnect)
     # 是 GameLoop / 其自身背压的职责,跨协程 drop 越界(契合「DB 权威 + 实时投递只是优化」,messaging.md)。
     try:
-        recipient.outbound.put_nowait(dm)
+        recipient.outbound.put_nowait(msg)
     except asyncio.QueueFull:
         log.warning("dm realtime delivery dropped (recipient outbound full) to=%s", recipient.nick)

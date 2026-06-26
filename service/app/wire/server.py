@@ -179,6 +179,13 @@ class DMUndelivered(ServerMessage):
     to_nick: str  # 投递失败的目标昵称;前端据它把该条外发标失败
 
 
+class DMRead(ServerMessage):
+    # 已读回执回发件人(messaging.md §私信):「reader 把我发给 ta 的消息读到了 read_through」。在线实时 / 登录补收(0040)同形。
+    type: Literal["dm_read"] = "dm_read"
+    reader_nick: str  # 把消息读到 read_through 的人(= 原收件人)
+    read_through: datetime  # 对方已读到此刻为止(含);JSON 序列化为 ISO 串
+
+
 class FreeEntryVoteUpdated(ServerMessage):
     type: Literal["free_entry_vote_updated"] = "free_entry_vote_updated"
     candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
@@ -220,6 +227,7 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     RoomChatHistory,
     DMDelivered,
     DMUndelivered,
+    DMRead,
     FreeEntryVoteUpdated,
     FreeEntryVoteClosed,
     ErrorMessage,

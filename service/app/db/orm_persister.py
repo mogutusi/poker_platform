@@ -3,14 +3,15 @@
 # 不 import shell:靠结构化协议(duck typing)满足 shell/persist.py 的 Persister;只 import core.records + db.models + sqlalchemy。
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
-from app.db.dm_records import DMWrite
-from app.db.models import DMMessage, HandParticipant, HandRecord, User
+from app.db.dm_records import DMReadCursorWrite, DMWrite
+from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +42,22 @@ class OrmPersister:
                 # 定向 UPDATE:只盖 points 列,绝不碰 nickname 等 PointsWrite 不拥有的列(否则 merge 会把 nickname 写 NULL)。
                 # 内存权威 + 载入一次 ⇒ 写积分时 user 行必已存在;行不存在则 0 命中、无害(dev 未种子时如此)。
                 await session.execute(update(User).where(User.id == uid).values(points=points))
+            case DMReadCursorWrite(reader_uid=reader, peer_uid=peer, read_through_ts=ts):
+                await self._upsert_dm_cursor(session, reader, peer, ts)
             case _:
                 log.warning("OrmPersister unknown state write %s, skipped", type(payload).__name__)
+
+    async def _upsert_dm_cursor(
+        self, session: AsyncSession, reader: int, peer: int, ts: datetime
+    ) -> None:
+        # 已读游标 UPSERT(状态写,但行可能不预存——首次读某会话):唯一写者 ⇒ SELECT-by-PK → 无则 INSERT、有则改
+        # read_through_ts(race-free、跨方言,免 ON CONFLICT 二分;同 _insert_dm 思路)。不同于 PointsWrite 的纯 UPDATE
+        # (User 行 seed/load 必存),游标行非必存,故走 UPSERT(见 db.md 状态写「行可能不预存」子情形 / changes/0039)。
+        existing = await session.get(DMReadCursor, (reader, peer))  # 复合主键按 (reader_uid, peer_uid) 顺序传元组
+        if existing is None:
+            session.add(DMReadCursor(reader_uid=reader, peer_uid=peer, read_through_ts=ts))
+        else:
+            existing.read_through_ts = ts  # 后写覆盖:只留最新进度(状态写语义)
 
     async def _apply_event_write(self, session: AsyncSession, payload: PersistPayload) -> None:
         match payload:

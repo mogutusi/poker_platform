@@ -45,3 +45,13 @@ class DMMessage(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
     )  # shell 盖墙钟;排序 + 0039 未读/已读比较与保留清理键
+
+
+class DMReadCursor(SQLModel, table=True):
+    # 已读游标(状态写,按 (reader_uid, peer_uid) 复合主键覆盖;对齐 dm_records.DMReadCursorWrite)。
+    # 一表两用(messaging.md):未读 = DMMessage.created_at > 本表 read_through_ts;发件人已读回执 = 查 peer_uid=自己 的行。
+    reader_uid: int = Field(foreign_key="user.id", primary_key=True)  # 读者(收件人)不可变账号主键(FK → user.id)
+    peer_uid: int = Field(foreign_key="user.id", primary_key=True)  # 对端(发件人)不可变账号主键(FK → user.id)
+    read_through_ts: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )  # 读到此刻为止(含);后写覆盖前写(状态写,只留最新进度)

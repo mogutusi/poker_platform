@@ -19,3 +19,12 @@ class DMWrite(PersistPayload):
     to_uid: int  # 收件人不可变 User.id
     text: str  # 私信正文;不含 hole_cards/deck(log.md 红线),不写日志
     created_at: datetime  # shell 盖墙钟;展示时间 + 「未读/已读」比较与保留清理排序键(0039)
+
+
+@dataclass(frozen=True)
+class DMReadCursorWrite(PersistPayload):
+    # 已读游标(状态写,按 (reader,peer) 覆盖只留最新):某收件人读某对端读到了几时(含)。
+    # 一表两用(见 messaging.md):未读 = 该会话 DMWrite.created_at > read_through_ts;发件人已读回执 = 查 peer=自己 的行。
+    reader_uid: int  # 读者(收件人)不可变 User.id —— StateKey 之一
+    peer_uid: int  # 对端(发件人)不可变 User.id —— key=("dm_cursor", reader_uid, peer_uid)
+    read_through_ts: datetime  # 读到此刻为止(含);客户端回传(源自 DMDelivered.created_at,同 shell 墙钟域)

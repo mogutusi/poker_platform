@@ -12,15 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.pool import StaticPool
 
 from app.core.records import HandRecordWrite, ParticipantWrite, PointsWrite
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
-from app.db.models import DMMessage, HandParticipant, HandRecord, User
+from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
 from app.db.orm_persister import OrmPersister
 from app.shell.persist import PersistWriter, WriteBuffer
 
 T_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 T_END = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
 T_DM = datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc)
+T_DM2 = datetime(2026, 1, 1, 0, 9, tzinfo=timezone.utc)
 
 
 async def _setup(seed=((1, "alice", 1000), (2, "bob", 1000))):
@@ -191,6 +192,37 @@ async def test_dm_write_fk_violation_raises_and_rolls_back():
         await OrmPersister(sm).flush({}, [dm])
     async with sm() as s:
         assert await s.scalar(select(func.count()).select_from(DMMessage)) == 0
+
+
+# ── 已读游标状态写:首次 → INSERT 新行(行非必存,走 UPSERT 而非纯 UPDATE,changes/0039)──
+async def test_dm_cursor_inserts_when_absent():
+    sm = await _setup()
+    cur = DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_DM)
+    await OrmPersister(sm).flush({("dm_cursor", "1", "2"): cur}, [])
+    async with sm() as s:
+        row = await s.get(DMReadCursor, (1, 2))
+        assert row is not None and _naive(row.read_through_ts) == _naive(T_DM)
+
+
+# ── 已读游标状态写:已存在 → UPDATE 覆盖 read_through_ts,不新增行 ──
+async def test_dm_cursor_updates_when_present():
+    sm = await _setup()
+    p = OrmPersister(sm)
+    await p.flush({("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_DM)}, [])
+    await p.flush({("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_DM2)}, [])
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMReadCursor)) == 1  # 同 (reader,peer) 仍一行
+        assert _naive((await s.get(DMReadCursor, (1, 2))).read_through_ts) == _naive(T_DM2)  # 覆盖为最新
+
+
+# ── 已读游标 FK 强制:peer_uid 无对应 user → IntegrityError,整批回滚 ──
+async def test_dm_cursor_fk_violation_raises_and_rolls_back():
+    sm = await _setup()
+    cur = DMReadCursorWrite(reader_uid=1, peer_uid=999, read_through_ts=T_DM)  # peer 999 无此 user
+    with pytest.raises(Exception):  # noqa: B017  IntegrityError(FK)
+        await OrmPersister(sm).flush({("dm_cursor", "1", "999"): cur}, [])
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMReadCursor)) == 0
 
 
 # ── 端到端:PersistWriter.flush_once 把缓冲一批经 OrmPersister 落库并清空 ──

@@ -43,3 +43,11 @@ dev = [
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # 仅忽略 **aiosqlite 连接 worker 线程**(线程名 `_connection_worker_thread`)在 teardown 抛出的未处理异常告警:
+    # 测试事件循环关闭后、内存 sqlite 引擎未 dispose 即被 GC,worker 线程触 "Event loop is closed"。纯测试期噪声
+    # (引擎累积;生产 lifespan.stop 正常 engine.dispose,非代码缺陷)。message 锚定该线程名 ⇒ 不掩盖**其它线程**的异常
+    # (该 worker 仅做 sqlite IO,真故障会经操作/断言失败暴露,不会被这条 teardown 告警吞)。
+    # 彻底消除需给各测试引擎补 dispose(0028 起既有 helper 模式),留作专项测试卫生清理(见 changes/0039 自 review)。
+    "ignore:Exception in thread.*_connection_worker_thread:pytest.PytestUnhandledThreadExceptionWarning",
+]

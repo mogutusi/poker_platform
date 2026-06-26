@@ -3,21 +3,24 @@
 
 import asyncio
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy.pool import StaticPool
 
 from app import gameconfig
 from app.core.errors import Err, ErrorCode
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.shell.connection import ConnectionManager
-from app.shell.messaging import route_direct_message
+from app.shell.messaging import route_direct_message, route_dm_mark_read
 from app.shell.persist import WriteBuffer
 from app.shell.ratelimit import TokenBucket
 from app.wire import client as C
-from app.wire.server import DMDelivered, DMUndelivered, ErrorMessage
+from app.wire.server import DMDelivered, DMRead, DMUndelivered, ErrorMessage
 from tests.shell._fakes import drain, make_conn
+
+T_READ = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 
 async def _seeded_sm(users: dict[str, int]):
@@ -36,6 +39,10 @@ async def _seeded_sm(users: dict[str, int]):
 
 def _dm(to_nick: str, text: str = "hi") -> C.DirectMessage:
     return C.DirectMessage(to_nick=to_nick, text=text)
+
+
+def _mark(peer_nick: str, read_through: datetime = T_READ) -> C.DMMarkRead:
+    return C.DMMarkRead(peer_nick=peer_nick, read_through=read_through)
 
 
 def _both_online(sender="alice", recipient="bob"):
@@ -175,3 +182,83 @@ async def test_dm_realtime_dropped_when_recipient_full_still_persists():
     await route_direct_message(alice, _dm("bob", "hey"), conns=conns, persist=persist, sessionmaker=sm)  # 不抛
     assert len(persist.snapshot()) == 1 and isinstance(persist.snapshot()[0], DMWrite)  # 消息仍落库(不丢)
     assert bob.outbound.qsize() == 1  # 实时投递被丢(队列仍只有填充物)
+
+
+# ════════ 标记已读 route_dm_mark_read(changes/0039)════════
+# reader = 连接 nick(读了 peer 发来的消息);peer = 原发件人(收回执)。
+
+
+# ── 标读:落已读游标(reader,peer)+ peer 在线收 DMRead 回执;reader 无回包 ──
+async def test_dm_mark_read_persists_cursor_and_acks_online_peer():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns, alice, bob, persist = _both_online()  # alice=reader、bob=peer(原发件人)
+    await route_dm_mark_read(alice, _mark("bob"), conns=conns, persist=persist, sessionmaker=sm)
+    out = drain(bob)  # peer(原发件人)收已读回执
+    assert len(out) == 1 and isinstance(out[0], DMRead)
+    assert out[0].reader_nick == "alice" and out[0].read_through == T_READ
+    snap = persist.snapshot()
+    assert len(snap) == 1 and isinstance(snap[0], DMReadCursorWrite)
+    assert (snap[0].reader_uid, snap[0].peer_uid) == (1, 2)  # 游标键 (reader=alice, peer=bob)
+    assert snap[0].read_through_ts == T_READ
+    assert drain(alice) == []  # reader 成功路径无回包
+
+
+# ── 标读:peer 离线 → 仅落游标,无回执(补收 0040 兜)──
+async def test_dm_mark_read_offline_peer_persists_cursor_only():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns = ConnectionManager()
+    alice = make_conn("alice")
+    conns.register(alice)  # bob 不在线
+    persist = WriteBuffer()
+    await route_dm_mark_read(alice, _mark("bob"), conns=conns, persist=persist, sessionmaker=sm)
+    assert len(persist.snapshot()) == 1 and isinstance(persist.snapshot()[0], DMReadCursorWrite)  # 游标已落
+    assert drain(alice) == []  # 离线非错,reader 无回包
+
+
+# ── 标读未知对端:INVALID_MESSAGE(畸形请求,非 DMUndelivered 投递语义),不落游标 ──
+async def test_dm_mark_read_unknown_peer_errors_invalid_message():
+    sm = await _seeded_sm({"alice": 1})  # 无 ghost
+    conns = ConnectionManager()
+    alice = make_conn("alice")
+    conns.register(alice)
+    persist = WriteBuffer()
+    await route_dm_mark_read(alice, _mark("ghost"), conns=conns, persist=persist, sessionmaker=sm)
+    out = drain(alice)
+    assert len(out) == 1 and isinstance(out[0], ErrorMessage) and out[0].code is ErrorCode.INVALID_MESSAGE
+    assert persist.is_empty()
+
+
+# ── 标读与自己的会话:CANNOT_DM_SELF,不落游标 ──
+async def test_dm_mark_read_self_rejected():
+    sm = await _seeded_sm({"alice": 1})
+    conns = ConnectionManager()
+    alice = make_conn("alice")
+    conns.register(alice)
+    persist = WriteBuffer()
+    await route_dm_mark_read(alice, _mark("alice"), conns=conns, persist=persist, sessionmaker=sm)
+    out = drain(alice)
+    assert len(out) == 1 and isinstance(out[0], ErrorMessage) and out[0].code is ErrorCode.CANNOT_DM_SELF
+    assert persist.is_empty()
+
+
+# ── 标读但 reader 无 DB 行 = 内部不一致 → INTERNAL,不落游标 ──
+async def test_dm_mark_read_reader_missing_db_row_errors_internal():
+    sm = await _seeded_sm({"bob": 2})  # 只种子 peer bob;reader alice 无 DB 行
+    conns, alice, bob, persist = _both_online()
+    await route_dm_mark_read(alice, _mark("bob"), conns=conns, persist=persist, sessionmaker=sm)
+    out = drain(alice)
+    assert len(out) == 1 and isinstance(out[0], ErrorMessage) and out[0].code is ErrorCode.INTERNAL
+    assert persist.is_empty() and drain(bob) == []
+
+
+# ── 标读 DB 读失败(未建表)→ INTERNAL,不落游标 ──
+async def test_dm_mark_read_db_read_failure_errors_internal():
+    engine = make_engine(
+        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    sm = make_sessionmaker(engine)  # 未 create_all
+    conns, alice, bob, persist = _both_online()
+    await route_dm_mark_read(alice, _mark("bob"), conns=conns, persist=persist, sessionmaker=sm)
+    out = drain(alice)
+    assert len(out) == 1 and isinstance(out[0], ErrorMessage) and out[0].code is ErrorCode.INTERNAL
+    assert persist.is_empty()

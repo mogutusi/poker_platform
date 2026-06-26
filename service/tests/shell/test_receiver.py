@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.domain import UserState
 from app.core.enums import UserStatus
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.shell.connection import Connection
@@ -15,6 +15,7 @@ from app.shell.receiver import run_receiver
 from app.wire.server import (
     ChatMessage,
     DMDelivered,
+    DMRead,
     ErrorMessage,
     RoomChatHistory,
     StateSnapshot,
@@ -321,6 +322,27 @@ async def test_direct_message_frame_delivers_to_online_recipient():
         dm = DMDelivered.model_validate_json(next(s for s in b.ws.sent if '"type":"dm_delivered"' in s))
         assert dm.from_nick == "alice" and dm.text == "hey bob" and dm.msg_id  # 身份盖连接 nick、原文
         assert any(isinstance(p, DMWrite) for p in sh.persist.snapshot())  # 必落库(未读)
+    finally:
+        await _shutdown((rxa, rxb, gl))
+
+
+async def test_dm_mark_read_frame_acks_online_peer():
+    # 端到端:bob 标读 alice 的消息 → shell 路由(不进 GameLoop)→ alice(原发件人)ws 收 dm_read + 落已读游标。
+    world = _world()  # alice 预置在房;bob 仅需连接 + DB 行
+    sh = Shell(world)
+    sm = await _seeded_sm({"alice": (1, 500), "bob": (2, 500)})
+    gl = asyncio.create_task(sh.gameloop.run())
+    a = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
+    b = Connection.create(nick="bob", session_id="bob", ws=FakeWS())
+    rxa = asyncio.create_task(run_receiver(a, sh.conns, sh.inbox, sh.timer, sm, sh.history, sh.persist))
+    rxb = asyncio.create_task(run_receiver(b, sh.conns, sh.inbox, sh.timer, sm, sh.history, sh.persist))
+    await _settle(lambda: sh.conns.is_current(a) and sh.conns.is_current(b))
+    b.ws.feed('{"type":"dm_mark_read","peer_nick":"alice","read_through":"2026-01-01T12:00:00+00:00"}')
+    await _settle(lambda: any('"type":"dm_read"' in s for s in a.ws.sent))
+    try:
+        dr = DMRead.model_validate_json(next(s for s in a.ws.sent if '"type":"dm_read"' in s))
+        assert dr.reader_nick == "bob"  # bob 把 alice 发来的消息读到 read_through
+        assert any(isinstance(p, DMReadCursorWrite) for p in sh.persist.snapshot())  # 落已读游标(状态写)
     finally:
         await _shutdown((rxa, rxb, gl))
 

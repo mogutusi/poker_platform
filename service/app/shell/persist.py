@@ -12,7 +12,7 @@ from typing import Protocol
 from app import gameconfig
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,9 @@ def _state_key(payload: PersistPayload) -> StateKey | None:
         case PointsWrite():
             # 全局积分按不可变 uid 覆盖;key 全用 str(匹配 StateKey 类型),真主键在 to_orm 时取 payload.uid 原值。
             return ("user", str(payload.uid))
+        case DMReadCursorWrite():
+            # 已读游标状态写:按 (reader,peer) 覆盖只留最新进度(同会话后写盖前写,见 messaging.md / changes/0039)。
+            return ("dm_cursor", str(payload.reader_uid), str(payload.peer_uid))
         case HandRecordWrite():
             return None  # 手牌记录是事件写,逐条追加(dedupe_key 幂等,内存不去重)
         case DMWrite():

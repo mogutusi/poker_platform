@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
-from app.db.dm_records import DMWrite
+from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.shell.persist import WriteBuffer
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+T1 = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
 
 
 def _points(uid: int, points: int) -> PointsWrite:
@@ -141,6 +142,19 @@ def test_dm_write_classified_as_event_write():
     dirty, appends = buf.swap()
     assert dirty == {}  # 无状态写
     assert [p.dedupe_key for p in appends] == ["m1", "m2"]  # 逐条追加
+
+
+# ── 分类:已读游标 DMReadCursorWrite 是状态写(按 (reader,peer) 覆盖只留最新,见 changes/0039)──
+def test_dm_read_cursor_classified_as_state_write_and_overwrites():
+    buf = WriteBuffer()
+    buf.put(DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T0))
+    buf.put(DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T1))  # 同 (reader,peer) → 覆盖
+    buf.put(DMReadCursorWrite(reader_uid=1, peer_uid=3, read_through_ts=T0))  # 不同 peer → 各占一项
+    dirty, appends = buf.swap()
+    assert appends == []  # 无事件写
+    assert dirty[("dm_cursor", "1", "2")].read_through_ts == T1  # 只留最新进度
+    assert dirty[("dm_cursor", "1", "3")].read_through_ts == T0
+    assert len(dirty) == 2
 
 
 # ── is_empty / 向后兼容 snapshot ──
