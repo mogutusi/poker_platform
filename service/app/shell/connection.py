@@ -51,3 +51,15 @@ class ConnectionManager:
 
     def get(self, nick: str) -> Connection | None:
         return self._by_nick.get(nick)  # Personal / 广播成员 / 错误回发,全按 nick O(1)
+
+    def online_nicks(self) -> set[str]:
+        return set(self._by_nick)  # 全体有 live 连接的 nick(新拷贝,调用方可改;presence「在线」源,见 presence.md)
+
+    def rename(self, old: str, new: str) -> None:
+        # 改昵称(仅大厅,见 presence.md):连接从 old 键重挂到 new 键 + 改 Connection.nick,
+        # 否则私聊/路由按新 nick 找不到旧连接。无 old 连接(未连接时改名只改库)→ no-op。
+        # 前提:调用方(P7 改昵称 REST)须先过 DB nickname 唯一约束 + 仅大厅判定,故 new 键不会撞活连接。
+        conn = self._by_nick.pop(old, None)
+        if conn is not None:
+            conn.nick = new
+            self._by_nick[new] = conn

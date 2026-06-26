@@ -18,11 +18,14 @@ presence 的"在哪个房/人数/状态"来自 `world`。**消费者读已提交
 - **可滞后一拍**:`commit` 替换引用(单线程,读到的要么旧要么新,不撕裂);读者可能看到落后一条命令的房态,对展示/守门足够。
 - 与 [rest.md](rest.md) 的"REST 读房间人数"同款约定——presence 把这些零散读法收口成统一只读 API。
 
+**已落地([changes/0037](refactor/changes/0037-presence.md))**:收口成 [`Presence(world, conns)`](../app/shell/presence.py) 类(持稳定 `world` 引用——`commit` 原地替换其 `.users`/`.rooms`,故每次读得最新提交态)+ 四只读方法:
+
 ```python
-def is_online(nick) -> bool:          return conns.get(nick) is not None
-def current_room(nick) -> str | None: return world.users[nick].room if nick in world.users else None
-def room_headcount(room) -> int:      return len(world.rooms[room].users_in_room)
-def online_nicks() -> set[str]:       ...   # ConnectionManager 全体
+class Presence:                       # app/shell/presence.py
+    def is_online(self, nick) -> bool:          return self._conns.get(nick) is not None
+    def current_room(self, nick) -> str | None: return (u.room if (u := self._world.users.get(nick)) else None)
+    def room_headcount(self, room) -> int:      return len(r.users_in_room) if (r := self._world.rooms.get(room)) else 0
+    def online_nicks(self) -> set[str]:         return self._conns.online_nicks()
 ```
 
 > 在线 = 有 live 连接(ConnectionManager);在房 = `current_room` 非 None(大厅用户不在 `world.users`,见 [lobby.md](lobby.md))。两者正交:可在线在大厅、可在房但 OFFLINE。
@@ -43,7 +46,7 @@ def rename(self, old: str, new: str) -> None:        # ConnectionManager
         self._by_nick[new] = conn
 ```
 
-- **落点**:改昵称走 REST(见 [rest.md](rest.md)),REST handler 同进程调 `conns.rename` + 改 DB/会话表。**决策(可改)**:也可做成 ws 命令在 shell 处理;REST 更贴"资料管理",且未连接时也能改(只改库)。
+- **落点**:改昵称走 REST(见 [rest.md](rest.md)),REST handler 同进程调 `conns.rename` + 改 DB/会话表。`ConnectionManager.rename`(连接重挂原语)**已落地 [0037](refactor/changes/0037-presence.md)**;「仅大厅判定 + 改 DB/会话表」的 REST handler 待 P7 REST。**决策(可改)**:也可做成 ws 命令在 shell 处理;REST 更贴"资料管理",且未连接时也能改(只改库)。
 - **微小竞态**:判定读 world 可能滞后一拍(刚 JoinRoom、REST 仍看到在大厅)→ 极小窗口可能放过一次改名。≤20 友善用户接受;要严就把改名也经一次 reduce 守门(本规模不必)。
 
 ## 与架构契约(必须守住)

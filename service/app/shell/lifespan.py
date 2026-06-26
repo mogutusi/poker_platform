@@ -24,6 +24,7 @@ from app.shell.gameloop import GameLoop
 from app.shell.history import RoomChatBuffer
 from app.shell.logsetup import setup_logging
 from app.shell.persist import PersistWriter, WriteBuffer
+from app.shell.presence import Presence
 from app.shell.receiver import run_receiver
 from app.shell.timer import Timer
 
@@ -73,6 +74,7 @@ class DevShell:
         self.world: World | None = None
         self.dispatcher: Dispatcher | None = None
         self.gameloop: GameLoop | None = None
+        self.presence: Presence | None = None  # 只读聚合(在线/在房/状态);供后续 lobby/DM/改昵称消费
         self._tasks: list[asyncio.Task] = []
 
     async def setup(self) -> None:
@@ -82,6 +84,7 @@ class DevShell:
         self.world = build_dev_world()
         self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox, self.history)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
+        self.presence = Presence(self.world, self.conns)  # 只读聚合,持稳定 world 引用(commit 原地改其 .users/.rooms)
 
     def start(self) -> None:
         # 起 GameLoop + Timer + PersistWriter(须先 await setup() 建好 gameloop)。
