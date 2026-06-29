@@ -114,10 +114,12 @@
 
 **已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
-**已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`,见 0038)+ 「读」路·已读回执(`dm_mark_read` ↔ `dm_read`,在线实时,见 0039)**。
+**已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`,见 0038)+ 「读」路·已读回执(`dm_mark_read` ↔ `dm_read`,在线实时,见 0039)+ 登录补收(见 0040:(重)连时后端自动补发离线期的未读 `dm_delivered` + 已读回执 `dm_read`,复用同形报文,按 `msg_id` 去重)**。
+
+> **登录补收对前端透明**:连上后端会主动私发你离线期间的未读 `dm_delivered`(旧→新)+ 别人读你消息的 `dm_read`,**无需你发任何请求**;与在线实时收到的同形,按 `msg_id` 去重即可(实时 + 补收同一条只显一次)。
 
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- 大厅房间列表(REST)、私聊登录补收(连接时补发未读 `dm_delivered` + 已读回执 `dm_read`,0040)、房配置(设盲注/买入额)。
+- 大厅房间列表(REST)、房配置(设盲注/买入额)。
 
 ## 9. 怎么连(Phase D · 即将)
 

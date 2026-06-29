@@ -16,7 +16,7 @@ from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.history import RoomChatBuffer
-from app.shell.messaging import route_direct_message, route_dm_mark_read
+from app.shell.messaging import deliver_dm_catch_up, route_direct_message, route_dm_mark_read
 from app.shell.persist import WriteBuffer
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
@@ -44,6 +44,8 @@ async def run_receiver(
         # 接入(reduce:dev 预置用户 no-op;重连恢复待 P1)。用 await put(背压安全),且在 try 内
         # ——即便 inbox 满/异常,finally 也会 cancel Sender + unregister,不留半初始化的泄漏连接。
         await inbox.put(Connect(origin=None, nick=conn.nick))
+        # 登录补收:读 DB 补发离线期间的未读私信 + 已读回执(shell 路由,不进 GameLoop;best-effort,见 changes/0040)。
+        await deliver_dm_catch_up(conn, sessionmaker=sessionmaker)
         while True:
             raw = await conn.ws.receive_text()  # 让出点
             timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick)

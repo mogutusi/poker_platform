@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app import gameconfig
 from app.core.errors import Err, ErrorCode
 from app.db.dm_records import DMReadCursorWrite, DMWrite
-from app.db.queries import load_uids_by_nicks
+from app.db.queries import load_read_receipts, load_uids_by_nicks, load_unread_dms
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.persist import WriteBuffer
 from app.wire import client as wire_client
@@ -57,7 +57,7 @@ async def route_direct_message(
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "私信读 DB 失败")))
         return
     to_uid = uids.get(msg.to_nick)
-    if to_uid is None:  # 对端根本不存在 = 硬错误回执(离线不算,见 messaging.md;离线只落库、登录补收 0039)
+    if to_uid is None:  # 对端根本不存在 = 硬错误回执(离线不算,见 messaging.md;离线只落库、登录补收 0040)
         conn.outbound.put_nowait(DMUndelivered(to_nick=msg.to_nick))
         return
     from_uid = uids.get(conn.nick)
@@ -72,7 +72,7 @@ async def route_direct_message(
     persist.put(DMWrite(dedupe_key=msg_id, from_uid=from_uid, to_uid=to_uid, text=text, created_at=created_at))  # 必落=未读
 
     recipient = conns.get(msg.to_nick)  # 在线判断 = ConnectionManager nick 表(presence;离线 None)
-    if recipient is not None:  # 在线 → 实时投递(尽力而为;离线仅落库,0039 登录补收)
+    if recipient is not None:  # 在线 → 实时投递(尽力而为;离线仅落库,0040 登录补收)
         _try_deliver(
             recipient, DMDelivered(msg_id=msg_id, from_nick=conn.nick, text=text, created_at=created_at)
         )
@@ -116,6 +116,44 @@ async def route_dm_mark_read(
     peer = conns.get(msg.peer_nick)  # 发件人(对端)在线判断
     if peer is not None:  # 在线 → 实时回执(尽力而为,同 DMDelivered)
         _try_deliver(peer, DMRead(reader_nick=conn.nick, read_through=msg.read_through))
+
+
+async def deliver_dm_catch_up(
+    conn: Connection, *, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    # 登录补收(messaging.md §私信):(重)连时 shell 读 DB → 补发未读 DMDelivered 列表 + 已读回执 DMRead 列表
+    # 到本连接 outbound。**不进 GameLoop / 不读 world**(纯 DB 读 + outbound)。每次连都跑(幂等:客户端按 msg_id 去重)。
+    # best-effort:DB 读失败 → log + return(连接刚建,不回错;下次重连重试)。键用 uid、wire 转 nick(查询里已 JOIN User)。
+    try:
+        uids = await load_uids_by_nicks(sessionmaker, (conn.nick,))
+        me_uid = uids.get(conn.nick)
+        if me_uid is None:
+            return  # 无 DB 账号行(dev 握手已拒非种子 nick;防御性早退,无补可发)
+        unread = await load_unread_dms(sessionmaker, me_uid)  # (msg_id, from_nick, text, created_at) 旧→新
+        receipts = await load_read_receipts(sessionmaker, me_uid)  # (reader_nick, read_through_ts)
+    except Exception:
+        # 补收非致命(无 DB / 抖动):跳过本轮,下次重连重试。warning 不带 traceback(避免每连噪声)。
+        log.warning("dm catch-up skipped (DB read failed) nick=%s", conn.nick)
+        return
+    for msg_id, from_nick, text, created_at in unread:
+        if not _enqueue_or_stop(
+            conn, DMDelivered(msg_id=msg_id, from_nick=from_nick, text=text, created_at=created_at)
+        ):
+            log.warning("dm catch-up truncated (outbound full) nick=%s", conn.nick)
+            return  # outbound 满:停本轮,余项下次重连补(游标未推进,不丢)
+    for reader_nick, read_through in receipts:
+        if not _enqueue_or_stop(conn, DMRead(reader_nick=reader_nick, read_through=read_through)):
+            log.warning("dm catch-up truncated (outbound full) nick=%s", conn.nick)
+            return
+
+
+def _enqueue_or_stop(conn: Connection, msg: ServerMessage) -> bool:
+    # 补收专用:入队成功返 True;outbound 满返 False(调用方停本轮——余项下次重连补,因游标未因补收推进故不丢)。
+    try:
+        conn.outbound.put_nowait(msg)
+        return True
+    except asyncio.QueueFull:
+        return False
 
 
 def _try_deliver(recipient: Connection, msg: ServerMessage) -> None:

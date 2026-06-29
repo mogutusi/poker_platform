@@ -165,7 +165,7 @@ class RoomChatHistory(ServerMessage):
 
 
 class DMDelivered(ServerMessage):
-    # 私信投递给收件人(messaging.md §私信):在线实时投 / 登录补收(0039)均用此形,前端按 msg_id 去重对齐。
+    # 私信投递给收件人(messaging.md §私信):在线实时投 / 登录补收(0040)均用此形,前端按 msg_id 去重对齐。
     type: Literal["dm_delivered"] = "dm_delivered"
     msg_id: str  # 私信幂等键(= DMWrite.dedupe_key);前端去重 / 引用 / 跨实时与补收对齐
     from_nick: str  # 发件人(发件连接绑定身份,不信报文自报)

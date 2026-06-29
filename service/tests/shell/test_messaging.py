@@ -11,9 +11,9 @@ from app import gameconfig
 from app.core.errors import Err, ErrorCode
 from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
-from app.db.models import User
+from app.db.models import DMMessage, DMReadCursor, User
 from app.shell.connection import ConnectionManager
-from app.shell.messaging import route_direct_message, route_dm_mark_read
+from app.shell.messaging import deliver_dm_catch_up, route_direct_message, route_dm_mark_read
 from app.shell.persist import WriteBuffer
 from app.shell.ratelimit import TokenBucket
 from app.wire import client as C
@@ -21,6 +21,18 @@ from app.wire.server import DMDelivered, DMRead, DMUndelivered, ErrorMessage
 from tests.shell._fakes import drain, make_conn
 
 T_READ = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+T1 = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+
+
+async def _seed_dms(sm, messages=(), cursors=()):
+    # messages: [(msg_id, from_uid, to_uid, text, created_at)];cursors: [(reader_uid, peer_uid, read_through_ts)]。
+    async with sm() as s:
+        async with s.begin():
+            for key, fu, tu, txt, ts in messages:
+                s.add(DMMessage(dedupe_key=key, from_uid=fu, to_uid=tu, text=txt, created_at=ts))
+            for r, p, ts in cursors:
+                s.add(DMReadCursor(reader_uid=r, peer_uid=p, read_through_ts=ts))
 
 
 async def _seeded_sm(users: dict[str, int]):
@@ -262,3 +274,85 @@ async def test_dm_mark_read_db_read_failure_errors_internal():
     out = drain(alice)
     assert len(out) == 1 and isinstance(out[0], ErrorMessage) and out[0].code is ErrorCode.INTERNAL
     assert persist.is_empty()
+
+
+# ════════ 登录补收 deliver_dm_catch_up(changes/0040)════════
+
+
+# ── 补收未读:bob 发给 alice 的两条(无游标)→ alice 连接补收两条 DMDelivered,旧→新有序 ──
+async def test_catch_up_delivers_unread_oldest_first():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    await _seed_dms(sm, messages=[("m1", 2, 1, "first", T0), ("m2", 2, 1, "second", T1)])  # bob(2)→alice(1)
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)
+    out = drain(alice)
+    assert all(isinstance(m, DMDelivered) for m in out)
+    assert [(m.msg_id, m.from_nick, m.text) for m in out] == [("m1", "bob", "first"), ("m2", "bob", "second")]
+    # 时间戳:sqlite 读回 naive 经 _as_utc 补 UTC → tz-aware + 值正确(与实时路径同形,序列化带 Z)
+    assert (out[0].created_at, out[1].created_at) == (T0, T1)
+    assert all(m.created_at.tzinfo is not None for m in out)
+
+
+# ── 补收尊重游标:已读到 T0(含)→ 只补 T0 之后的未读(m1@T0 已读、m2@T1 未读)──
+async def test_catch_up_respects_read_cursor():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    await _seed_dms(
+        sm,
+        messages=[("m1", 2, 1, "read", T0), ("m2", 2, 1, "unread", T1)],
+        cursors=[(1, 2, T0)],  # alice(reader=1) 读 bob(peer=2) 到 T0(含)
+    )
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)
+    out = drain(alice)
+    assert [(m.msg_id, m.text) for m in out] == [("m2", "unread")]  # 只补 T0 之后的未读
+
+
+# ── 补收已读回执:bob 把 alice 发的读到 T1 → alice 连接补收 DMRead{reader=bob, read_through=T1} ──
+async def test_catch_up_delivers_read_receipts():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    await _seed_dms(sm, cursors=[(2, 1, T1)])  # bob(reader=2) 读 alice(peer=1) 到 T1
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)
+    out = drain(alice)
+    reads = [m for m in out if isinstance(m, DMRead)]
+    assert len(reads) == 1 and reads[0].reader_nick == "bob"
+    assert reads[0].read_through == T1 and reads[0].read_through.tzinfo is not None  # 时间戳值 + tz 补回
+
+
+# ── 补收 outbound 满:首条即停本轮(余项下次重连补;游标未推进、不丢)──
+async def test_catch_up_stops_when_outbound_full():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    await _seed_dms(sm, messages=[("m1", 2, 1, "x", T0), ("m2", 2, 1, "y", T1)])
+    alice = make_conn("alice")
+    alice.outbound = asyncio.Queue(maxsize=1)
+    alice.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "filler")))  # 占满
+    await deliver_dm_catch_up(alice, sessionmaker=sm)  # 不抛;首条 _enqueue_or_stop=False → 停
+    out = drain(alice)
+    assert len(out) == 1 and isinstance(out[0], ErrorMessage)  # 仅填充物,无 DMDelivered 挤入
+
+
+# ── 补收空:无未读、无回执 → 不投任何帧 ──
+async def test_catch_up_empty_when_nothing_pending():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)
+    assert drain(alice) == []
+
+
+# ── 补收 me 无 DB 行 → no-op(不投、不抛)──
+async def test_catch_up_unknown_user_is_noop():
+    sm = await _seeded_sm({"bob": 2})  # 无 alice
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)
+    assert drain(alice) == []
+
+
+# ── 补收 DB 读失败(未建表)→ best-effort no-op(不投、不抛)──
+async def test_catch_up_db_failure_is_noop():
+    engine = make_engine(
+        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    sm = make_sessionmaker(engine)  # 未 create_all
+    alice = make_conn("alice")
+    await deliver_dm_catch_up(alice, sessionmaker=sm)  # 不抛
+    assert drain(alice) == []

@@ -2,6 +2,7 @@
 验真实并发管线 + 明文帧解析/回发(sync 冒烟只走 GameLoop→dispatch,不含 receiver/sender 协程)。"""
 
 import asyncio
+from datetime import datetime, timezone
 
 from sqlalchemy.pool import StaticPool
 
@@ -9,7 +10,7 @@ from app.core.domain import UserState
 from app.core.enums import UserStatus
 from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
-from app.db.models import User
+from app.db.models import DMMessage, User
 from app.shell.connection import Connection
 from app.shell.receiver import run_receiver
 from app.wire.server import (
@@ -345,6 +346,26 @@ async def test_dm_mark_read_frame_acks_online_peer():
         assert any(isinstance(p, DMReadCursorWrite) for p in sh.persist.snapshot())  # 落已读游标(状态写)
     finally:
         await _shutdown((rxa, rxb, gl))
+
+
+async def test_catch_up_delivers_unread_dm_on_connect():
+    # 端到端:DB 预置 bob→alice 未读 → alice 连接 → 登录补收(shell,不进 GameLoop)把未读补成 dm_delivered 到 ws。
+    world = _world()  # alice 预置在房在线
+    sh = Shell(world)
+    sm = await _seeded_sm({"alice": (1, 500), "bob": (2, 500)})
+    async with sm() as s:  # 预置一条 bob(2)→alice(1) 的未读私信
+        async with s.begin():
+            s.add(DMMessage(dedupe_key="m1", from_uid=2, to_uid=1, text="welcome back",
+                            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+    gl = asyncio.create_task(sh.gameloop.run())
+    conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history, sh.persist))
+    await _settle(lambda: any('"type":"dm_delivered"' in s for s in conn.ws.sent))
+    try:
+        dm = DMDelivered.model_validate_json(next(s for s in conn.ws.sent if '"type":"dm_delivered"' in s))
+        assert dm.msg_id == "m1" and dm.from_nick == "bob" and dm.text == "welcome back"  # 补收离线期未读
+    finally:
+        await _shutdown((rx, gl))
 
 
 async def test_async_displacement_old_connection_exits_silently():
