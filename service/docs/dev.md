@@ -7,9 +7,9 @@
 | 文件 | 谁读 | 装什么 |
 |---|---|---|
 | `service/.env`(P8 接) | P8 待建的 `app/config.py` Settings;**当前**仅 [alembic/env.py](../alembic/env.py) 直读 `os.environ` 的 `DATABASE_URL` | `DATABASE_URL`、token 过期等**基础设施**(原型 `app/config.py` 已于 0027 删)|
-| `service/app/poker.env`(P8) | [app/gameconfig.py](../app/gameconfig.py) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**当前 D 阶段**:`app/gameconfig.py` 用带默认值的常量、暂不读 env;P8「配置收编」时补 `poker.env(.example)`。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除)|
+| `service/app/poker.env`(本地覆盖,可选)+ `service/app/poker.env.example`(提交基线) | [app/gameconfig.py](../app/gameconfig.py)(`GameConfig(BaseSettings)`) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**已落地(0042)**:`gameconfig` 读 `env_file=(poker.env.example, poker.env)` 两层(后者覆盖)、字段无代码默认 + `Field` 边界。`poker.env.example` 提交作 canonical 基线(新检出即可跑);本地调参复制为 `poker.env`(gitignored)改值。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除)|
 
-- `.env` / `poker.env` **都不进 git**(含密钥);各配一个 `*.example` 提交。
+- `.env` / `poker.env` **都不进 git**(含密钥 / 本地覆盖);`*.example` 提交。**注**:`poker.env.example` 不止是模板,还是 gameconfig 的**实际加载基线**(0042),所以它带 canonical 真值(游戏参数非密钥),改字段同步回它。
 - **Alembic 的 `DATABASE_URL` 从环境变量读**(0026 起):[alembic/env.py](../alembic/env.py) 取 `os.environ` 的 `DATABASE_URL`、缺省本地 sqlite(`sqlite:///./poker.db`)——**免 `.env` 也能跑迁移**(不依赖任何读 `.env` 的 Settings——那会因缺 `.env` 崩;原型 `app.config` 已于 0027 删)。生产把库 URL 给 alembic 即可:`DATABASE_URL=… alembic upgrade head`。完整用法见 **[db-migrations.md](db-migrations.md)**。
 
 ## Poetry

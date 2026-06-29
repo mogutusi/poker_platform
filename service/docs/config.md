@@ -40,7 +40,11 @@ class Timer:
 
 > 这把 [timer.md](timer.md) 的 `ACTION_TIMEOUT` / `LIVENESS_TIMEOUT` / `TICK`、[db.md](db.md) 的 `DB_FLUSH_*`、[log.md](log.md) 的 `LOG_*` 全部收编为配置项。
 
-> **当前状态(D 阶段,见 [changes/0018](refactor/changes/0018-d-dev-shell.md)/[0019](refactor/changes/0019-doc-sync-followup.md))**:[app/gameconfig.py](../app/gameconfig.py) 已建,但**暂用带默认值的具名常量**(import 不依赖 env,dev 脚手架友好),尚未做成上面的 `pydantic-settings + poker.env + 无默认 + Field 边界`。本节描述的是 **P8「配置收编」的目标形态**;届时把这些常量改为 env 驱动、去掉代码默认、补 `poker.env(.example)`。它满足本规范的「具名 / 集中 / 不散落字面量」一半,缺的是「env 单一事实源 + 无默认」那一半。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。)
+> **当前状态:已落地(0042 配置收编,见 [changes/0042](refactor/changes/0042-config-consolidation.md))**。[app/gameconfig.py](../app/gameconfig.py) 已是 `GameConfig(BaseSettings)`:字段**无代码默认** + `Field(ge=/le=/gt=)` 边界 + `LOG_LEVEL`/`LOG_FORMAT` 用 `Literal` 收敛取值,缺值/越界启动即 `ValidationError`。两处**有意细化**(本规范同步更新):
+> - **env 两层加载**:`env_file=(app/poker.env.example, app/poker.env)`,后者覆盖前者、缺文件静默跳过。**`poker.env.example` 提交进 git、作 canonical 基线**(新检出 / CI 无本地 `poker.env` 也能跑、所有测试可加载);`poker.env`(gitignored)只放本地覆盖。这不违「值不写进 `.py`」的本意——值全在受版本控制的 example 文件,不在代码里;「缺字段启动即报错」对真正缺失(example/poker.env/OS env 都没有)仍生效。路径锚定 `app/` 目录(`Path(__file__).parent`),不依赖 CWD。
+> - **访问接口不变**:业务代码仍 `from app import gameconfig` → `gameconfig.ACTION_TIMEOUT`(模块级 `__getattr__` 委托单例 `config`),不必写 `gameconfig.config.XXX`。
+>
+> 余项:`SetSmallBlind`/`SetBuyIn` 的买入/盲注上下限字段随该命令落地再加(避免死配置);基础设施 `DATABASE_URL`/JWT 走另一轨 `app/config.py`(见下文「两套配置」)。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。)
 
 ## 新增一个可调参数 = 改三处,只有一处是「值」
 

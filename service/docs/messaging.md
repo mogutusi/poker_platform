@@ -38,7 +38,7 @@
 - **身份**:发件人 = **连接绑定的 nick**(不信报文自报);收件人 = `to_nick`;**禁止发给自己**(`CANNOT_DM_SELF`)。`msg_id = uuid4().hex`(shell 生成,比 `from_uid:微秒` 稳——免同微秒撞键);`created_at` = shell 墙钟。**v1 发件人成功路径零回包**(本地乐观渲染;送达确认走 0039 `DMRead` 已读回执)。
 - **防护序(同 0033)**:空 → 超长 → 自发 → 限速 **先拒**(廉价、不耗令牌、不读 DB),合法**再**过令牌桶(每连接 `dm_bucket`),过桶**才**读 DB 解析 uid(贵)。
 - **第二个 outbound 生产者**:私聊路由和 GameLoop 都 `put_nowait` 到 `outbound`——单线程 asyncio 下安全;私聊与游戏消息之间**不保证相对顺序**(对聊天无所谓,可接受)。**仍只经 `outbound` → Sender**,不旁路 `ws.send`(守不变量 4/6)。
-- **限速**:在 shell(发件人维度令牌桶 `dm_bucket`,与房聊 `chat_bucket` 各一桶),阈值 `DM_MAX_TEXT_LEN`/`DM_RATE_BURST`/`DM_RATE_PER_SEC` 进 [config.md](config.md)(现 dev 常量、P8 env 化)。
+- **限速**:在 shell(发件人维度令牌桶 `dm_bucket`,与房聊 `chat_bucket` 各一桶),阈值 `DM_MAX_TEXT_LEN`/`DM_RATE_BURST`/`DM_RATE_PER_SEC` 进 [config.md](config.md)(已随 0042 配置收编 env 化)。
 
 ## 表情(emoji,见 [changes/0034](refactor/changes/0034-emoji-catalog-design.md))
 
@@ -72,7 +72,7 @@
   - **v1 不校验成员资格**:跨房拉历史可接受——房聊是**公开非敏感**态(privacy 红线只护 hole_cards/deck)、≤20 内网、拉者本可进该房看。严格成员校验需走 reduce 解 world(本批不做,见 [changes/0036](refactor/changes/0036-room-chat-history.md) 决策 5)。
 - **跨协程共享安全**:dispatch(GameLoop 协程)写 / Receiver(自协程)读——单线程 asyncio 下两端皆无 `await` 同步访问、不中途交错(同 [timer.md](timer.md) dispatch 写 / Timer 读 `_action` 表)。`recent` 返回 tuple 快照。
 - **清理**:**v1 房静态预置([lobby.md](lobby.md))→ 不销毁 → 无需清理**;缓冲键于固定房集。动态建房(future)时由销毁处删(shell 不读 world,故由 reduce/GameLoop 侧信号触发,非惰性查 `world.rooms`)。
-- **容量 / 崩溃**:`ROOM_CHAT_HISTORY_SIZE` 进 [config.md](config.md)(默认 50;现 dev 常量、P8 env 化)。进程崩 → 缓冲全丢;房聊本就 ephemeral,接受([storage.md](storage.md) 崩溃语义)。
+- **容量 / 崩溃**:`ROOM_CHAT_HISTORY_SIZE` 进 [config.md](config.md)(默认 50;已随 0042 配置收编 env 化)。进程崩 → 缓冲全丢;房聊本就 ephemeral,接受([storage.md](storage.md) 崩溃语义)。
 
 ### 私信:落库的「未读收件箱 + 完整已读回执」
 

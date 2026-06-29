@@ -1,47 +1,81 @@
-# 游戏可调参数(目标结构位,见 refactor/README §3)。
+# 游戏可调参数(单一事实源 = poker.env,见 config.md / refactor/README §3)。
 #
-# 现阶段用带默认值的常量,import 不依赖 env(dev 友好);P8「配置收编」时接 poker.env + *.example
-# (见 config.md / TODO)。与基础设施配置 app/config.py(DATABASE_URL/JWT…)分开:那是 .env、这是游戏参数。
-# 旧 app/pokertable/gameconfig.py 是被取代的原型物(绑不存在的 poker.env),勿用。
+# 形态(0042 配置收编落地):`GameConfig(BaseSettings)`,字段无代码默认 + `Field` 边界 → 缺值启动即报错,
+# 从源头杜绝「代码偷藏默认 15」。值全在 env 文件,改参数只动 env、不碰 .py(config.md)。
+#
+# 加载两层(后者覆盖前者,缺文件静默跳过):
+#   1. poker.env.example —— 提交进 git 的基线(canonical dev 值,永远在 → 新检出/CI 即可跑)
+#   2. poker.env         —— 本地覆盖(gitignored),按需调参
+# 路径锚定本模块目录(不依赖 CWD;测试/alembic/uvicorn 的工作目录不保证是 service/)。
+#
+# 访问接口:`from app import gameconfig` → `gameconfig.ACTION_TIMEOUT`(经模块 __getattr__ 委托单例 config,
+# 见文件末;保持 0018 起的调用接口不变)。与基础设施配置 app/config.py(DATABASE_URL/JWT…,另一轨)分开。
 
-# ── 定时器(见 timer.md)──
-ACTION_TIMEOUT: float = 15.0  # 行动倒计时(秒):轮到某人后多久没动作即投 Timeout(默认 check / fold)
-LIVENESS_TIMEOUT: float = 90.0  # 在线保活(秒):距最后一帧超此值即投 Cleanup(退筹释座);须 ≫ ACTION_TIMEOUT
-TIMER_TICK_MS: int = 500  # Timer 扫描周期(毫秒):到点最多迟一个 tick
+from pathlib import Path
+from typing import Literal
 
-# ── 背压(见 architecture.md「队列有界」)──
-INBOX_MAX: int = 1024  # GameLoop inbox 上限;满 = GameLoop 卡死(进程级 bug,落 CRITICAL)
-OUTBOUND_MAX: int = 256  # 每连接 outbound 上限;满 = 慢客户端,丢连接 + Disconnect(不阻塞 GameLoop)
-ERROR_DETAIL_MAX_LEN: int = 200  # 回发 ErrorMessage.detail 的最大字符数(截断 Pydantic 校验错误文本)
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# ── 房聊文本防护 / 限速(见 messaging.md;shell 进 reduce 前防护;P8 接 poker.env + bounds)──
-ROOM_CHAT_MAX_TEXT_LEN: int = 500  # 房聊单条正文最大字符数;超则 Receiver 拒(MESSAGE_TOO_LONG)
-ROOM_CHAT_RATE_BURST: float = 5.0  # 令牌桶容量(突发上限):静默后最多连发几条
-ROOM_CHAT_RATE_PER_SEC: float = 1.0  # 令牌桶稳态补充速率(每秒令牌数 = 每秒可发条数)
-ROOM_CHAT_HISTORY_SIZE: int = 50  # 每房内存环形缓冲保留的最近房聊条数(不落库;进/重进房经 FetchRoomChat 拉,见 messaging.md)
+_ENV_DIR = Path(__file__).parent  # app/ 目录;poker.env(.example) 归此(见 config.md / dev.md)
 
-# ── 私信 DM 文本防护 / 限速(见 messaging.md §私信;shell 进路由前防护;P8 接 poker.env + bounds)──
-DM_MAX_TEXT_LEN: int = 1000  # 私信单条正文最大字符数;超则 shell DM 路由拒(MESSAGE_TOO_LONG)
-DM_RATE_BURST: float = 5.0  # 私信令牌桶容量(突发上限):静默后最多连发几条
-DM_RATE_PER_SEC: float = 1.0  # 私信令牌桶稳态补充速率(每秒可发条数)
-# 注:已读保留清理参数(DM_READ_RETENTION_SECONDS / DM_CLEANUP_INTERVAL_SECONDS)随 0039 已读游标落地(见 db.md)
 
-# ── 日志(见 log.md;P8 接 poker.env + bounds)──
-LOG_LEVEL: str = "INFO"  # root 级别:DEBUG=全量审计(开发/排障)/ INFO=业务里程碑 / WARNING+=异常路径
-LOG_FORMAT: str = "console"  # "json"=结构化一行一条(生产,jq 过滤)/ "console"=人类友好单行(本地)
-LOG_FILE: str = ""  # 落地文件路径;空串=只写 stderr(dev 默认)
+class GameConfig(BaseSettings):
+    # env 两层:example(提交基线)→ poker.env(本地覆盖);锚到 app/ 绝对路径,CWD 无关。
+    model_config = SettingsConfigDict(
+        env_file=(_ENV_DIR / "poker.env.example", _ENV_DIR / "poker.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",  # env 里多余键(如 DATABASE_URL)不报错——那是 app/config.py 的地盘
+        case_sensitive=False,
+    )
 
-# ── delayDB 写回(见 db.md;P8 接 poker.env + bounds)──
-DB_FLUSH_INTERVAL_MS: int = 500  # PersistWriter 落库周期(毫秒)= 同实体多次变更合并窗 = 积分落库最大滞后 / 崩溃窗口
-DB_WRITE_MAX_RETRY: int = 10  # 同批连续落库失败**达**此次数(总尝试数,非额外重试)→ 毒丸:丢批 + CRITICAL(别卡死后续,bug 信号)
-DB_DRAIN_TIMEOUT_MS: int = 5000  # 优雅关闭 drain 上限(毫秒):超时放弃未落写 + CRITICAL(进程要退,接受该窗口)
-DM_READ_RETENTION_SECONDS: int = 604800  # 已读私信再留多久(秒)后清(默认 7 天);未读不受限、一直保活(见 messaging.md / db.md)
-DM_CLEANUP_INTERVAL_SECONDS: int = 3600  # PersistWriter 跑私信保留清理的周期(秒;默认每小时一趟)
+    # ── 定时器(见 timer.md)──
+    ACTION_TIMEOUT: float = Field(ge=5, le=120)  # 行动倒计时(秒):轮到某人后多久没动作即投 Timeout(默认 check / fold)
+    LIVENESS_TIMEOUT: float = Field(ge=30, le=600)  # 在线保活(秒):距最后一帧超此值即投 Cleanup(退筹释座);须 ≫ ACTION_TIMEOUT
+    TIMER_TICK_MS: int = Field(ge=100, le=2000)  # Timer 扫描周期(毫秒):到点最多迟一个 tick
 
-# ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
-DEV_ROOM: str = "dev"  # 明文 dev 端点预置的单一房名
-DEV_SMALL_BLIND: int = 1  # dev 房小盲(大盲 = 2×)
-DEV_BUY_IN: int = 100  # dev 房默认买入额(Room.buy_in;实际买入额由 BuyIn 命令带)
-DEV_SEATS: int = 6  # dev 房座位数
-DEV_USERS: tuple[str, ...] = ("alice", "bob", "carol", "dave", "eve", "frank")  # 预置 dev 用户名(?nick= 取其一)
-DEV_START_POINTS: int = 1000  # 每个 dev 用户的初始全局积分
+    # ── 背压(见 architecture.md「队列有界」)──
+    INBOX_MAX: int = Field(ge=64, le=65536)  # GameLoop inbox 上限;满 = GameLoop 卡死(进程级 bug,落 CRITICAL)
+    OUTBOUND_MAX: int = Field(ge=16, le=8192)  # 每连接 outbound 上限;满 = 慢客户端,丢连接 + Disconnect(不阻塞 GameLoop)
+    ERROR_DETAIL_MAX_LEN: int = Field(ge=20, le=2000)  # 回发 ErrorMessage.detail 的最大字符数(截断 Pydantic 校验错误文本)
+
+    # ── 房聊文本防护 / 限速(见 messaging.md;shell 进 reduce 前防护)──
+    ROOM_CHAT_MAX_TEXT_LEN: int = Field(ge=1, le=10000)  # 房聊单条正文最大字符数;超则 Receiver 拒(MESSAGE_TOO_LONG)
+    ROOM_CHAT_RATE_BURST: float = Field(ge=1, le=100)  # 令牌桶容量(突发上限):静默后最多连发几条
+    ROOM_CHAT_RATE_PER_SEC: float = Field(gt=0, le=100)  # 令牌桶稳态补充速率(每秒令牌数 = 每秒可发条数)
+    ROOM_CHAT_HISTORY_SIZE: int = Field(ge=0, le=1000)  # 每房内存环形缓冲保留的最近房聊条数(不落库;进/重进房经 FetchRoomChat 拉,见 messaging.md)
+
+    # ── 私信 DM 文本防护 / 限速(见 messaging.md §私信;shell 进路由前防护)──
+    DM_MAX_TEXT_LEN: int = Field(ge=1, le=10000)  # 私信单条正文最大字符数;超则 shell DM 路由拒(MESSAGE_TOO_LONG)
+    DM_RATE_BURST: float = Field(ge=1, le=100)  # 私信令牌桶容量(突发上限):静默后最多连发几条
+    DM_RATE_PER_SEC: float = Field(gt=0, le=100)  # 私信令牌桶稳态补充速率(每秒可发条数)
+
+    # ── 日志(见 log.md)──
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]  # root 级别:DEBUG=全量审计 / INFO=业务里程碑 / WARNING+=异常路径
+    LOG_FORMAT: Literal["json", "console"]  # "json"=结构化一行一条(生产,jq 过滤)/ "console"=人类友好单行(本地)
+    LOG_FILE: str = ""  # 落地文件路径;空串=只写 stderr(dev 默认)。空串非「代码默认」——env 显式给空亦可,这里允许 env 缺省为空
+
+    # ── delayDB 写回(见 db.md)──
+    DB_FLUSH_INTERVAL_MS: int = Field(ge=50, le=10000)  # PersistWriter 落库周期(毫秒)= 同实体多次变更合并窗 = 积分落库最大滞后 / 崩溃窗口
+    DB_WRITE_MAX_RETRY: int = Field(ge=1, le=100)  # 同批连续落库失败**达**此次数(总尝试数,非额外重试)→ 毒丸:丢批 + CRITICAL(别卡死后续,bug 信号)
+    DB_DRAIN_TIMEOUT_MS: int = Field(ge=0, le=60000)  # 优雅关闭 drain 上限(毫秒):超时放弃未落写 + CRITICAL(进程要退,接受该窗口)
+    DM_READ_RETENTION_SECONDS: int = Field(ge=0, le=31536000)  # 已读私信再留多久(秒)后清(默认 7 天);未读不受限、一直保活(见 messaging.md / db.md)
+    DM_CLEANUP_INTERVAL_SECONDS: int = Field(ge=60, le=86400)  # PersistWriter 跑私信保留清理的周期(秒;默认每小时一趟)
+
+    # ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
+    DEV_ROOM: str  # 明文 dev 端点预置的单一房名
+    DEV_SMALL_BLIND: int = Field(ge=1, le=100000)  # dev 房小盲(大盲 = 2×)
+    DEV_BUY_IN: int = Field(ge=1, le=100000000)  # dev 房默认买入额(Room.buy_in;实际买入额由 BuyIn 命令带)
+    DEV_SEATS: int = Field(ge=2, le=10)  # dev 房座位数
+    DEV_USERS: tuple[str, ...] = Field(min_length=1)  # 预置 dev 用户名(?nick= 取其一);env 写 JSON 数组
+    DEV_START_POINTS: int = Field(ge=0, le=100000000)  # 每个 dev 用户的初始全局积分
+
+
+# 启动期单例:import 即建 → 缺字段/越界当场 ValidationError(config.md「缺了启动即报错」)。
+config = GameConfig()
+
+
+def __getattr__(name: str):
+    # PEP 562 模块级 __getattr__:把 `gameconfig.ACTION_TIMEOUT` 透到单例字段,保持 0018 起的访问接口不变
+    # (不必把 44 处调用点改成 config.XXX)。未知名 → getattr 自然抛 AttributeError。
+    return getattr(config, name)
