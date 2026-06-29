@@ -93,10 +93,10 @@
 - **游标表一表两用**:未读 = `created_at > dm_read_cursor[reader=我, peer=对方].read_through_ts` 的行(未读数跨对端求和);**发件人的已读回执** = 查 `dm_read_cursor where peer=我`——「对方把我发的读到了几时」,回执无需另存,游标即真源。
 - **时间游标而非自增 id**:用 shell 盖的墙钟 `created_at` 排序/比较(同 [db.md](db.md)「墙钟由 shell 盖」),躲开「自增 id 跨重启不单调」的坑;`msg_id` 只作 `DMWrite` 的 `dedupe_key`(幂等 INSERT)+ wire 引用。
 
-保留多久(「已读即删 + 未读保活」,且**时间可配**;**清理随 0041/future,游标判据由 0039 落地**):
+保留多久(「已读即删 + 未读保活」,且**时间可配**;**已落地 [0041](refactor/changes/0041-dm-retention-cleanup.md)**):
 
 - **未读**:保留**直到被读**。**已读**:再留 `DM_READ_RETENTION_SECONDS`(默认 7 天;**进 [config.md](config.md),不硬编码**)后清。
-- **清理归唯一写者**:PersistWriter 周期里附带一趟保留清理(`DELETE` 已读且 `created_at < now - 保留期`),周期 `DM_CLEANUP_INTERVAL_SECONDS`。DELETE 也是 DB 写、归唯一写者,**不另起协程写库**(守 [db.md](db.md) 唯一写者)。
+- **清理归唯一写者(0041)**:`PersistWriter.maybe_cleanup` 周期(`DM_CLEANUP_INTERVAL_SECONDS`)附带一趟保留清理 → `OrmPersister.cleanup_dms` `DELETE` 已读(收件人游标 `read_through_ts >= created_at`)且 `created_at < now - 保留期` 的私信。DELETE 也是 DB 写、归唯一写者,**不另起协程写库**(守 [db.md](db.md) 唯一写者);未读永不删、已读未过期留;best-effort(失败 ERROR + 跳过,幂等下周期重删)。
 - **崩溃 / 竞态(接受)**:① 发后未 flush 即崩 → 丢最近几条(同手牌记录);② 极小窗:A 发给离线 B、append 还在缓冲未落库时 B 恰登录读 DB → 本轮漏**但不丢**(在缓冲里,下个 flush 进 DB,下次拉 / A 在线时可见),本规模自愈。要消窗可加「内存未读镜像」(见待定)。
 - **限速 / 长度**:私信发送维度令牌桶在 shell(进路由前),`DM_RATE_LIMIT_*`;`text ≤ DM_MAX_TEXT_LEN`;均进配置。
 - **隐私**:正文现在**落库**(持久化本意),但 [log.md](log.md) 脱敏红线不变——**不写日志**、正文不得带 `hole_cards`/`deck`(见上「脱敏与隐私」)。

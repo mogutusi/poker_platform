@@ -7,7 +7,8 @@
 import asyncio
 import logging
 import time
-from typing import Protocol
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Protocol
 
 from app import gameconfig
 from app.core.events import PersistPayload
@@ -86,6 +87,10 @@ class Persister(Protocol):
         self, dirty: dict[StateKey, PersistPayload], appends: list[PersistPayload]
     ) -> None: ...
 
+    # 私信保留清理(0041):删「已读且 created_at < cutoff」的私信,返删除行数。DELETE 也是 DB 写、归唯一写者
+    # (PersistWriter 周期调,见 db.md 不变量 5);未读永不删、已读未过期留。
+    async def cleanup_dms(self, cutoff: datetime) -> int: ...
+
 
 class NullPersister:
     # dev / 无 DB:不落库,只记日志(dev 端点本就无 DB,见 lifespan)。drain 仍能清空缓冲。
@@ -94,6 +99,9 @@ class NullPersister:
     ) -> None:
         if dirty or appends:
             log.debug("NullPersister dropped %d state writes + %d event writes (dev, no DB)", len(dirty), len(appends))
+
+    async def cleanup_dms(self, cutoff: datetime) -> int:
+        return 0  # 无 DB:无可清理
 
 
 class PersistWriter:
@@ -106,6 +114,9 @@ class PersistWriter:
         flush_interval_s: float | None = None,
         max_retry: int | None = None,
         drain_timeout_s: float | None = None,
+        cleanup_interval_s: float | None = None,
+        retention_s: float | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._buf = buf
         self._persister = persister
@@ -116,12 +127,36 @@ class PersistWriter:
             gameconfig.DB_DRAIN_TIMEOUT_MS / 1000 if drain_timeout_s is None else drain_timeout_s
         )
         self._fail_streak = 0  # 同批连续失败计数;达 max_retry 触发毒丸
+        # 私信保留清理(0041):周期门控 + 保留期 + 注入墙钟(算 cutoff;shell 可读钟,core 才禁)。
+        self._cleanup_interval = (
+            gameconfig.DM_CLEANUP_INTERVAL_SECONDS if cleanup_interval_s is None else cleanup_interval_s
+        )
+        self._retention = gameconfig.DM_READ_RETENTION_SECONDS if retention_s is None else retention_s
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._last_cleanup = time.monotonic()  # 启动后等一个周期再首清(monotonic 任何时刻可读、无需 loop)
 
     async def run(self) -> None:
-        # 主循环:唯一让出点 = sleep + flush 内 await。绝不在此直改 world / 旁路 ws。
+        # 主循环:唯一让出点 = sleep + flush/cleanup 内 await。绝不在此直改 world / 旁路 ws。
         while True:
             await asyncio.sleep(self._interval)
             await self.flush_once()
+            await self.maybe_cleanup()  # 周期附带私信保留清理(db.md:DELETE 归唯一写者,不另起协程)
+
+    async def maybe_cleanup(self) -> None:
+        # 周期(DM_CLEANUP_INTERVAL_SECONDS)跑一趟私信保留清理:删「已读且 created_at < now-保留期」的私信(db.md)。
+        # best-effort:失败仅 ERROR + 跳过(不回灌——DELETE 幂等,下周期/重启再删),不影响 flush 主职。抽出供直测。
+        mono = time.monotonic()
+        if mono - self._last_cleanup < self._cleanup_interval:
+            return
+        self._last_cleanup = mono
+        cutoff = self._now() - timedelta(seconds=self._retention)  # now 由 shell 盖墙钟(core 不读钟)
+        try:
+            deleted = await self._persister.cleanup_dms(cutoff)
+        except Exception:
+            log.error("dm retention cleanup failed (cutoff=%s)", cutoff, exc_info=True)
+            return
+        if deleted:
+            log.info("dm retention cleanup deleted %d read+expired messages (cutoff=%s)", deleted, cutoff)
 
     async def flush_once(self) -> bool:
         # 取走一批落库(先 swap 同步取走清空、再 await,绝不持缓冲跨 await,守 db.md 双缓冲)。

@@ -5,7 +5,7 @@
 import logging
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.events import PersistPayload
@@ -35,6 +35,24 @@ class OrmPersister:
                     await self._apply_state_write(session, payload)
                 for payload in appends:
                     await self._apply_event_write(session, payload)
+
+    async def cleanup_dms(self, cutoff: datetime) -> int:
+        # 私信保留清理(db.md / changes/0041):删「已读 且 created_at < cutoff」的私信,返删除行数(供日志)。
+        # 已读 = 收件人对该发件人的游标读过该条(EXISTS 子查询;read_through_ts >= created_at,与 0040 未读判据互补)。
+        # 未读(无满足游标)永不删;已读但 created_at >= cutoff(未过期)留。DELETE 归唯一写者,一短事务。
+        already_read = (
+            select(DMReadCursor.reader_uid)
+            .where(DMReadCursor.reader_uid == DMMessage.to_uid)  # 收件人 = 读者
+            .where(DMReadCursor.peer_uid == DMMessage.from_uid)  # 发件人 = 对端
+            .where(DMReadCursor.read_through_ts >= DMMessage.created_at)  # 读过该条(inclusive)
+            .exists()
+        )
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                result = await session.execute(
+                    delete(DMMessage).where(DMMessage.created_at < cutoff).where(already_read)
+                )
+                return result.rowcount or 0  # rowcount 删除行数(sqlite/pg 可靠);None/-1 兜 0
 
     async def _apply_state_write(self, session: AsyncSession, payload: PersistPayload) -> None:
         match payload:

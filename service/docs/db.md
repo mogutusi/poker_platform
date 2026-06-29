@@ -184,5 +184,5 @@ DM_CLEANUP_INTERVAL_SECONDS=3600   # 每小时跑一趟清理
 - **覆盖 ≠ 丢一致性**:落的是内存权威**当前值**,DB 追平即正确;被覆盖的中间值本就无需持久化。把这点和「事件写绝不可覆盖」分清,是本模块唯一易错处。
 - **脱敏红线**:落库 payload **不得带 `hole_cards` / `deck`**(见 [log.md](log.md));手牌记录存**结果**(`initial_points`/`final_points`/`final_pot`),不是底牌。
 - **读写分离**:实时判定一律读内存;DB 只服务事后查询与崩溃后冷启动初值。
-- **私信是写缓冲的第二个生产者**:shell 私信路由 `put`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理**(删已读满期的行)也归 PersistWriter——DELETE 是 DB 写,不另起写者(守唯一写者),周期 `DM_CLEANUP_INTERVAL_SECONDS`、保留期 `DM_READ_RETENTION_SECONDS`。
+- **私信是写缓冲的第二个生产者**:shell 私信路由 `put`(同步无 await)进缓冲(同 GameLoop.dispatch),唯一**写库者**仍是 PersistWriter(见 [messaging.md](messaging.md));**私信保留清理已落地 [0041](refactor/changes/0041-dm-retention-cleanup.md)**:`PersistWriter.maybe_cleanup`(周期 `DM_CLEANUP_INTERVAL_SECONDS`,run 循环附带)→ `Persister.cleanup_dms(cutoff=now-DM_READ_RETENTION_SECONDS)`(`OrmPersister` 执行 `DELETE dmmessage WHERE created_at<cutoff AND EXISTS(已读游标)`)。DELETE 也是 DB 写、归唯一写者(**不另起协程**),未读永不删、已读未过期留;失败仅 ERROR + 跳过(幂等,下周期重删)。
 - **日志分级**:flush 成功 DEBUG、失败回灌 ERROR、毒丸 CRITICAL(数据丢失 + bug 信号)、drain 超时 CRITICAL。

@@ -35,6 +35,8 @@ LOG_FILE: str = ""  # 落地文件路径;空串=只写 stderr(dev 默认)
 DB_FLUSH_INTERVAL_MS: int = 500  # PersistWriter 落库周期(毫秒)= 同实体多次变更合并窗 = 积分落库最大滞后 / 崩溃窗口
 DB_WRITE_MAX_RETRY: int = 10  # 同批连续落库失败**达**此次数(总尝试数,非额外重试)→ 毒丸:丢批 + CRITICAL(别卡死后续,bug 信号)
 DB_DRAIN_TIMEOUT_MS: int = 5000  # 优雅关闭 drain 上限(毫秒):超时放弃未落写 + CRITICAL(进程要退,接受该窗口)
+DM_READ_RETENTION_SECONDS: int = 604800  # 已读私信再留多久(秒)后清(默认 7 天);未读不受限、一直保活(见 messaging.md / db.md)
+DM_CLEANUP_INTERVAL_SECONDS: int = 3600  # PersistWriter 跑私信保留清理的周期(秒;默认每小时一趟)
 
 # ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
 DEV_ROOM: str = "dev"  # 明文 dev 端点预置的单一房名

@@ -22,6 +22,10 @@ T_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 T_END = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
 T_DM = datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc)
 T_DM2 = datetime(2026, 1, 1, 0, 9, tzinfo=timezone.utc)
+# 保留清理用:OLD < CUTOFF < RECENT(私信「已读且 created_at < cutoff」才删)
+T_R_OLD = datetime(2026, 1, 1, tzinfo=timezone.utc)
+T_R_CUTOFF = datetime(2026, 3, 1, tzinfo=timezone.utc)
+T_R_RECENT = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
 async def _setup(seed=((1, "alice", 1000), (2, "bob", 1000))):
@@ -223,6 +227,97 @@ async def test_dm_cursor_fk_violation_raises_and_rolls_back():
         await OrmPersister(sm).flush({("dm_cursor", "1", "999"): cur}, [])
     async with sm() as s:
         assert await s.scalar(select(func.count()).select_from(DMReadCursor)) == 0
+
+
+# ── 保留清理:删「已读 + 过期」,留「未读(虽老)」与「已读但未过期」(db.md / changes/0041)──
+async def test_cleanup_dms_deletes_read_and_expired_only():
+    sm = await _setup(seed=((1, "alice", 1000), (2, "bob", 1000), (3, "carol", 1000)))
+    p = OrmPersister(sm)
+    await p.flush(
+        {},
+        [
+            DMWrite(dedupe_key="read_old", from_uid=2, to_uid=1, text="x", created_at=T_R_OLD),
+            DMWrite(dedupe_key="read_recent", from_uid=2, to_uid=1, text="y", created_at=T_R_RECENT),
+            DMWrite(dedupe_key="unread_old", from_uid=3, to_uid=1, text="z", created_at=T_R_OLD),  # 无游标 → 未读
+        ],
+    )
+    # alice(1) 读 bob(2) 到 T_R_RECENT(覆盖 read_old@OLD 与 read_recent@RECENT);未覆盖 carol(3)
+    await p.flush(
+        {("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_R_RECENT)}, []
+    )
+    deleted = await p.cleanup_dms(T_R_CUTOFF)
+    assert deleted == 1  # 只 read_old(已读 + created_at < cutoff)
+    async with sm() as s:
+        keys = {k for (k,) in (await s.execute(select(DMMessage.dedupe_key))).all()}
+    assert keys == {"read_recent", "unread_old"}  # 已读未过期 + 未读(虽老)均留
+
+
+# ── 保留清理:未读永不删(即便远早于 cutoff)──
+async def test_cleanup_dms_keeps_unread_however_old():
+    sm = await _setup()  # alice/bob;无游标 → m1 未读
+    p = OrmPersister(sm)
+    await p.flush({}, [DMWrite(dedupe_key="m1", from_uid=2, to_uid=1, text="x", created_at=T_R_OLD)])
+    assert await p.cleanup_dms(T_R_RECENT) == 0  # cutoff 很晚、m1 很老但未读 → 不删
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
+
+
+# ── 保留清理:已读但未过期(created_at >= cutoff)留 ──
+async def test_cleanup_dms_keeps_read_but_unexpired():
+    sm = await _setup()
+    p = OrmPersister(sm)
+    await p.flush({}, [DMWrite(dedupe_key="m1", from_uid=2, to_uid=1, text="x", created_at=T_R_RECENT)])
+    await p.flush(
+        {("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_R_RECENT)}, []
+    )
+    assert await p.cleanup_dms(T_R_CUTOFF) == 0  # 已读但 created_at(RECENT) >= cutoff → 未过期,留
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
+
+
+# ── 保留清理:空库返 0 ──
+async def test_cleanup_dms_empty_returns_zero():
+    sm = await _setup()
+    assert await OrmPersister(sm).cleanup_dms(T_R_RECENT) == 0
+
+
+# ── 边界:created_at == cutoff(已读)→ 留(锁死严格 `<`,非 `<=`)──
+async def test_cleanup_dms_keeps_message_exactly_at_cutoff():
+    sm = await _setup()
+    p = OrmPersister(sm)
+    await p.flush({}, [DMWrite(dedupe_key="m1", from_uid=2, to_uid=1, text="x", created_at=T_R_CUTOFF)])
+    await p.flush(
+        {("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_R_RECENT)}, []
+    )
+    assert await p.cleanup_dms(T_R_CUTOFF) == 0  # created_at == cutoff 不满足 `< cutoff` → 留(若误写 `<=` 会误删)
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
+
+
+# ── 边界:read_through_ts == created_at(恰读到该条)+ 过期 → 删(锁死 inclusive `>=`,非 `>`)──
+async def test_cleanup_dms_deletes_when_read_through_equals_created_at():
+    sm = await _setup()
+    p = OrmPersister(sm)
+    await p.flush({}, [DMWrite(dedupe_key="m1", from_uid=2, to_uid=1, text="x", created_at=T_R_OLD)])
+    await p.flush(
+        {("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_R_OLD)}, []
+    )  # 游标恰好读到 m1(read_through == created_at)
+    assert await p.cleanup_dms(T_R_CUTOFF) == 1  # 已读(inclusive)+ 过期 → 删(若误写 `>` 会判未读、漏删)
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 0
+
+
+# ── 关联隔离:收件人只读过**别的对端**(carol)的消息 → bob 发来的仍未读、不删(锁死 peer==from_uid 关联)──
+async def test_cleanup_dms_wrong_peer_cursor_does_not_overmatch():
+    sm = await _setup(seed=((1, "alice", 1000), (2, "bob", 1000), (3, "carol", 1000)))
+    p = OrmPersister(sm)
+    await p.flush({}, [DMWrite(dedupe_key="from_bob", from_uid=2, to_uid=1, text="x", created_at=T_R_OLD)])
+    await p.flush(
+        {("dm_cursor", "1", "3"): DMReadCursorWrite(reader_uid=1, peer_uid=3, read_through_ts=T_R_RECENT)}, []
+    )  # alice 读的是 carol(3) 的进度,与 bob(2) 无关
+    assert await p.cleanup_dms(T_R_CUTOFF) == 0  # from_bob 无 (alice,bob) 游标 → 未读,虽老不删(关联非常量)
+    async with sm() as s:
+        assert await s.scalar(select(func.count()).select_from(DMMessage)) == 1
 
 
 # ── 端到端:PersistWriter.flush_once 把缓冲一批经 OrmPersister 落库并清空 ──

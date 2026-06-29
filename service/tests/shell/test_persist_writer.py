@@ -8,7 +8,7 @@ import asyncio
 
 from app.core.records import HandRecordWrite, PointsWrite
 from app.shell.persist import NullPersister, PersistWriter, WriteBuffer
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -28,6 +28,7 @@ class FakePersister:
         self.fail_times = fail_times
         self.attempts = 0
         self.gate: asyncio.Event | None = None
+        self.cleanups: list = []  # 记录 cleanup_dms(cutoff) 的 cutoff(测保留清理调度)
 
     async def flush(self, dirty, appends) -> None:
         self.attempts += 1
@@ -36,6 +37,10 @@ class FakePersister:
         if self.attempts <= self.fail_times:
             raise RuntimeError("boom")
         self.flushed.append((dict(dirty), list(appends)))
+
+    async def cleanup_dms(self, cutoff) -> int:
+        self.cleanups.append(cutoff)
+        return 0
 
 
 def _writer(buf, persister, **kw) -> PersistWriter:
@@ -227,3 +232,39 @@ async def test_null_persister_succeeds_silently():
     w = _writer(buf, NullPersister())
     await w.flush_once()
     assert buf.is_empty()  # NullPersister 成功 → 批次落(丢弃),缓冲清空
+
+
+# ── 保留清理调度(0041):未到周期不调 persister.cleanup_dms ──
+async def test_maybe_cleanup_skips_before_interval():
+    p = FakePersister()
+    w = _writer(WriteBuffer(), p, cleanup_interval_s=1000)  # 大周期,刚 init(_last_cleanup=now)
+    await w.maybe_cleanup()
+    assert p.cleanups == []
+
+
+# ── 保留清理调度:到周期则调,cutoff = now - retention(注入墙钟可断言)──
+async def test_maybe_cleanup_runs_after_interval_with_cutoff():
+    NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    p = FakePersister()
+    w = _writer(WriteBuffer(), p, cleanup_interval_s=0.0, retention_s=100, now=lambda: NOW)
+    await w.maybe_cleanup()
+    assert p.cleanups == [NOW - timedelta(seconds=100)]
+    w._cleanup_interval = 1000  # 刚清过、抬高周期 → 紧接再调不重复(_last_cleanup 已更新)
+    await w.maybe_cleanup()
+    assert len(p.cleanups) == 1
+
+
+# ── 保留清理 best-effort:persister.cleanup_dms 抛 → maybe_cleanup 吞(仅 log),不影响 flush 主职 ──
+async def test_maybe_cleanup_swallows_persister_error():
+    class _BoomCleanup:
+        async def flush(self, dirty, appends) -> None: ...
+        async def cleanup_dms(self, cutoff) -> int:
+            raise RuntimeError("cleanup boom")
+
+    w = _writer(WriteBuffer(), _BoomCleanup(), cleanup_interval_s=0.0)
+    await w.maybe_cleanup()  # 不抛
+
+
+# ── NullPersister.cleanup_dms:无 DB → 返 0 ──
+async def test_null_persister_cleanup_returns_zero():
+    assert await NullPersister().cleanup_dms(datetime(2026, 1, 1, tzinfo=timezone.utc)) == 0
