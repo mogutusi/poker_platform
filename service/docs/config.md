@@ -44,7 +44,7 @@ class Timer:
 > - **env 两层加载**:`env_file=(app/poker.env.example, app/poker.env)`,后者覆盖前者、缺文件静默跳过。**`poker.env.example` 提交进 git、作 canonical 基线**(新检出 / CI 无本地 `poker.env` 也能跑、所有测试可加载);`poker.env`(gitignored)只放本地覆盖。这不违「值不写进 `.py`」的本意——值全在受版本控制的 example 文件,不在代码里;「缺字段启动即报错」对真正缺失(example/poker.env/OS env 都没有)仍生效。路径锚定 `app/` 目录(`Path(__file__).parent`),不依赖 CWD。
 > - **访问接口不变**:业务代码仍 `from app import gameconfig` → `gameconfig.ACTION_TIMEOUT`(模块级 `__getattr__` 委托单例 `config`),不必写 `gameconfig.config.XXX`。
 >
-> `SetSmallBlind`/`SetBuyIn` 的盲注/买入上下限(`MIN/MAX_SMALL_BLIND`、`MIN/MAX_BUY_IN`)已随该命令落地补入(0043,见 [changes/0043](refactor/changes/0043-room-config-commands.md));由 shell 进 reduce 前防护(core 不 import config)。余项:基础设施 `DATABASE_URL`/JWT 走另一轨 `app/config.py`(见下文「两套配置」)。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。)
+> `SetSmallBlind`/`SetBuyIn` 的盲注/买入上下限(`MIN/MAX_SMALL_BLIND`、`MIN/MAX_BUY_IN`)已随该命令落地补入(0043,见 [changes/0043](refactor/changes/0043-room-config-commands.md));由 shell 进 reduce 前防护(core 不 import config)。基础设施 `DATABASE_URL` 已收编进另一轨 `app/config.py`(0045,见 [changes/0045](refactor/changes/0045-infra-config.md) + [dev.md](dev.md)「两套配置文件」);JWT 等随 P5。**默认哲学区别**:游戏参数(gameconfig)无默认 / 缺值即崩;基础设施 `DATABASE_URL` 有安全 dev 默认(缺省 sqlite,免 `.env` 也能跑),但**未来密钥(JWT)须无默认 fail-closed**。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。)
 
 ## 新增一个可调参数 = 改三处,只有一处是「值」
 

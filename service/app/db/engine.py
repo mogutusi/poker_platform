@@ -1,19 +1,18 @@
-# async engine + session 工厂(P4 三之二)。DATABASE_URL 从 os.environ 读、缺省本地 sqlite+aiosqlite。
+# async engine + session 工厂(P4 三之二)。DATABASE_URL 经 app/config.settings 读(env > .env;0045 收编)。
 # OrmPersister 持本模块产的 sessionmaker(自有 session,不复用请求级注入,见 db.md「事务分组 & session」)。
-# DATABASE_URL 统一进 app/config 是 P8「配置收编」的事(现与 alembic/env.py 一样直读 os.environ)。
-
-import os
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from app.config import settings
 
 # 缺省本地 sqlite(dev/测试);postgres 走 postgresql+psycopg://(psycopg v3 异步,无需 asyncpg)。
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./poker.db"
 
 
 def database_url() -> str:
-    # 同 alembic/env.py:从环境变量读、缺省本地 sqlite,免 .env 也能跑(见 docs/dev.md)。
-    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+    # 基础设施配置单一事实源(app/config);缺省(None/空)套异步 sqlite 默认,免 .env 也能跑(见 docs/dev.md)。
+    return settings.DATABASE_URL or DEFAULT_DATABASE_URL
 
 
 def make_engine(url: str | None = None, **kwargs) -> AsyncEngine:

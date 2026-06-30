@@ -9,7 +9,7 @@
 ## 本仓的接线(已配好,了解即可)
 
 - `alembic.ini`:`script_location = alembic`、`prepend_sys_path = .`(使 `app` 可导入)。`sqlalchemy.url` 是占位,真 URL 由 `env.py` 覆盖。
-- `alembic/env.py`:① `import app.db.models` 把新架构表注册到 `SQLModel.metadata`(`target_metadata`);**只导这一个**(单一事实源;0026 时还需借此避开原型同名表冲突,原型已于 0027 拆除);② `DATABASE_URL` 从**环境变量**读、缺省本地 sqlite(`sqlite:///./poker.db`),所以**无 `.env` 也能跑迁移**;③ 不跳过外键、`render_as_batch=True`(sqlite 也能 ALTER)。
+- `alembic/env.py`:① `import app.db.models` 把新架构表注册到 `SQLModel.metadata`(`target_metadata`);**只导这一个**(单一事实源;0026 时还需借此避开原型同名表冲突,原型已于 0027 拆除);② `DATABASE_URL` 经 [app/config.py](../app/config.py) `settings` 读(env > `.env`,0045)、缺省本地 sqlite(`sqlite:///./poker.db`),仍**无 `.env` 也能跑迁移**(`settings.DATABASE_URL` 有默认、缺 `.env` 不崩;`DATABASE_URL=… alembic upgrade head` 经 os.environ 优先覆盖);③ 不跳过外键、`render_as_batch=True`(sqlite 也能 ALTER)。
 - `alembic/script.py.mako`:迁移模板里**硬带 `import sqlmodel`**——autogen 会引用 `sqlmodel.sql.sqltypes.AutoString` 等列类型,不带这行升级时会 `NameError`(本仓踩过,见 [changes/0026](refactor/changes/0026-p4-db-models-alembic.md))。
 
 ## 跑命令前:在哪、连哪个库

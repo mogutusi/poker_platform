@@ -6,11 +6,11 @@
 
 | 文件 | 谁读 | 装什么 |
 |---|---|---|
-| `service/.env`(P8 接) | P8 待建的 `app/config.py` Settings;**当前**仅 [alembic/env.py](../alembic/env.py) 直读 `os.environ` 的 `DATABASE_URL` | `DATABASE_URL`、token 过期等**基础设施**(原型 `app/config.py` 已于 0027 删)|
+| `service/.env`(+ `.env.example` 模板) | [app/config.py](../app/config.py) `Settings`(0045)→ [app/db/engine.py](../app/db/engine.py) + [alembic/env.py](../alembic/env.py) 都经它读 | `DATABASE_URL`、未来 JWT 等**基础设施/密钥**。`DATABASE_URL` 有安全 dev 默认(缺省 sqlite,免 `.env` 也能跑);密钥随 P5(无默认)|
 | `service/app/poker.env`(本地覆盖,可选)+ `service/app/poker.env.example`(提交基线) | [app/gameconfig.py](../app/gameconfig.py)(`GameConfig(BaseSettings)`) | 盲注/买入/超时/队列等**游戏可调参数**(见 [config.md](config.md))。**已落地(0042)**:`gameconfig` 读 `env_file=(poker.env.example, poker.env)` 两层(后者覆盖)、字段无代码默认 + `Field` 边界。`poker.env.example` 提交作 canonical 基线(新检出即可跑);本地调参复制为 `poker.env`(gitignored)改值。(原型 `app/pokertable/gameconfig.py` 已于 0027 拆除)|
 
 - `.env` / `poker.env` **都不进 git**(含密钥 / 本地覆盖);`*.example` 提交。**注**:`poker.env.example` 不止是模板,还是 gameconfig 的**实际加载基线**(0042),所以它带 canonical 真值(游戏参数非密钥),改字段同步回它。
-- **Alembic 的 `DATABASE_URL` 从环境变量读**(0026 起):[alembic/env.py](../alembic/env.py) 取 `os.environ` 的 `DATABASE_URL`、缺省本地 sqlite(`sqlite:///./poker.db`)——**免 `.env` 也能跑迁移**(不依赖任何读 `.env` 的 Settings——那会因缺 `.env` 崩;原型 `app.config` 已于 0027 删)。生产把库 URL 给 alembic 即可:`DATABASE_URL=… alembic upgrade head`。完整用法见 **[db-migrations.md](db-migrations.md)**。
+- **Alembic 的 `DATABASE_URL` 经 [app/config.py](../app/config.py) `settings` 读**(0045;此前直读 `os.environ`):`settings.DATABASE_URL`(env > `.env`)缺省本地 sqlite(`sqlite:///./poker.db`)——**仍免 `.env` 也能跑迁移**(`settings.DATABASE_URL` 有默认、缺 `.env` 不崩,达成原「不依赖会崩的 Settings」之意图)。生产把库 URL 给 alembic:`DATABASE_URL=… alembic upgrade head`(os.environ 优先,覆盖 `.env`/默认)。**约束**:P5 给 `Settings` 加必填密钥须给默认或拆独立类,保 alembic 无密钥仍能跑迁移(headless,见 [app/config.py](../app/config.py) 注)。完整用法见 **[db-migrations.md](db-migrations.md)**。
 
 ## Poetry
 
@@ -43,7 +43,7 @@ poetry env activate                          # 或先激活、再裸跑命令
 ### 这个仓库的 env.py(0026 重定向后)
 
 - **只 `import app.db.models`**(显式),把新架构表注册进 `SQLModel.metadata`(=`target_metadata`)——**不再** `os.walk` 全仓 `*models*`(0026 改;原型 `app/user`/`app/handrecord` 旧模型当时会被一并注册造表名冲突,现已随 0027 拆除)。**新表加进 [app/db/models.py](../app/db/models.py)**(单一事实源)。
-- **`DATABASE_URL` 从 `os.environ` 读**、缺省本地 sqlite(上面说过),不依赖读 `.env` 的 Settings / `alembic.ini` 占位。
+- **`DATABASE_URL` 经 `app.config.settings` 读**(env > `.env`,0045)、缺省本地 sqlite(上面说过),不用 `alembic.ini` 占位;`settings` 有默认故缺 `.env` 不崩(headless)。
 - **真外键**:不再跳过 FK(原型 env 的 `render_item` hack 已删)——表间关系在 DB 层强制(参与者→手牌/用户,见 [db.md](db.md))。
 - **`render_as_batch=True`**:sqlite 也能 ALTER(走 batch 重建);postgres 无害。
 - **`script.py.mako` 硬带 `import sqlmodel`**:autogen 引用 `sqlmodel.sql.sqltypes.AutoString` 等,不带则升级 `NameError`(见 [changes/0026](refactor/changes/0026-p4-db-models-alembic.md))。

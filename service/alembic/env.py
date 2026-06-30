@@ -1,23 +1,24 @@
 # Alembic 环境(重构后:重定向到新架构 app/db/ 模型)。用法见 docs/db-migrations.md。
 #
-# 与原型 env.py 的差异(原型已于 0027 拆除):① 不依赖任何会读 .env 的 Settings 模块(读 .env 缺则崩)——
-# DATABASE_URL 从 os.environ 读、缺省本地 sqlite,免 .env 也能跑迁移;② 只 import app.db.models(显式,
-# 单一事实源),不 os.walk 全仓 *models*;③ 不跳过外键(新架构要真 FK,见 db.md);④ render_as_batch
-# 让 sqlite 也能 ALTER(postgres 无害)。
+# 与原型 env.py 的差异(原型已于 0027 拆除):① DATABASE_URL 经 app.config.settings 读(env > .env;0045
+# 收编),仍**免 .env 也能跑迁移**——`settings.DATABASE_URL` 有默认(None),缺 .env 不崩(原「不依赖会崩的
+# Settings」之意图,换实现达成;`DATABASE_URL=… alembic upgrade head` 经 os.environ 优先仍覆盖);② 只 import
+# app.db.models(显式,单一事实源),不 os.walk 全仓 *models*;③ 不跳过外键(新架构要真 FK,见 db.md);
+# ④ render_as_batch 让 sqlite 也能 ALTER(postgres 无害)。
 
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from alembic import context
+from app.config import settings  # 基础设施配置单一事实源(DATABASE_URL);headless 约束见 app/config.py
 
 import app.db.models  # noqa: F401  仅此一行注册新架构表到 SQLModel.metadata(单一事实源)
 
 config = context.config
-# 生产设 DATABASE_URL=postgresql+psycopg://…;本地缺省 sqlite,免 .env 也能跑迁移(见 docs/db-migrations.md)。
-config.set_main_option("sqlalchemy.url", os.environ.get("DATABASE_URL", "sqlite:///./poker.db"))
+# 生产设 DATABASE_URL=postgresql+psycopg://…;本地缺省 sqlite(同步驱动),免 .env 也能跑迁移(见 docs/db-migrations.md)。
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL or "sqlite:///./poker.db")
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
