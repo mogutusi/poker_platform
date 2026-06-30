@@ -45,7 +45,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | `SitDown(seat, wait_for_big_blind)` | nick | wire | 观战→入座;`wait_for_big_blind` 声明入局方式(等大盲免费 / 默认付盲即玩,见 [rules.md](rules.md) ①) |
 | `BuyIn(seat, amount)` | nick | wire | 全局积分→座位筹码 |
 | `SetUserStatus(status, seat)` | nick | wire | ready / sit-out / 起身等 UserStatus 转移 |
-| `SetSmallBlind(amount)` / `SetBuyIn(amount)` | nick | wire | 0 号位配置房间参数 |
+| `SetSmallBlind(amount)` / `SetBuyIn(amount)` | nick | wire | 0 号位占座者配置房间参数(大盲 = 2×小盲派生);仅两手之间(`HAND_IN_PROGRESS` 拒局中)、非占座者拒(`NOT_ROOM_OWNER`)、上下限由 shell 按 `gameconfig.MIN/MAX_*` 防护(`INVALID_SMALL_BLIND`/`INVALID_BUY_IN`),产 `Broadcast(RoomConfigChanged)` 全房对齐、**不落库**(房状态不持久,见 [storage.md](storage.md))。core 已落地(0043) |
 | `StartHand(seat, started_at, deck?)` | nick | wire | 开新一手;`started_at`(墙钟)由 shell 盖好带入,`deck` 可选(重放用,见下) |
 | `PlayerAction(action, bet_amount?)` | nick | wire | fold / check / bet |
 | `RoomChat(text)` | nick | wire | 房间聊天;只读命令、不改游戏状态,产出 `Broadcast(ChatMessage)`(私聊不走这里,见 [messaging.md](messaging.md)) |

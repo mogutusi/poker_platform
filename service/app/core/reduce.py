@@ -15,6 +15,8 @@ from app.core.commands import (
     OpenFreeEntryVote,
     PlayerAction,
     RoomChat,
+    SetBuyIn,
+    SetSmallBlind,
     SetUserStatus,
     SitDown,
     StartHand,
@@ -46,6 +48,7 @@ from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadc
     PlayerActed,
     PlayerBoughtIn,
     PlayerView,
+    RoomConfigChanged,
     SeatView,
     ShowdownReveal,
     StateSnapshot,
@@ -95,6 +98,10 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
             return _vote_free_entry(work, cmd)
         case RoomChat():
             return _room_chat(work, cmd)
+        case SetSmallBlind():
+            return _set_small_blind(work, cmd)
+        case SetBuyIn():
+            return _set_buy_in(work, cmd)
         case _:
             # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
             # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
@@ -622,7 +629,7 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
     if hand is None:
         return StateSnapshot(
             room=room_name, max_seats=len(room.seats), button_position=room.button_position,
-            small_blind=room.small_blind, big_blind=big_blind, room_status=room.status,
+            small_blind=room.small_blind, big_blind=big_blind, buy_in=room.buy_in, room_status=room.status,
             seats=seats, watchers=watchers, hand_status=None, board=(), pot=0,
             acting_position=None, players=(), your_hole_cards=None,
         )
@@ -634,7 +641,7 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
     own = in_hand[for_nick].hole_cards if for_nick in in_hand else None
     return StateSnapshot(
         room=room_name, max_seats=len(room.seats), button_position=room.button_position,
-        small_blind=room.small_blind, big_blind=big_blind, room_status=room.status,
+        small_blind=room.small_blind, big_blind=big_blind, buy_in=room.buy_in, room_status=room.status,
         seats=seats, watchers=watchers, hand_status=hand.status, board=tuple(_board(hand)),
         pot=_pot(hand), acting_position=hand.acting_position, players=players, your_hole_cards=own,
     )
@@ -892,6 +899,55 @@ def _room_chat(work: Work, cmd: RoomChat) -> ReduceResult:
     if room is None or nick is None or nick not in room.users_in_room:
         return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间,无法房聊")
     return [Broadcast(room=work.room_name, msg=ChatMessage(from_nick=nick, text=cmd.text))], None
+
+
+# ── 房间参数配置(SetSmallBlind / SetBuyIn)── core.md 命令表「0 号位配置房间参数」/ changes/0043
+# 授权 = 0 号位占座者(无持久 owner,见 lobby.md);时机 = 仅两手之间(改盲会污染已锁入的进行中手牌);
+# 上下限按 gameconfig 由 shell 防护(core 不 import config,见 coding_principle 硬规则 1 / changes/0015),
+# reduce 只兜结构(在房 / 占座 0 / 非局中 / 正额)。房配不落库(storage.md)→ 无 Persist,只 Broadcast 全房对齐。
+def _room_config_guards(room: Room | None, nick: str | None) -> Err | None:
+    # SetSmallBlind/SetBuyIn 共用前置校验:在房 → 0 号位占座者 → 非局中。任一不过返 Err,否则 None。
+    if room is None or nick is None or nick not in room.users_in_room:
+        return Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
+    seat0 = room.seats[0]
+    if seat0 is None or seat0.nickname != nick:  # 授权早于时机(同 _buy_in 座位校验先于 HAND_IN_PROGRESS)
+        return Err(ErrorCode.NOT_ROOM_OWNER, f"{nick} 非 0 号位占座者,无权配置房间参数")
+    if room.status is not RoomStatus.PENDING_START or room.hand is not None:
+        return Err(ErrorCode.HAND_IN_PROGRESS, "手牌进行中不能改房间参数(改盲会污染本手已锁入的下注)")
+    return None
+
+
+def _room_config_changed(room: Room, room_name: str | None) -> Broadcast:
+    # 完整当前配置快照广播(big_blind 派生,非存储);客户端单条即对齐,含观战者(按 users_in_room 派发)。
+    big_blind = blinds.BIG_BLIND_MULTIPLE * room.small_blind
+    msg = RoomConfigChanged(small_blind=room.small_blind, big_blind=big_blind, buy_in=room.buy_in)
+    return Broadcast(room=room_name, msg=msg)
+
+
+def _set_small_blind(work: Work, cmd: SetSmallBlind) -> ReduceResult:
+    room = work.room
+    nick = cmd.origin
+    err = _room_config_guards(room, nick)
+    if err is not None:
+        return [], err
+    assert room is not None  # 守卫已排除 None(供类型收窄)
+    if cmd.amount <= 0:  # 结构兜底(shell 已按 gameconfig.MIN/MAX_SMALL_BLIND 防过;core 自保不信外部)
+        return [], Err(ErrorCode.INVALID_SMALL_BLIND, f"小盲额须为正(amount={cmd.amount})")
+    room.small_blind = cmd.amount  # 大盲随之 = 2× 自动派生(无存储字段需同步)
+    return [_room_config_changed(room, work.room_name)], None
+
+
+def _set_buy_in(work: Work, cmd: SetBuyIn) -> ReduceResult:
+    room = work.room
+    nick = cmd.origin
+    err = _room_config_guards(room, nick)
+    if err is not None:
+        return [], err
+    assert room is not None
+    if cmd.amount <= 0:  # 结构兜底(shell 已按 gameconfig.MIN/MAX_BUY_IN 防过)
+        return [], Err(ErrorCode.INVALID_BUY_IN, f"买入额须为正(amount={cmd.amount})")
+    room.buy_in = cmd.amount  # 房间默认买入(客户端买入对话框默认值;core 不读,纯展示提示)
+    return [_room_config_changed(room, work.room_name)], None
 
 
 def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:

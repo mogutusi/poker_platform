@@ -43,6 +43,15 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 
 **换房** = `LeaveRoom` 再 `JoinRoom`(单房间约束要求先离开当前房)。
 
+## 房间参数配置:`SetSmallBlind` / `SetBuyIn`(0 号位占座者)
+
+预置房的注码/默认买入可由 **0 号位占座者**(de-facto 房主)在运行时调整(`SetSmallBlind(amount)` / `SetBuyIn(amount)`,大盲 = 2×小盲派生)。这是**改既有房的参数**(单房间 scoped,走 `checkout`/`commit`),与「动态建房」`CreateRoom`(注册表级,见「待定」)是两回事。
+
+- **授权 = 占座 0 号位**(`room.seats[0]` 占座者 == 发起人):无持久 `owner` 字段,座位 0 即 de-facto 房主;非占座者 / 0 号位空 → `NOT_ROOM_OWNER`。**残留简化**:座位 0 占座者会随起身/离场变动(房主身份流动);v1 接受,持久 owner 待 `CreateRoom` 引入 creator 时再说。
+- **时机 = 仅两手之间**(`room.hand is None` / `PENDING_START`):局中改盲会污染已锁入本手的下注(小盲喂下盲 + 各处大盲派生),故 `HAND_IN_PROGRESS` 拒。
+- **上下限**:`gameconfig.MIN/MAX_SMALL_BLIND` / `MIN/MAX_BUY_IN`,由 **shell 进 reduce 前防护**(core 不 import config),越界 `INVALID_SMALL_BLIND`/`INVALID_BUY_IN`;reduce 只兜结构(在房 / 占座 0 / 非局中 / 正额)。
+- **产出**:`Broadcast(RoomConfigChanged{small_blind,big_blind,buy_in})` 全房(含观战者)对齐;**不落库**(房状态不持久,[storage.md](storage.md)),重启回 `gameconfig` 缺省。`StateSnapshot` 也带 `buy_in`,重连可见当前值。详见 [changes/0043](refactor/changes/0043-room-config-commands.md)。
+
 ## 红利:游戏命令不再带 `room`
 
 模型 2 下用户同时只在一个房间,所以 `PlayerAction` / `SitDown` / `BuyIn` / 房聊 等命令**不带 `room`**——reduce 用 `world.users[nick].room` 定位目标房,工作副本 `checkout` 也据此解析(只有 `JoinRoom` 例外:目标房在命令里)。**身份和房间都不进报文**(见 [wire.md](wire.md)),报文只剩动作参数。

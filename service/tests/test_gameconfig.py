@@ -32,6 +32,10 @@ def _valid_kwargs() -> dict:
         DB_DRAIN_TIMEOUT_MS=5000,
         DM_READ_RETENTION_SECONDS=604800,
         DM_CLEANUP_INTERVAL_SECONDS=3600,
+        MIN_SMALL_BLIND=1,
+        MAX_SMALL_BLIND=100000,
+        MIN_BUY_IN=1,
+        MAX_BUY_IN=100000000,
         DEV_ROOM="dev",
         DEV_SMALL_BLIND=1,
         DEV_BUY_IN=100,
@@ -75,6 +79,10 @@ def test_valid_kwargs_build_ok():
         ("DEV_SEATS", 1),  # ge=2
         ("DEV_SMALL_BLIND", 0),  # ge=1
         ("DB_WRITE_MAX_RETRY", 0),  # ge=1
+        ("MIN_SMALL_BLIND", 0),  # ge=1
+        ("MIN_BUY_IN", 0),  # ge=1
+        ("MAX_SMALL_BLIND", 0),  # ge=1
+        ("MAX_BUY_IN", 0),  # ge=1(四个房配上下限字段均有 ge=1 拒 0 的护栏)
     ],
 )
 def test_field_bounds_reject(field, bad):

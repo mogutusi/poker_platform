@@ -19,7 +19,7 @@ export type UserStatus = "watching" | "offline" | "sitting_in" | "ready_to_play"
 
 export type RoomStatus = "pending_start" | "hand_started";
 
-export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE" | "MESSAGE_TOO_LONG" | "RATE_LIMITED" | "CANNOT_DM_SELF";
+export type ErrorCode = "INTERNAL" | "NO_SUCH_ROOM" | "ROOM_FULL" | "ALREADY_IN_ROOM" | "NOT_IN_ROOM" | "SEAT_TAKEN" | "NOT_YOUR_SEAT" | "INVALID_STATUS_TRANSITION" | "INSUFFICIENT_POINTS" | "INVALID_BUY_IN" | "INVALID_SMALL_BLIND" | "NOT_ROOM_OWNER" | "HAND_IN_PROGRESS" | "NO_HAND" | "NOT_YOUR_TURN" | "ILLEGAL_ACTION" | "NOT_ENOUGH_PLAYERS" | "NOT_READY" | "NO_VOTE_IN_PROGRESS" | "NOT_A_VOTER" | "CANNOT_OPEN_VOTE" | "INVALID_MESSAGE" | "MESSAGE_TOO_LONG" | "RATE_LIMITED" | "CANNOT_DM_SELF";
 
 // ── value objects ──
 
@@ -129,6 +129,13 @@ export interface PlayerBoughtIn {
   seat_points: number;
 }
 
+export interface RoomConfigChanged {
+  type: "room_config_changed";
+  small_blind: number;
+  big_blind: number;
+  buy_in: number;
+}
+
 export interface StateSnapshot {
   type: "state_snapshot";
   room: string;
@@ -136,6 +143,7 @@ export interface StateSnapshot {
   button_position: number;
   small_blind: number;
   big_blind: number;
+  buy_in: number;
   room_status: RoomStatus;
   seats: SeatView[];
   watchers: string[];
@@ -217,6 +225,16 @@ export interface SetUserStatus {
   seat?: number | null;
 }
 
+export interface SetSmallBlind {
+  type: "set_small_blind";
+  amount: number;
+}
+
+export interface SetBuyIn {
+  type: "set_buy_in";
+  amount: number;
+}
+
 export interface LeaveRoom {
   type: "leave_room";
 }
@@ -281,6 +299,7 @@ export type ServerMessage =
   | UserJoined
   | UserLeft
   | PlayerBoughtIn
+  | RoomConfigChanged
   | StateSnapshot
   | ChatMessage
   | RoomChatHistory
@@ -295,6 +314,8 @@ export type ClientMessage =
   | SitDown
   | BuyIn
   | SetUserStatus
+  | SetSmallBlind
+  | SetBuyIn
   | LeaveRoom
   | StartHand
   | PlayerAction

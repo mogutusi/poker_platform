@@ -41,6 +41,7 @@ def _broadcast_samples() -> list[S.ServerMessage]:
         S.UserJoined(nickname="C"),
         S.UserLeft(nickname="A", seat_position=0),
         S.PlayerBoughtIn(nickname="A", seat_position=0, amount=64, seat_points=64),
+        S.RoomConfigChanged(small_blind=5, big_blind=10, buy_in=200),
         S.FreeEntryVoteUpdated(candidates=("D",), voters=("A", "B"), approvals=("A",)),
         S.FreeEntryVoteClosed(passed=True, waived=("D",)),
         S.ChatMessage(from_nick="A", text="nh"),
@@ -75,7 +76,7 @@ def test_reveal_dtos_carry_cards():
 def test_state_snapshot_carries_only_own_cards_not_others_or_deck():
     # StateSnapshot 私发收件人:含 your_hole_cards(自己的),但 players 结构上无 hole_cards、无 deck。
     snap = S.StateSnapshot(
-        room="r1", max_seats=6, button_position=0, small_blind=1, big_blind=2,
+        room="r1", max_seats=6, button_position=0, small_blind=1, big_blind=2, buy_in=100,
         room_status=RoomStatus.HAND_STARTED,
         seats=(S.SeatView(seat_position=0, nickname="A", status=UserStatus.PLAYING, points=50, new_here=False),),
         watchers=("C",),
@@ -110,6 +111,8 @@ def test_parse_and_to_command_maps_every_client_message():
          commands.SetUserStatus(origin="A", status=UserStatus.READY_TO_PLAY, seat=None)),
         ('{"type":"set_user_status","status":"sitting_in","seat":2}',
          commands.SetUserStatus(origin="A", status=UserStatus.SITTING_IN, seat=2)),
+        ('{"type":"set_small_blind","amount":5}', commands.SetSmallBlind(origin="A", amount=5)),
+        ('{"type":"set_buy_in","amount":200}', commands.SetBuyIn(origin="A", amount=200)),
         ('{"type":"leave_room"}', commands.LeaveRoom(origin="A")),
         ('{"type":"start_hand","seat":0}', commands.StartHand(origin="A", seat=0, started_at=_NOW, deck=None)),
         ('{"type":"player_action","action":"bet","bet_amount":10}',
@@ -146,6 +149,8 @@ def test_client_registry_covered_by_to_command():
         C.SitDown: C.SitDown(seat=0),
         C.BuyIn: C.BuyIn(seat=0, amount=1),
         C.SetUserStatus: C.SetUserStatus(status=UserStatus.SITTING_IN),
+        C.SetSmallBlind: C.SetSmallBlind(amount=5),
+        C.SetBuyIn: C.SetBuyIn(amount=200),
         C.LeaveRoom: C.LeaveRoom(),
         C.StartHand: C.StartHand(seat=0),
         C.PlayerAction: C.PlayerAction(action=PlayerActionType.CHECK),

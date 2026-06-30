@@ -38,6 +38,16 @@ class SetUserStatus(ClientMessage):
     seat: int | None = None  # 涉及就座时的目标座位
 
 
+class SetSmallBlind(ClientMessage):
+    type: Literal["set_small_blind"] = "set_small_blind"
+    amount: int  # 新小盲额(0 号位占座者配置;大盲 = 2× 派生;上下限由 shell 按 gameconfig 防护)
+
+
+class SetBuyIn(ClientMessage):
+    type: Literal["set_buy_in"] = "set_buy_in"
+    amount: int  # 新房间默认买入额(0 号位占座者配置;上下限由 shell 按 gameconfig 防护)
+
+
 class LeaveRoom(ClientMessage):
     type: Literal["leave_room"] = "leave_room"
     # 无参数:退房目标房由 world.users[origin].room 推定(身份不进报文)
@@ -96,6 +106,8 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
     SitDown,
     BuyIn,
     SetUserStatus,
+    SetSmallBlind,
+    SetBuyIn,
     LeaveRoom,
     StartHand,
     PlayerAction,
@@ -110,7 +122,7 @@ CLIENT_MESSAGES: tuple[type[ClientMessage], ...] = (
 
 _ClientMessageUnion = Annotated[
     Union[
-        SitDown, BuyIn, SetUserStatus, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat, DirectMessage, DMMarkRead
+        SitDown, BuyIn, SetUserStatus, SetSmallBlind, SetBuyIn, LeaveRoom, StartHand, PlayerAction, RoomChat, OpenFreeEntryVote, VoteFreeEntry, JoinRoom, FetchRoomChat, DirectMessage, DMMarkRead
     ],
     Field(discriminator="type"),
 ]
@@ -132,6 +144,12 @@ def to_command(msg: ClientMessage, origin: str, now: datetime) -> Command:
             return commands.BuyIn(origin=origin, seat=msg.seat, amount=msg.amount)
         case SetUserStatus():
             return commands.SetUserStatus(origin=origin, status=msg.status, seat=msg.seat)
+        case SetSmallBlind():
+            # 纯映射;实际收发路径里 Receiver 先在 `_guard_room_config` 按 gameconfig 上下限防护(0043),
+            # 不经此分支(同 RoomChat)。保留作通用映射 + 协议直测;reduce `_set_small_blind` 仍兜 ≤0 + 授权/时机。
+            return commands.SetSmallBlind(origin=origin, amount=msg.amount)
+        case SetBuyIn():
+            return commands.SetBuyIn(origin=origin, amount=msg.amount)
         case LeaveRoom():
             return commands.LeaveRoom(origin=origin)
         case StartHand():

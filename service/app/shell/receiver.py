@@ -11,7 +11,7 @@ import pydantic
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
-from app.core.commands import Command, Connect, Disconnect, JoinRoom, RoomChat
+from app.core.commands import Command, Connect, Disconnect, JoinRoom, RoomChat, SetBuyIn, SetSmallBlind
 from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
@@ -85,6 +85,8 @@ async def _frame_to_command(
         return await _build_join(conn, msg, sessionmaker)  # JoinRoom 需读 DB 富化 uid/loaded(见 changes/0030)
     if isinstance(msg, wire_client.RoomChat):
         return _guard_room_chat(conn, msg)  # 房聊进 reduce 前过文本防护 + 限速(见 changes/0033 / messaging.md)
+    if isinstance(msg, (wire_client.SetSmallBlind, wire_client.SetBuyIn)):
+        return _guard_room_config(conn, msg)  # 房配进 reduce 前按 gameconfig 上下限防护(见 changes/0043)
     if isinstance(msg, wire_client.FetchRoomChat):
         _serve_room_chat_history(conn, msg, history)  # 房聊历史 shell 直服务(读环形缓冲回 outbound,见 changes/0036)
         return None
@@ -117,6 +119,31 @@ def _guard_room_chat(conn: Connection, msg: wire_client.RoomChat) -> Command | N
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.RATE_LIMITED, "房聊发送过频,请稍候")))
         return None
     return RoomChat(origin=conn.nick, text=msg.text)  # 广播原文,不改用户内容
+
+
+def _guard_room_config(
+    conn: Connection, msg: "wire_client.SetSmallBlind | wire_client.SetBuyIn"
+) -> Command | None:
+    # 房间参数配置进 reduce 前防护:按 gameconfig 上下限拒越界(core 不 import config,故 bounds 归 shell,
+    # 同房聊文本防护 _guard_room_chat;见 changes/0043 / 0015)。越界回对应 Err + return None(不进 inbox);
+    # 合法构 Command(身份盖连接 nick)。授权(0 号位)/ 时机(非局中)由 reduce 兜——shell 不读 world、无法判。
+    if isinstance(msg, wire_client.SetSmallBlind):
+        if not (gameconfig.MIN_SMALL_BLIND <= msg.amount <= gameconfig.MAX_SMALL_BLIND):
+            conn.outbound.put_nowait(
+                ErrorMessage.from_err(
+                    Err(ErrorCode.INVALID_SMALL_BLIND, f"小盲额须在 [{gameconfig.MIN_SMALL_BLIND}, {gameconfig.MAX_SMALL_BLIND}]")
+                )
+            )
+            return None
+        return SetSmallBlind(origin=conn.nick, amount=msg.amount)
+    if not (gameconfig.MIN_BUY_IN <= msg.amount <= gameconfig.MAX_BUY_IN):
+        conn.outbound.put_nowait(
+            ErrorMessage.from_err(
+                Err(ErrorCode.INVALID_BUY_IN, f"买入额须在 [{gameconfig.MIN_BUY_IN}, {gameconfig.MAX_BUY_IN}]")
+            )
+        )
+        return None
+    return SetBuyIn(origin=conn.nick, amount=msg.amount)
 
 
 def _serve_room_chat_history(conn: Connection, msg: wire_client.FetchRoomChat, history: RoomChatBuffer) -> None:

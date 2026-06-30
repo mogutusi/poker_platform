@@ -132,6 +132,15 @@ class PlayerBoughtIn(ServerMessage):
     seat_points: int  # 买入后座位的可用筹码(快照)
 
 
+class RoomConfigChanged(ServerMessage):
+    # 房间参数被 0 号位占座者改动后广播给全房(含观战者),客户端据此更新桌面注码/买入默认值(见 changes/0043)。
+    # 携完整当前配置快照(不止改动项)——客户端无需累积、单条即对齐;房配不落库(storage.md),重启回 gameconfig 缺省。
+    type: Literal["room_config_changed"] = "room_config_changed"
+    small_blind: int  # 当前小盲额
+    big_blind: int  # 当前大盲额(= 2×小盲,派生非存储)
+    buy_in: int  # 当前房间默认买入额
+
+
 class StateSnapshot(ServerMessage):
     # 进房/重连私发(Personal):一次性对齐整桌当前态。逐收件人构造——your_hole_cards 仅自己的底牌,
     # 在手玩家投影为 players(PlayerView 结构上无 hole_cards ⇒ 他人底牌不泄露,见 wire.md 隐私)。
@@ -141,6 +150,7 @@ class StateSnapshot(ServerMessage):
     button_position: int  # 庄家座位
     small_blind: int  # 小盲额
     big_blind: int  # 大盲额(= 2×小盲)
+    buy_in: int  # 房间默认买入额(重连也能拿到当前值;SetBuyIn 改后随快照对齐,见 changes/0043)
     room_status: RoomStatus  # PENDING_START / HAND_STARTED
     seats: tuple[SeatView, ...]  # 仅已占座位(各带 seat_position;空座由 max_seats 推)
     watchers: tuple[str, ...]  # 在房观战者(无座位)nick
@@ -222,6 +232,7 @@ SERVER_MESSAGES: tuple[type[ServerMessage], ...] = (
     UserJoined,
     UserLeft,
     PlayerBoughtIn,
+    RoomConfigChanged,
     StateSnapshot,
     ChatMessage,
     RoomChatHistory,

@@ -62,6 +62,12 @@ class GameConfig(BaseSettings):
     DM_READ_RETENTION_SECONDS: int = Field(ge=0, le=31536000)  # 已读私信再留多久(秒)后清(默认 7 天);未读不受限、一直保活(见 messaging.md / db.md)
     DM_CLEANUP_INTERVAL_SECONDS: int = Field(ge=60, le=86400)  # PersistWriter 跑私信保留清理的周期(秒;默认每小时一趟)
 
+    # ── 房间参数配置上下限(SetSmallBlind/SetBuyIn 的合法区间;shell 进 reduce 前防护,见 changes/0043)──
+    MIN_SMALL_BLIND: int = Field(ge=1, le=1000000)  # 运行时改小盲的下限(≥1 → 大盲 = 2× ≥ 2)
+    MAX_SMALL_BLIND: int = Field(ge=1, le=1000000)  # 运行时改小盲的上限(应 ≥ MIN_SMALL_BLIND,跨字段不强校,信运营)
+    MIN_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的下限
+    MAX_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的上限(应 ≥ MIN_BUY_IN)
+
     # ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
     DEV_ROOM: str  # 明文 dev 端点预置的单一房名
     DEV_SMALL_BLIND: int = Field(ge=1, le=100000)  # dev 房小盲(大盲 = 2×)

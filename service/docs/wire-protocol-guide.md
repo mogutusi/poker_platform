@@ -36,6 +36,8 @@
 | `sit_down` | `seat, wait_for_big_blind?` | 观战 → 入座该座位;`wait_for_big_blind=true`=等大盲免费入局,缺省 `false`=付盲即玩(见 rules.md ①) |
 | `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
 | `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
+| `set_small_blind` | `amount` | **仅 0 号位占座者**改房间小盲(大盲 = 2× 自动派生);仅两手之间;广播 `room_config_changed`。非占座者→`error(NOT_ROOM_OWNER)`、局中→`error(HAND_IN_PROGRESS)`、越界→`error(INVALID_SMALL_BLIND)`(见 0043)|
+| `set_buy_in` | `amount` | **仅 0 号位占座者**改房间默认买入额;仅两手之间;广播 `room_config_changed`。非占座者→`error(NOT_ROOM_OWNER)`、局中→`error(HAND_IN_PROGRESS)`、越界→`error(INVALID_BUY_IN)`(见 0043)|
 | `start_hand` | `seat` | 开新一手(房内 ≥2 人 ready 时) |
 | `player_action` | `action, bet_amount?` | `fold` / `check` / `bet`;**`bet` 时 `bet_amount`=本街目标总额** |
 | `leave_room` | — | 退房(局中则自动弃牌,手尾结算后离座) |
@@ -65,7 +67,8 @@
 | `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身/重连 |
 | `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
-| `state_snapshot` | `seats`(仅已占座,各带 `seat_position`)/`max_seats`/`watchers`/`button_position`/`board`/`pot`/`acting_position`/`players`(行动序,不含底牌)/`your_hole_cards`(只你自己,在手才有)… | **私发**:进房/重连一次性对齐整桌;空座由 `max_seats` 渲染 |
+| `state_snapshot` | `seats`(仅已占座,各带 `seat_position`)/`max_seats`/`watchers`/`button_position`/`small_blind`/`big_blind`/`buy_in`/`board`/`pot`/`acting_position`/`players`(行动序,不含底牌)/`your_hole_cards`(只你自己,在手才有)… | **私发**:进房/重连一次性对齐整桌(含当前注码/买入);空座由 `max_seats` 渲染 |
+| `room_config_changed` | `small_blind`/`big_blind`/`buy_in`(完整当前配置快照) | 0 号位占座者改了房间参数(`set_small_blind`/`set_buy_in`);更新桌面注码/买入默认(见 0043) |
 | `room_chat_history` | `room`、`messages[]`(该房最近 N 条 `chat_message`,旧→新) | **私发**:`fetch_room_chat` 的回应,渲进聊天区 |
 | `dm_delivered` | `msg_id`/`from_nick`/`text`/`created_at` | **私发**:收到一条私信(在线实时投 / 登录补收均用此形);按 `msg_id` 去重 |
 | `dm_undelivered` | `to_nick` | **私发回发件人**:私信对端**根本不存在**(离线不算——离线落库后由对方登录补收) |
@@ -112,14 +115,14 @@
 
 ## 8. 现在有 / 还没有(增量交付)
 
-**已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
+**已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、**房间参数配置(`set_small_blind`/`set_buy_in` ↔ `room_config_changed`;仅 0 号位占座者、两手之间,见 0043)**、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
 **已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`,见 0038)+ 「读」路·已读回执(`dm_mark_read` ↔ `dm_read`,在线实时,见 0039)+ 登录补收(见 0040:(重)连时后端自动补发离线期的未读 `dm_delivered` + 已读回执 `dm_read`,复用同形报文,按 `msg_id` 去重)**。
 
 > **登录补收对前端透明**:连上后端会主动私发你离线期间的未读 `dm_delivered`(旧→新)+ 别人读你消息的 `dm_read`,**无需你发任何请求**;与在线实时收到的同形,按 `msg_id` 去重即可(实时 + 补收同一条只显一次)。
 
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- 大厅房间列表(REST)、房配置(设盲注/买入额)。
+- 大厅房间列表(REST)。
 
 ## 9. 怎么连(Phase D · 即将)
 
