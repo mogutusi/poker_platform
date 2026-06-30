@@ -901,17 +901,15 @@ def _room_chat(work: Work, cmd: RoomChat) -> ReduceResult:
     return [Broadcast(room=work.room_name, msg=ChatMessage(from_nick=nick, text=cmd.text))], None
 
 
-# ── 房间参数配置(SetSmallBlind / SetBuyIn)── core.md 命令表「0 号位配置房间参数」/ changes/0043
-# 授权 = 0 号位占座者(无持久 owner,见 lobby.md);时机 = 仅两手之间(改盲会污染已锁入的进行中手牌);
-# 上下限按 gameconfig 由 shell 防护(core 不 import config,见 coding_principle 硬规则 1 / changes/0015),
-# reduce 只兜结构(在房 / 占座 0 / 非局中 / 正额)。房配不落库(storage.md)→ 无 Persist,只 Broadcast 全房对齐。
+# ── 房间参数配置(SetSmallBlind / SetBuyIn)── core.md 命令表 / changes/0043(0044 放开授权:去房主)
+# 授权 = 任何在房成员(含观战者;无房主概念,见 lobby.md / changes/0044——peer 模型,与开局/投票一致)。
+# 仅留两道**非授权**门:在房(命令路由必然)+ 非局中(correctness:改盲会污染已锁入的进行中手牌)。
+# 上下限按 gameconfig 由 shell 防护(core 不 import config,见 coding_principle 硬规则 1 / changes/0015);
+# reduce 只兜结构(在房 / 非局中 / 正额)。房配不落库(storage.md)→ 无 Persist,只 Broadcast 全房对齐。
 def _room_config_guards(room: Room | None, nick: str | None) -> Err | None:
-    # SetSmallBlind/SetBuyIn 共用前置校验:在房 → 0 号位占座者 → 非局中。任一不过返 Err,否则 None。
+    # SetSmallBlind/SetBuyIn 共用前置校验:在房 → 非局中(无房主,任何成员可改)。任一不过返 Err,否则 None。
     if room is None or nick is None or nick not in room.users_in_room:
         return Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间")
-    seat0 = room.seats[0]
-    if seat0 is None or seat0.nickname != nick:  # 授权早于时机(同 _buy_in 座位校验先于 HAND_IN_PROGRESS)
-        return Err(ErrorCode.NOT_ROOM_OWNER, f"{nick} 非 0 号位占座者,无权配置房间参数")
     if room.status is not RoomStatus.PENDING_START or room.hand is not None:
         return Err(ErrorCode.HAND_IN_PROGRESS, "手牌进行中不能改房间参数(改盲会污染本手已锁入的下注)")
     return None

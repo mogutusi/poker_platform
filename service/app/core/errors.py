@@ -14,7 +14,6 @@ class ErrorCode(StrEnum):
     INSUFFICIENT_POINTS = "INSUFFICIENT_POINTS"  # 买入超过全局积分余额
     INVALID_BUY_IN = "INVALID_BUY_IN"  # 买入额非法(≤0 由 reduce 兜;SetBuyIn 上下限由 shell 按 gameconfig.MIN/MAX_BUY_IN 防护,见 config.md)
     INVALID_SMALL_BLIND = "INVALID_SMALL_BLIND"  # 小盲额非法(≤0 由 reduce 兜;上下限由 shell 按 gameconfig.MIN/MAX_SMALL_BLIND 防护,见 config.md)
-    NOT_ROOM_OWNER = "NOT_ROOM_OWNER"  # 房间参数配置仅限 0 号位占座者(无持久 owner 概念,见 lobby.md);非占座者/空座一律拒
     HAND_IN_PROGRESS = "HAND_IN_PROGRESS"  # 手牌进行中不可执行该操作
     NO_HAND = "NO_HAND"  # 该操作需要进行中的手牌
     NOT_YOUR_TURN = "NOT_YOUR_TURN"  # PlayerAction 非当前行动者发起

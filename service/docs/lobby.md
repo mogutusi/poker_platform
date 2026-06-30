@@ -43,14 +43,15 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 
 **换房** = `LeaveRoom` 再 `JoinRoom`(单房间约束要求先离开当前房)。
 
-## 房间参数配置:`SetSmallBlind` / `SetBuyIn`(0 号位占座者)
+## 房间参数配置:`SetSmallBlind` / `SetBuyIn`(任何在房成员)
 
-预置房的注码/默认买入可由 **0 号位占座者**(de-facto 房主)在运行时调整(`SetSmallBlind(amount)` / `SetBuyIn(amount)`,大盲 = 2×小盲派生)。这是**改既有房的参数**(单房间 scoped,走 `checkout`/`commit`),与「动态建房」`CreateRoom`(注册表级,见「待定」)是两回事。
+预置房的注码/默认买入可由 **任何在房成员**(含观战者)在运行时调整(`SetSmallBlind(amount)` / `SetBuyIn(amount)`,大盲 = 2×小盲派生)。这是**改既有房的参数**(单房间 scoped,走 `checkout`/`commit`),与「动态建房」`CreateRoom`(注册表级,见「待定」)是两回事。
 
-- **授权 = 占座 0 号位**(`room.seats[0]` 占座者 == 发起人):无持久 `owner` 字段,座位 0 即 de-facto 房主;非占座者 / 0 号位空 → `NOT_ROOM_OWNER`。**残留简化**:座位 0 占座者会随起身/离场变动(房主身份流动);v1 接受,持久 owner 待 `CreateRoom` 引入 creator 时再说。
-- **时机 = 仅两手之间**(`room.hand is None` / `PENDING_START`):局中改盲会污染已锁入本手的下注(小盲喂下盲 + 各处大盲派生),故 `HAND_IN_PROGRESS` 拒。
-- **上下限**:`gameconfig.MIN/MAX_SMALL_BLIND` / `MIN/MAX_BUY_IN`,由 **shell 进 reduce 前防护**(core 不 import config),越界 `INVALID_SMALL_BLIND`/`INVALID_BUY_IN`;reduce 只兜结构(在房 / 占座 0 / 非局中 / 正额)。
-- **产出**:`Broadcast(RoomConfigChanged{small_blind,big_blind,buy_in})` 全房(含观战者)对齐;**不落库**(房状态不持久,[storage.md](storage.md)),重启回 `gameconfig` 缺省。`StateSnapshot` 也带 `buy_in`,重连可见当前值。详见 [changes/0043](refactor/changes/0043-room-config-commands.md)。
+- **无房主**(0044 定:用户明示不要房管理、每个人都能改):房配回归 peer 模型,与开局(任何 ready 在座者发起)/ 免盲投票一致。无 `owner`/`host` 字段、无 0 号位特权。原 0043 的「0 号位占座者授权 + `NOT_ROOM_OWNER`」已撤(见 [changes/0044](refactor/changes/0044-room-config-any-member.md))。
+- **授权 = 在房即可**:发起人在 `room.users_in_room`(含观战者)→ 放行;不在 → `NOT_IN_ROOM`(这是命令路由的必然,非「权限」)。
+- **时机 = 仅两手之间**(`room.hand is None` / `PENDING_START`):这是 **correctness 门、非授权**——局中改盲会污染已锁入本手的下注(小盲喂下盲 + 各处大盲派生),故 `HAND_IN_PROGRESS` 拒(两命令对称)。
+- **上下限**:`gameconfig.MIN/MAX_SMALL_BLIND` / `MIN/MAX_BUY_IN`,由 **shell 进 reduce 前防护**(core 不 import config),越界 `INVALID_SMALL_BLIND`/`INVALID_BUY_IN`;reduce 只兜结构(在房 / 非局中 / 正额)。
+- **产出**:`Broadcast(RoomConfigChanged{small_blind,big_blind,buy_in})` 全房(含观战者)对齐;**不落库**(房状态不持久,[storage.md](storage.md)),重启回 `gameconfig` 缺省。`StateSnapshot` 也带 `buy_in`,重连可见当前值。详见 [changes/0043](refactor/changes/0043-room-config-commands.md) + [0044](refactor/changes/0044-room-config-any-member.md)。
 
 ## 红利:游戏命令不再带 `room`
 
