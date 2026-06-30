@@ -91,7 +91,7 @@
 
 ## P8 · 收尾
 
-- [ ] `shell/lifespan.py` drain:关闭反序 drain(超 `DB_DRAIN_TIMEOUT_MS` 落 CRITICAL)
+- [x] `shell/lifespan.py` drain:关闭反序 drain(超 `DB_DRAIN_TIMEOUT_MS` 落 CRITICAL)— 0046:有界 drain 本体(timeout CRITICAL/毒丸/取消回灌)早随 0025 落 `PersistWriter.drain()` + 穷举测;本批补 `DevShell.stop()` **反序四步**(cancel Timer+GameLoop → 同步排空 inbox 在途命令 → cancel PersistWriter 循环 + `drain()` → cancel 各 Sender + `dispose()`)+ 集成测 `test_lifespan_drain`(inbox 排空落 DB / 缓冲 drain 落 DB / start→stop 不挂死 / 未 start 安全 / Sender-cancel / 并发交接 exactly-once,6 测,共 432)。**余**:端到端冒烟(前端↔后端一手牌,见下)
 - [ ] 端到端冒烟:前端 ↔ 后端(先明文 dev、后国密)走通一手牌全程
 
 ---

@@ -37,7 +37,7 @@ class GameLoop:
             self.handle(cmd)
 
     def handle(self, cmd: Command) -> None:
-        # 一条命令的处理(同步,抽出供测试直接驱动):checkout → reduce → commit/discard → dispatch。
+        # 一条命令的处理(同步,抽出供测试 / 关闭排空(lifespan.stop ②)直接驱动):checkout → reduce → commit/discard → dispatch。
         # 日志挂此边界(log.md):命令进→事件出全程可见,无需在 reduce 分支里插 log(core 零日志,守不变量 1)。
         work = world_api.checkout(self.world, cmd)  # ① 解析目标房 + 深拷贝(房 + users 表)
         hand = work.room.hand if work.room is not None else None

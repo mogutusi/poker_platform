@@ -75,7 +75,10 @@ class DevShell:
         self.dispatcher: Dispatcher | None = None
         self.gameloop: GameLoop | None = None
         self.presence: Presence | None = None  # 只读聚合(在线/在房/状态);供后续 lobby/DM/改昵称消费
-        self._tasks: list[asyncio.Task] = []
+        # 命名 task 引用:stop() 按关闭反序分阶段 cancel(生产者先于消费者 drain,见 connection.md / changes/0046)。
+        self._gameloop_task: asyncio.Task | None = None
+        self._timer_task: asyncio.Task | None = None
+        self._persistwriter_task: asyncio.Task | None = None
 
     async def setup(self) -> None:
         # 异步启动:建表(dev 引导,无 Alembic)→ 幂等种子 dev 用户进 DB(供 join_room 载入)→ 建空 world + dispatcher + gameloop。
@@ -89,27 +92,57 @@ class DevShell:
     def start(self) -> None:
         # 起 GameLoop + Timer + PersistWriter(须先 await setup() 建好 gameloop)。
         assert self.gameloop is not None, "DevShell.start() 前须先 await setup()"
-        self._tasks = [
-            asyncio.create_task(self.gameloop.run(), name="gameloop"),
-            asyncio.create_task(self.timer.run(), name="timer"),
-            asyncio.create_task(self.persistwriter.run(), name="persistwriter"),
-        ]
+        self._gameloop_task = asyncio.create_task(self.gameloop.run(), name="gameloop")
+        self._timer_task = asyncio.create_task(self.timer.run(), name="timer")
+        self._persistwriter_task = asyncio.create_task(self.persistwriter.run(), name="persistwriter")
 
-    async def stop(self) -> None:
-        # 关闭序(db.md drain):先 cancel 生产者(gameloop/timer)+ writer 周期循环 → 不再产新写;
-        # 再 await PersistWriter.drain() 终结 flush(cancel 若落在 flush 半途,flush_once 先回灌再 re-raise,drain 补落);
-        # 最后 dispose engine 释放连接池。
-        for t in self._tasks:
-            t.cancel()
-        for t in self._tasks:
+    async def _cancel_and_await(self, *tasks: "asyncio.Task | None") -> None:
+        # cancel 一组 task 并收割(吞 CancelledError;意外死亡记 ERROR 但不阻断关闭——尽力 drain)。
+        for t in tasks:
+            if t is not None:
+                t.cancel()
+        for t in tasks:
+            if t is None:
+                continue
             try:
                 await t
             except asyncio.CancelledError:
                 pass
-            except Exception:  # 协程意外死亡:记下但不阻断关闭(尽力 drain)
+            except Exception:
                 log.exception("task %s crashed during shutdown", t.get_name())
-        await self.persistwriter.drain()  # 终结 flush 残余缓冲(OrmPersister 落 DB)
-        await self.engine.dispose()  # 关连接池
+
+    async def stop(self) -> None:
+        # 关闭反序(connection.md:177-180 四步 / changes/0046):
+        # ① 停 Timer + GameLoop:不再产生/消费 inbox 命令。GameLoop 在 `await get()` 处被 cancel,handle 全程同步
+        #    ⇒ cancel 只在下个 await 生效,绝不打断处理到一半的命令(在途命令要么完整处理、要么没开始)。
+        await self._cancel_and_await(self._timer_task, self._gameloop_task)
+        # ② 排空 inbox(spec「在途命令处理完」):同步驱动 GameLoop.handle 处理排队命令,其 Persist 写入缓冲,
+        #    交③一并落库。本循环全程无 await ⇒ 原子,PersistWriter 不与之竞 swap。被丢的只会是「未开始」的命令
+        #    (从未 commit 进 world、无对应写),丢弃即丢一个未生效输入(storage.md 接受)。
+        drained = 0
+        if self.gameloop is not None:
+            while not self.inbox.empty():
+                try:
+                    cmd = self.inbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                try:
+                    self.gameloop.handle(cmd)  # 同步;内部已兜 reduce 崩溃,这里再兜 checkout/commit 等
+                except Exception:  # 单条命令处理异常不得中断关闭(否则 dispose 被跳、连接池泄漏)——尽力 drain
+                    log.exception("command %s crashed during shutdown drain", type(cmd).__name__)
+                drained += 1
+        if drained:
+            log.info("drained %d in-flight commands before shutdown", drained)
+        # ③ 停 PersistWriter 周期循环 + 终结 flush:有界,超 DB_DRAIN_TIMEOUT_MS → CRITICAL(见 persist.drain,0025)。
+        #    drain 即便超时也 return(非 raise)⇒ 下面 dispose 照常跑、进程干净退。
+        await self._cancel_and_await(self._persistwriter_task)
+        await self.persistwriter.drain()
+        # ④ cancel 各 Sender(best-effort 兜底:正常每条 Receiver 的 finally 已 cancel 自己的;兜仍登记者)+ 关连接池。
+        for nick in self.conns.online_nicks():
+            conn = self.conns.get(nick)
+            if conn is not None and conn.sender_task is not None:
+                conn.sender_task.cancel()
+        await self.engine.dispose()
 
 
 def create_app() -> FastAPI:
