@@ -11,10 +11,20 @@ class Command:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomCreate:
+    # 建房配置:JoinRoom 到不存在的房时用它建房(见 core.md 房间生命周期)。由 shell 从 gameconfig 盖(core 不 import config);
+    # 边界(seats≥2 / 正额)由 gameconfig Field 兜。加入已存在房时忽略此配置。
+    small_blind: int  # 新房小盲(大盲 = 2× 派生)
+    buy_in: int  # 新房默认买入额(Room.buy_in)
+    seats: int  # 新房座位数(Room.seats 长度)
+
+
+@dataclass(frozen=True, slots=True)
 class JoinRoom(Command):
     room: str  # 目标房(唯一带 room 的命令)
     uid: int  # shell 从 DB 读出的账号主键
     loaded: int  # shell 从 DB 读出的该账号当前全局积分
+    create: RoomCreate | None = None  # 房不存在时建房配置(shell 盖);None = 不带 → 房必须已存在,否则 NO_SUCH_ROOM
 
 
 @dataclass(frozen=True, slots=True)

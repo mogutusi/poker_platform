@@ -18,18 +18,18 @@
 
 > **这条直接让你定的「只能不在房间时改昵称」成立**:大厅用户不是任何 `world` 键(座位/`contributed`/键都没用到它),所以改昵称只动 DB + 会话表,不会让 world 的键错乱(见下「改昵称」)。
 
-## 房间从哪来(v1:配置静态预置)
+## 房间从哪来(动态:谁都可创建 / 空则消失,0049)
 
-lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `small_blind` / `buy_in` / `max_seats`)。房间状态**不持久化**(同 [storage.md](storage.md)),重启按配置重建。
+**无静态预置房。** 用户对一个不存在的房名发 `JoinRoom` 即把它创建出来(见下),最后一人离开则销毁——用户明示的设计。启动时 `world.rooms` 为空(见 [connection.md](connection.md) lifespan);房间随进房而生、随空房而灭,状态**不持久化**(同 [storage.md](storage.md))。
 
-> 无论房间是"启动预置"还是日后"用户动态建",它都只是 `world.rooms` 里一个 `Room`,后续机制完全相同。动态建房见「待定」。
+> 房都只是 `world.rooms` 里一个 `Room`,「创建」= `JoinRoom` 到不存在的房、「销毁」= 最后一人离开(core.md §房间生命周期)。建房配置由 shell 从 `gameconfig` 盖进命令(创建者无特权、无房主),建后任何在房成员可 `SetSmallBlind`/`SetBuyIn` 调参。
 
 ## 进/出房:`JoinRoom` / `LeaveRoom` 命令
 
-**`JoinRoom(room, uid, loaded)`**(大厅 → 房间):
+**`JoinRoom(room, uid, loaded, create?)`**(大厅 → 房间;房不存在则**创建**):
 
-- shell:用户在大厅选某房 → Receiver 从 DB 读该 nick 的 `uid` + `points` → 投 `JoinRoom(room, uid, loaded=points)`。
-- reduce 校验:房间存在(`NO_SUCH_ROOM`);**nick 不在 `world.users`**(单房间约束 `ALREADY_IN_ROOM`——已在别房要先 `LeaveRoom`)。
+- shell:用户在大厅选/新建某房 → Receiver 从 DB 读该 nick 的 `uid` + `points`、并从 `gameconfig` 盖建房默认配置 `create` → 投 `JoinRoom(room, uid, loaded=points, create=…)`。
+- reduce 校验:**nick 不在 `world.users`**(单房间约束 `ALREADY_IN_ROOM`——已在别房要先 `LeaveRoom`);**房不存在则用 `create` 建房**(空座 `PENDING_START`);`create=None` 且房不存在 → `NO_SUCH_ROOM`(防御,shell 应总带 `create`)。
 - reduce 改副本:装 `UserState(uid, nickname=nick, room=R, points=loaded)` 进 `world.users`;加进 `room.users_in_room` 为 `WATCHING`。
 - 产出:`Broadcast(room, UserJoined)` + `Personal(StateSnapshot)`(整桌当前态)。**全链已落地**:core `_join_room`(0022)+ wire `join_room{room}` 报文 + Receiver 按连接 nick 读 DB 富化 `uid`/`loaded`([0030](refactor/changes/0030-p4-per-join-wire-load.md))。dev shell 用户连接进大厅 → 主动 `join_room{"dev"}` 载入(0030 退役了 [0029](refactor/changes/0029-p4-db-backed-dev-shell.md) 的「预置在房 + 启动整载」)。
 - **`ROOM_FULL` v1 暂不强制**:≤20 在线、房极少下「满」非真实约束,且「满桌不可观战」是有损 UX 的武断规则;故 v1 不限观战(座位可用性由 `SitDown` 的 `SEAT_TAKEN` 兜),`ErrorCode.ROOM_FULL` 保留待引入容量上限。失败码现为 `NO_SUCH_ROOM` / `ALREADY_IN_ROOM`(见 [changes/0022](refactor/changes/0022-p1-join-room-state-snapshot.md) 决策 5)。
@@ -81,12 +81,12 @@ GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lob
 1. **大厅无 `world` 状态**:房间集合在 `world.rooms`,大厅本身只是 ConnectionManager(presence) + REST。
 2. **`world.users` = 当前在游戏房的人**;大厅用户只活在 ConnectionManager。
 3. **进出房走 `JoinRoom`/`LeaveRoom` 命令**,守单房间约束;游戏命令不带 `room`,由用户当前房推定。
-4. **房间列表是 REST 读**(展示、可滞后),不做实时判定;**房间状态不持久化**,重启按配置重建。
+4. **房间列表是 REST 读**(展示、可滞后),不做实时判定;**房间状态不持久化 + 无静态预置**——房随进房动态创建、随空房销毁(0049),重启从空 `world.rooms` 起步。
 5. **改昵称仅限大厅**(不在 `world.users` 时),避免 world 键错乱。
 
 ## 待定 / future
 
-- **动态建房**:`CreateRoom(config)` 命令(用户建房、设盲注/买入)、空房回收、命名冲突。它改的是 `world.rooms` **顶层**(不是某个房),属"注册表级命令",`checkout` 要从"单房间"扩展到"房间注册表级"——v1 先用静态配置绕开。
-- **实时房间列表推送**:新增 `LobbyBroadcast(msg)` 事件 → dispatch 发给所有**大厅连接**(nick 不在 `world.users` 的连接)。v1 用轮询。
+- **动态建房已落地(0049)**:「谁都可创建 / 空则消失」= `JoinRoom` 到不存在的房即建、最后一人离开即销毁(见 core.md §房间生命周期)。**余项**:建房时自定盲注/买入/座位(往 `join_room` 报文加 `create` 字段让创建者设参;现用 `gameconfig` 默认 + 建后 `SetSmallBlind`/`SetBuyIn` 调)、房名冲突/命名规则、反滥用的建房数量上限——本规模(内网 ≤20)暂不设。
+- **实时房间列表推送**:新增 `LobbyBroadcast(msg)` 事件 → dispatch 发给所有**大厅连接**(nick 不在 `world.users` 的连接),建房/销房时增量推;v1 用轮询 `GET /lobby/rooms`(0048)。
 - **离桌中途在局的精确处理**:接 [timer.md](timer.md) 的 `Cleanup` 与弃牌规则。
 - **messaging(私聊 + 房聊)**:见 [messaging.md](messaging.md)。完整 **presence** 只读视图(谁在线/在哪房/状态)仍待单列。

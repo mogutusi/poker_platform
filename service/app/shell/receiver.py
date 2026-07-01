@@ -11,7 +11,16 @@ import pydantic
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
-from app.core.commands import Command, Connect, Disconnect, JoinRoom, RoomChat, SetBuyIn, SetSmallBlind
+from app.core.commands import (
+    Command,
+    Connect,
+    Disconnect,
+    JoinRoom,
+    RoomChat,
+    RoomCreate,
+    SetBuyIn,
+    SetSmallBlind,
+)
 from app.core.errors import Err, ErrorCode
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
@@ -170,7 +179,13 @@ async def _build_join(
         )
         return None
     uid, loaded = row
-    return JoinRoom(origin=conn.nick, room=msg.room, uid=uid, loaded=loaded)
+    # 房不存在则动态建房(谁都可创建,见 core.md 房间生命周期):盖 gameconfig 建房默认配置;加入已存在房时 reduce 忽略它。
+    create = RoomCreate(
+        small_blind=gameconfig.DEV_SMALL_BLIND,
+        buy_in=gameconfig.DEV_BUY_IN,
+        seats=gameconfig.DEV_SEATS,
+    )
+    return JoinRoom(origin=conn.nick, room=msg.room, uid=uid, loaded=loaded, create=create)
 
 
 async def _displace(old: Connection) -> None:

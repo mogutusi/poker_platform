@@ -68,7 +68,18 @@ ReduceResult = tuple[list[Event], Err | None]
 
 
 def reduce(work: Work, cmd: Command) -> ReduceResult:
-    # 顶层按命令类型分发;每个 handler:先校验(返回 Err)→ 改工作副本 → 产出 events。
+    # 顶层:分发到 handler,再做「空房销毁」归一(动态房)。
+    events, err = _dispatch(work, cmd)
+    # 空房销毁(动态房:谁都可创建 / 空则消失,见 core.md 房间生命周期):任一成功命令后,若目标房已无成员,
+    # 置 work.room=None → commit 销毁该房。集中一处守「已提交的房永不为空」不变量,覆盖 LeaveRoom/Cleanup/手尾驱逐
+    # 所有清空路径;在全部 mutation 之后跑、不与 _evict 内部耦合。Disconnect(标 OFFLINE 留房)/ 起身(→WATCHING 留房)不清空 → 不销毁。
+    if err is None and work.room is not None and work.room_name is not None and not work.room.users_in_room:
+        work.room = None
+    return events, err
+
+
+def _dispatch(work: Work, cmd: Command) -> ReduceResult:
+    # 按命令类型分发;每个 handler:先校验(返回 Err)→ 改工作副本 → 产出 events。
     match cmd:
         case JoinRoom():
             return _join_room(work, cmd)
@@ -585,17 +596,23 @@ def _reconnect_status(room: Room, nick: str) -> UserStatus:
 
 # ── 进房(JoinRoom)── lobby.md / user.md:大厅 → 房间,装入 world.users 为 WATCHING + 私发快照
 def _join_room(work: Work, cmd: JoinRoom) -> ReduceResult:
-    # uid/loaded 由 shell 读 DB 带入(user.md);校验房存在 + 单房间约束;装 UserState + WATCHING;
+    # 大厅→房间(uid/loaded 由 shell 读 DB 带入,user.md)。房不存在 → 动态建房(谁都可创建,见 core.md 房间生命周期):
+    # 用 cmd.create(shell 从 gameconfig 盖)新建空房再加入。单房间约束:已在别房要先 LeaveRoom。
     # 产 Broadcast(UserJoined) 给全房 + Personal(StateSnapshot) 给进房者(观战 → 无自有底牌)。
-    room = work.room
     nick = cmd.origin
     room_name = work.room_name
     if nick is None:
         return [], Err(ErrorCode.INTERNAL, "JoinRoom 缺 origin")
-    if room is None or room_name is None:
+    if room_name is None:
         return [], Err(ErrorCode.NO_SUCH_ROOM, f"无此房间 {cmd.room}")
     if nick in work.users:
         return [], Err(ErrorCode.ALREADY_IN_ROOM, f"{nick} 已在房间 {work.users[nick].room},先 LeaveRoom")
+    room = work.room
+    if room is None:  # 房不存在 → 建房(需 shell 带 create 配置;越界由 gameconfig Field 兜)。检在单房间约束之后,失败不建房。
+        if cmd.create is None:
+            return [], Err(ErrorCode.NO_SUCH_ROOM, f"无此房间 {cmd.room} 且无建房配置")
+        room = Room(seats=[None] * cmd.create.seats, small_blind=cmd.create.small_blind, buy_in=cmd.create.buy_in)
+        work.room = room  # 装入工作副本 → commit 插入 world.rooms(storage.md)
     # ROOM_FULL 暂不强制(v1:不限观战;座位可用性由 SitDown 的 SEAT_TAKEN 兜,见 lobby.md / changes/0022)
     work.users[nick] = UserState(uid=cmd.uid, nickname=nick, points=cmd.loaded, room=room_name)
     room.users_in_room[nick] = UserStatus.WATCHING

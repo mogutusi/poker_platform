@@ -7,7 +7,7 @@
 import asyncio
 
 from app import gameconfig
-from app.core.commands import BuyIn, JoinRoom, SitDown
+from app.core.commands import BuyIn, JoinRoom, RoomCreate, SitDown
 from app.core.records import PointsWrite
 from app.db.engine import make_engine, make_sessionmaker
 from app.db.models import User
@@ -36,7 +36,10 @@ async def test_stop_drains_inflight_inbox_commands_to_db(tmp_path):
     await shell.setup()
     amount = 70
     shell.inbox.put_nowait(
-        JoinRoom(origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS)
+        JoinRoom(
+            origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS,
+            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS),
+        )
     )
     shell.inbox.put_nowait(SitDown(origin="alice", seat=0))
     shell.inbox.put_nowait(BuyIn(origin="alice", seat=0, amount=amount))
@@ -96,7 +99,10 @@ async def test_stop_drains_concurrently_with_live_gameloop_exactly_once(tmp_path
     amount = 55
     # 同步连投三条(put_nowait 无 await ⇒ 投完前 gameloop 不运行;await stop 时才竞):
     shell.inbox.put_nowait(
-        JoinRoom(origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS)
+        JoinRoom(
+            origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS,
+            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS),
+        )
     )
     shell.inbox.put_nowait(SitDown(origin="alice", seat=0))
     shell.inbox.put_nowait(BuyIn(origin="alice", seat=0, amount=amount))

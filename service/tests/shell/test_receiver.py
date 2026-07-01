@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.pool import StaticPool
 
+from app import gameconfig
 from app.core.domain import UserState
 from app.core.enums import UserStatus
 from app.db.dm_records import DMReadCursorWrite, DMWrite
@@ -265,20 +266,21 @@ async def test_join_room_db_error_errors_internal_keeps_conn():
         await _shutdown((rx, gl))
 
 
-async def test_join_room_nonexistent_room_errors_to_origin():
-    # 富化成功(alice 在 DB)但目标房不存在 → reduce 回 NO_SUCH_ROOM,经 GameLoop 回发本人。
-    world = make_world(rooms={"dev": room_with(users_in_room={})}, users={})
+async def test_join_room_nonexistent_creates_room():
+    # 动态房(0049):富化成功(alice 在 DB)+ 目标房不存在 → Receiver 盖建房配置 → reduce 建房 + 加入(谁都可创建)。
+    world = make_world(rooms={}, users={})  # 空 world,无预置房
     sh = Shell(world)
     sm = await _seeded_sm({"alice": (1, 500)})
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="alice", ws=FakeWS())
     rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, sm, sh.history, sh.persist))
     await asyncio.sleep(0)
-    conn.ws.feed('{"type":"join_room","room":"ghost"}')  # world 无 ghost 房
-    await _settle(lambda: len(conn.ws.sent) >= 1)
+    conn.ws.feed('{"type":"join_room","room":"ghost"}')  # 不存在 → 建
+    await _settle(lambda: "ghost" in world.rooms and "alice" in world.rooms["ghost"].users_in_room)
     try:
-        assert ErrorMessage.model_validate_json(conn.ws.sent[0]).code.value == "NO_SUCH_ROOM"
-        assert "alice" not in world.users
+        assert world.users["alice"].room == "ghost"  # 载入 world.users
+        assert world.rooms["ghost"].users_in_room["alice"] is UserStatus.WATCHING  # 建房 + 观战
+        assert len(world.rooms["ghost"].seats) == gameconfig.DEV_SEATS  # 建房用 gameconfig 座位数
     finally:
         await _shutdown((rx, gl))
 

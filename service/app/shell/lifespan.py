@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import gameconfig
 from app.core.commands import Command
-from app.core.domain import Room, World
+from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
@@ -49,14 +49,10 @@ async def seed_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> None
 
 
 def build_dev_world() -> World:
-    # 预置一个**空** dev 房(房须存在供 JoinRoom 的 NO_SUCH_ROOM 校验,但不预置任何用户)。
-    # 用户连接 → 进大厅(Connect no-op)→ 主动 join_room{"dev"} → Receiver 读 DB 载入(per-join,0030)。
-    room = Room(
-        seats=[None] * gameconfig.DEV_SEATS,
-        small_blind=gameconfig.DEV_SMALL_BLIND,
-        buy_in=gameconfig.DEV_BUY_IN,
-    )
-    return World(rooms={gameconfig.DEV_ROOM: room}, users={})
+    # 空 world:无静态预置房(动态房——谁都可创建 / 空则消失,见 core.md 房间生命周期 / changes/0049)。
+    # 用户连接 → 进大厅(Connect no-op)→ 主动 join_room{room} → Receiver 读 DB 载入 + 盖建房默认配置 →
+    # 房不存在则 reduce 建房、加入;最后一人离开该房则销毁(per-join 载入 0030,动态房 0049)。
+    return World()
 
 
 class DevShell:

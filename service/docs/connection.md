@@ -175,7 +175,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 1. 加载配置(`gameconfig`/`settings`),缺字段即启动失败(见 [config.md](config.md))。
 2. 配置日志(见 [log.md](log.md))。
 3. 开 DB 连接池。
-4. 建 `World`,按配置 `ROOMS` 预置 `world.rooms`(静态房间,见 [lobby.md](lobby.md))。
+4. 建**空** `World`(`world.rooms` 为空;**动态房——谁都可创建 / 空则消失**,房随 `JoinRoom` 到不存在的房而建、随空房而销毁,见 [lobby.md](lobby.md) / [changes/0049](refactor/changes/0049-dynamic-rooms.md))。
 5. 建写缓冲 + 起 `PersistWriter`。
 6. 建 `Timer` + 起 `timer.run()`。
 7. 建 `ConnectionManager`、`Dispatcher(world, conns, persist, timer, inbox, history)`、`GameLoop(world, inbox, dispatcher)` + 起 `gameloop.run()`。

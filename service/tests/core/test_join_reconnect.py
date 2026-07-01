@@ -101,12 +101,12 @@ def test_join_room_already_in_room():
     assert ev == []
 
 
-# ── 房间不存在 → NO_SUCH_ROOM,不装入 world.users ──
-def test_join_room_no_such_room():
+# ── 房间不存在 + 无建房配置(create=None)→ NO_SUCH_ROOM,不装入 world.users(动态建房见 test_room_lifecycle)──
+def test_join_room_absent_without_create_config_errors():
     world = make_table({0: seat("A", 100, new_here=False)}, button=0)
-    world, ev, err = run(world, JoinRoom(origin="C", room="ghost", uid=9, loaded=100))
+    world, ev, err = run(world, JoinRoom(origin="C", room="ghost", uid=9, loaded=100))  # create 默认 None
     assert err is not None and err.code is ErrorCode.NO_SUCH_ROOM
-    assert ev == [] and "C" not in world.users
+    assert ev == [] and "C" not in world.users and "ghost" not in world.rooms
 
 
 # ── 重连(局中):OFFLINE → PLAYING 恢复 + 快照带自己底牌、不带他人底牌 ──

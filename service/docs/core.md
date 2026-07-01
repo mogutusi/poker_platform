@@ -40,7 +40,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 
 | Command | origin | 来源 | 语义 |
 |---|---|---|---|
-| `JoinRoom(room, uid, loaded)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;校验房间存在(`NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(0022);client 报文 + Receiver 读 DB 随真 DB 集成 |
+| `JoinRoom(room, uid, loaded, create?)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;**房不存在则动态建房**(谁都可创建,见「房间生命周期」/0049:用 shell 盖的 `create` 配置建空房再加入;`create=None` 且房不存在 → `NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(进房 0022 / 建房 0049);client 报文 `join_room{room}`(建房配置不进报文,shell 盖) |
 | `LeaveRoom()` | nick | wire | 退分离桌,回大厅;驱逐出 `world.users` |
 | `SitDown(seat, wait_for_big_blind)` | nick | wire | 观战→入座;`wait_for_big_blind` 声明入局方式(等大盲免费 / 默认付盲即玩,见 [rules.md](rules.md) ①) |
 | `BuyIn(seat, amount)` | nick | wire | 全局积分→座位筹码 |
@@ -60,9 +60,10 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 
 ## 房间生命周期(创建 / 销毁)
 
-- **创建**:**v1 房间在 lifespan 按配置 `ROOMS` 静态预置**(见 [lobby.md](lobby.md)),`JoinRoom` 时房必已存在。动态建房(future)走同一机制:`JoinRoom` 到不存在的房时 `checkout(world, cmd)` 给「无此房间」的副本(`work.room is None`),reduce 在副本上新建 `Room`(空座、`PENDING_START`)再加入用户,`commit` 插回 `world.rooms`(见 [storage.md](storage.md))。
-- **销毁**:**最后一人离开房间时销毁**(仅动态房;静态预置房可选保留)。`LeaveRoom` / `Cleanup` 把用户移出 `users_in_room` 后,若房间已空,reduce 在副本上 `del` 该房,`commit` 落定。销毁前若该用户座位上还有筹码,先退分(产出 `Persist(PointsWrite)`)再删,顺序不能反;**销毁的房不再 `Broadcast`**(见 [connection.md](connection.md))。
-- `Disconnect` **不**移出房间、不销毁(只标 `OFFLINE`、保留座位);真正的移出/销毁等 `Cleanup` 到期或 `LeaveRoom`。
+- **动态房(0049,唯一模型)**:**无静态预置房——谁都可创建、空则销毁**。用户明示的设计;所有房都动态。
+- **创建**:`JoinRoom` 到不存在的房时 `checkout(world, cmd)` 给「无此房间」的副本(`work.room is None`),reduce 用 `cmd.create`(`RoomCreate{small_blind,buy_in,seats}`,由 shell 从 `gameconfig` 盖——core 不 import config)在副本上新建 `Room`(空座、`PENDING_START`)再加入用户(WATCHING),`commit` 插回 `world.rooms`(见 [storage.md](storage.md))。**创建者无特权**(peer / 无房主,同 0044);建后任何在房成员可 `SetSmallBlind`/`SetBuyIn` 调参。`create=None` 且房不存在 → `NO_SUCH_ROOM`(防御:shell 应总带 `create`)。
+- **销毁**:**最后一人离开房间时销毁**。`reduce()` 顶层一处归一守「已提交的房永不为空」:任一成功命令后若目标房 `users_in_room` 变空 → 置 `work.room=None` → `commit` 销毁。覆盖 `LeaveRoom` / `Cleanup` / **手尾 `_finalize_hand` 驱逐**所有清空路径。销毁前 `_evict`/`_finalize_hand` 已先退座位筹码回全局(`Persist(PointsWrite)`)再移出,顺序不反;`Persist(HandRecordWrite)` 与房存亡无关照常落库;**销毁的房不再 `Broadcast`**(见 [connection.md](connection.md))。
+- `Disconnect` **不**移出房间、不销毁(只标 `OFFLINE`、保留座位);起身(→WATCHING)留房不销毁;真正的移出/销毁等 `Cleanup` 到期或 `LeaveRoom`。
 
 ## reduce 的结构
 

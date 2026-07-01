@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.pool import StaticPool
 
 from app import gameconfig
-from app.core.commands import BuyIn, JoinRoom, PlayerAction, SitDown, StartHand
+from app.core.commands import BuyIn, JoinRoom, PlayerAction, RoomCreate, SitDown, StartHand
 from app.core.enums import PlayerActionType
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import HandParticipant, HandRecord, User
@@ -54,7 +54,7 @@ async def _dev_shell(engine=None):
 async def test_setup_seeds_db_with_empty_world():
     shell = await _dev_shell()
     assert shell.world.users == {}  # 无预置用户
-    assert shell.world.rooms[gameconfig.DEV_ROOM].users_in_room == {}  # dev 房存在但空
+    assert shell.world.rooms == {}  # 无静态预置房(动态房:join 才建 / 空则消失,见 0049)
     async with shell.sessionmaker() as s:
         assert await s.scalar(select(func.count()).select_from(User)) == len(gameconfig.DEV_USERS)
         alice = (await s.execute(select(User).where(User.nickname == "alice"))).scalar_one()
@@ -78,9 +78,13 @@ async def test_setup_idempotent_preserves_points():
 async def test_e2e_buyin_persists_points_to_db():
     shell = await _dev_shell()
     amount = 100
-    # alice 连接进大厅 → join_room 载入(直接驱动 JoinRoom 命令,等价 Receiver 读 DB 富化后的产物)
+    # alice 连接进大厅 → join_room 载入(直接驱动 JoinRoom 命令,等价 Receiver 读 DB 富化 + 盖建房配置后的产物)。
+    # 房不存在 → 用 create 建房(动态房,0049)。
     shell.gameloop.handle(
-        JoinRoom(origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS)
+        JoinRoom(
+            origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS,
+            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS),
+        )
     )
     shell.gameloop.handle(SitDown(origin="alice", seat=0))
     shell.gameloop.handle(BuyIn(origin="alice", seat=0, amount=amount))
