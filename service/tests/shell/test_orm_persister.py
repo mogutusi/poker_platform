@@ -42,9 +42,9 @@ async def _setup(seed=((1, "alice", 1000), (2, "bob", 1000))):
     return sm
 
 
-def _record(key, parts=(), end_time=T_END, final_pot=0):
+def _record(key, parts=(), end_time=T_END, final_pot=0, room="r1"):
     return HandRecordWrite(
-        dedupe_key=key, start_time=T_START, final_pot=final_pot, participants=parts, end_time=end_time
+        dedupe_key=key, room=room, start_time=T_START, final_pot=final_pot, participants=parts, end_time=end_time
     )
 
 
@@ -95,6 +95,7 @@ async def test_hand_record_inserts_record_and_participants():
     async with sm() as s:
         hr = (await s.execute(select(HandRecord).where(HandRecord.dedupe_key == "r1:1"))).scalar_one()
         assert hr.final_pot == 200
+        assert hr.room == "r1"  # room 列随记录落库(0052,供 GET /hands?room= 过滤)
         assert (_naive(hr.start_time), _naive(hr.end_time)) == (_naive(T_START), _naive(T_END))
         parts = (
             await s.execute(select(HandParticipant).where(HandParticipant.hand_id == hr.id))

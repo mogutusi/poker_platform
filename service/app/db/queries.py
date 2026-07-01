@@ -43,6 +43,7 @@ async def top_users_by_points(
 async def list_hands(
     sessionmaker: async_sessionmaker[AsyncSession],
     *,
+    room: str | None = None,
     participant_uid: int | None = None,
     before_id: int | None = None,
     limit: int,
@@ -55,6 +56,8 @@ async def list_hands(
         stmt = select(
             HandRecord.id, HandRecord.dedupe_key, HandRecord.start_time, HandRecord.end_time, HandRecord.final_pot
         )
+        if room is not None:
+            stmt = stmt.where(HandRecord.room == room)  # 精确匹配 room 列(健壮,免 dedupe_key LIKE,见 changes/0052)
         if participant_uid is not None:
             stmt = stmt.where(
                 HandRecord.id.in_(select(HandParticipant.hand_id).where(HandParticipant.uid == participant_uid))

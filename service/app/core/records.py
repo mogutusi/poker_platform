@@ -27,6 +27,7 @@ class PointsWrite(PersistPayload):
 @dataclass(frozen=True)
 class HandRecordWrite(PersistPayload):
     dedupe_key: str  # f"{room}:{hand.seq}";delayDB 幂等键(见 db.md / core.md 手牌标识)
+    room: str  # 房名(= work.room_name);denormalized 供 HandRecord.room 列过滤,免从 dedupe_key 解析(见 changes/0052)
     start_time: datetime  # 开局墙钟(shell 经 StartHand 带入,core 只携带、不读时钟)
     final_pot: int  # 本手各子池金额之和(不含退还的未叫注)
     participants: tuple[ParticipantWrite, ...]  # 每个在局玩家的 uid + 初始/最终筹码;不含底牌

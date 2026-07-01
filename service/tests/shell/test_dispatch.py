@@ -84,7 +84,7 @@ def test_persist_hand_record_stamps_end_time():
     sh = Shell(world)
     t = datetime(2026, 6, 1, tzinfo=timezone.utc)
     d = Dispatcher(world, sh.conns, sh.persist, sh.timer, sh.inbox, sh.history, now=lambda: t)
-    d.dispatch(Persist(payload=HandRecordWrite(dedupe_key="r1:1", start_time=t, final_pot=0, participants=())))
+    d.dispatch(Persist(payload=HandRecordWrite(dedupe_key="r1:1", room="r1", start_time=t, final_pot=0, participants=())))
     buffered = sh.persist.snapshot()
     assert len(buffered) == 1
     assert buffered[0].end_time == t  # shell 盖了手结束墙钟

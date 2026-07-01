@@ -2,7 +2,7 @@
 #
 # 读 DB 的手牌记录(delayDB 事件写追加);**隐私内建**:HandRecord/HandParticipant 只存结果(uid + 初/末筹码 + 池额),
 # hole_cards/deck 从不落库(core.md 不变量 3 / models.py)——历史看输赢、看不到底牌。游标 = HandRecord.id(单调唯一);
-# user 过滤按参与者。room 过滤本批未做(需 HandRecord 加 room 列,dedupe_key LIKE 对动态房名脆弱,见 changes/0051)。
+# user 过滤按参与者;room 过滤按 HandRecord.room 列(0052 加列,健壮免 dedupe_key LIKE)。
 # dev 明文无鉴权(P5 上 JWT 时按 rest.md「REST 走 JWT」补,可要求仅查自己)。
 
 from datetime import datetime
@@ -38,6 +38,7 @@ def make_hands_router(get_sessionmaker: Callable[[], async_sessionmaker[AsyncSes
 
     @router.get("/hands", response_model=list[HandRecordView])
     async def get_hands(
+        room: str | None = Query(default=None),  # 按房名过滤(精确匹配 HandRecord.room 列)
         user: str | None = Query(default=None),  # 按昵称过滤:只返回该玩家参与过的手(仍含对手)
         before: int | None = Query(default=None, ge=1),  # 游标:只取 id < before(下一页)
         limit: int = Query(default=gameconfig.HANDS_DEFAULT_LIMIT, ge=1, le=gameconfig.HANDS_MAX_LIMIT),
@@ -50,7 +51,9 @@ def make_hands_router(get_sessionmaker: Callable[[], async_sessionmaker[AsyncSes
             if row is None:
                 return []  # 无此用户 = 无手牌历史
             participant_uid = row[0]
-        rows = await list_hands(sessionmaker, participant_uid=participant_uid, before_id=before, limit=limit)
+        rows = await list_hands(
+            sessionmaker, room=room, participant_uid=participant_uid, before_id=before, limit=limit
+        )
         return [
             HandRecordView(
                 id=hid,

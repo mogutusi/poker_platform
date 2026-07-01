@@ -118,6 +118,7 @@ class OrmPersister:
             raise ValueError(f"HandRecordWrite.end_time 未盖戳(dedupe_key={payload.dedupe_key})")
         record = HandRecord(
             dedupe_key=payload.dedupe_key,
+            room=payload.room,
             start_time=payload.start_time,
             end_time=payload.end_time,
             final_pot=payload.final_pot,

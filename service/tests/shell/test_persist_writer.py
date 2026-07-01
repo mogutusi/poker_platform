@@ -18,7 +18,7 @@ def _points(uid: int, points: int) -> PointsWrite:
 
 
 def _record(key: str) -> HandRecordWrite:
-    return HandRecordWrite(dedupe_key=key, start_time=T0, final_pot=0, participants=())
+    return HandRecordWrite(dedupe_key=key, room="r1", start_time=T0, final_pot=0, participants=())
 
 
 class FakePersister:

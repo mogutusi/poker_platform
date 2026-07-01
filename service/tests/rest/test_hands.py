@@ -30,9 +30,9 @@ async def _seeded():
             )
             s.add_all(
                 [
-                    HandRecord(id=1, dedupe_key="r1:1", start_time=_T, end_time=_T, final_pot=20),
-                    HandRecord(id=2, dedupe_key="r1:2", start_time=_T, end_time=_T, final_pot=40),
-                    HandRecord(id=3, dedupe_key="r2:1", start_time=_T, end_time=_T, final_pot=60),
+                    HandRecord(id=1, dedupe_key="r1:1", room="r1", start_time=_T, end_time=_T, final_pot=20),
+                    HandRecord(id=2, dedupe_key="r1:2", room="r1", start_time=_T, end_time=_T, final_pot=40),
+                    HandRecord(id=3, dedupe_key="r2:1", room="r2", start_time=_T, end_time=_T, final_pot=60),
                 ]
             )
             await s.flush()  # 先落 User/HandRecord 父行,满足下面 HandParticipant 的 FK(sqlite foreign_keys=ON 即时校验)
@@ -85,9 +85,29 @@ async def test_query_empty_before_first():
     assert await list_hands(await _seeded(), before_id=1, limit=10) == []  # id<1 无
 
 
+async def test_query_room_filter():
+    sm = await _seeded()
+    assert [hid for hid, *_ in await list_hands(sm, room="r1", limit=10)] == [2, 1]  # r1 有 hand 1,2
+    assert [hid for hid, *_ in await list_hands(sm, room="r2", limit=10)] == [3]  # r2 有 hand 3
+    assert await list_hands(sm, room="ghost", limit=10) == []  # 无此房 → 空
+
+
+async def test_query_room_and_user_combine():
+    sm = await _seeded()
+    # alice(uid1) 参与 hand 1,2(皆 r1);room=r1 + alice → [2,1];room=r2 + alice → 空(alice 未在 r2)
+    assert [hid for hid, *_ in await list_hands(sm, room="r1", participant_uid=1, limit=10)] == [2, 1]
+    assert await list_hands(sm, room="r2", participant_uid=1, limit=10) == []
+
+
+async def test_route_room_filter():
+    sm = await _seeded()
+    result = await _endpoint(make_hands_router(lambda: sm))(room="r2", user=None, before=None, limit=10)
+    assert [v.id for v in result] == [3]
+
+
 async def test_route_user_and_dto_net():
     sm = await _seeded()
-    result = await _endpoint(make_hands_router(lambda: sm))(user="alice", before=None, limit=10)
+    result = await _endpoint(make_hands_router(lambda: sm))(room=None, user="alice", before=None, limit=10)
     assert [v.id for v in result] == [2, 1]  # alice 的手,新→旧
     hand2 = next(v for v in result if v.id == 2)
     alice = next(p for p in hand2.participants if p.nickname == "alice")
@@ -97,7 +117,7 @@ async def test_route_user_and_dto_net():
 
 async def test_route_unknown_user_returns_empty():
     sm = await _seeded()
-    result = await _endpoint(make_hands_router(lambda: sm))(user="nobody", before=None, limit=10)
+    result = await _endpoint(make_hands_router(lambda: sm))(room=None, user="nobody", before=None, limit=10)
     assert result == []
 
 

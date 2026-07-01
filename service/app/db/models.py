@@ -21,6 +21,7 @@ class HandRecord(SQLModel, table=True):
     # 一手牌结果记录(事件写,追加;对齐 core.records.HandRecordWrite)。
     id: Optional[int] = Field(default=None, primary_key=True)  # 自增主键
     dedupe_key: str = Field(max_length=128, unique=True, index=True)  # = f"{room}:{seq}";幂等 INSERT 唯一键
+    room: str = Field(max_length=128, index=True)  # 房名(denormalized;供 GET /hands?room= 健壮过滤,免 dedupe_key LIKE,见 changes/0052)
     start_time: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))  # 开局墙钟(shell 经 StartHand 带入)
     end_time: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))  # 手结束墙钟(shell 派发 Persist 时盖)
     final_pot: int  # 各子池金额之和(不含退还的未叫注)

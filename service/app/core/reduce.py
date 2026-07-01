@@ -466,6 +466,7 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
 
     record = HandRecordWrite(
         dedupe_key=f"{work.room_name}:{hand.seq}",
+        room=work.room_name,  # denormalized 供 HandRecord.room 列过滤(work.room_name 已在函数顶 assert 非 None)
         start_time=hand.start_time,
         final_pot=sum(pot.amount for pot in payout.pots),
         participants=tuple(participants),
