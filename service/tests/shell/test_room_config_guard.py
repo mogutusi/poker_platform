@@ -1,6 +1,6 @@
 """房间参数配置进 reduce 前的 shell 上下限防护(config.md / changes/0043):
 SetSmallBlind/SetBuyIn 的 amount 越界先拒(core 不 import gameconfig,故 bounds 归 shell,同房聊文本防护);
-合法则构 Command(身份盖连接 nick)。授权(0 号位)/ 时机(非局中)由 reduce 兜,不在此。"""
+合法则构 Command(身份盖连接 nick)。授权(任何在房成员,无房主)/ 时机(非局中)由 reduce 兜,不在此。"""
 
 from app import gameconfig
 from app.core.commands import SetBuyIn, SetSmallBlind

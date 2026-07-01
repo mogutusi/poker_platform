@@ -42,12 +42,12 @@ class SetUserStatus(Command):
 
 @dataclass(frozen=True, slots=True)
 class SetSmallBlind(Command):
-    amount: int  # 新小盲额(0 号位配置)
+    amount: int  # 新小盲额(任何在房成员配置,无房主;见 changes/0044)
 
 
 @dataclass(frozen=True, slots=True)
 class SetBuyIn(Command):
-    amount: int  # 新房间买入额(0 号位配置)
+    amount: int  # 新房间买入额(任何在房成员配置,无房主;见 changes/0044)
 
 
 @dataclass(frozen=True, slots=True)

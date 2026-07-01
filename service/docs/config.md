@@ -18,8 +18,8 @@
 # gameconfig.py —— 声明 + 取值边界(边界也是配置的一部分)
 class GameConfig(BaseSettings):
     # —— 计时器 ——
-    ACTION_TIMEOUT: int   = Field(ge=5, le=120)      # 行动倒计时(秒)
-    LIVENESS_TIMEOUT: int = Field(ge=30, le=600)     # 断线占座/重连窗口(秒)
+    ACTION_TIMEOUT: float   = Field(ge=5, le=120)    # 行动倒计时(秒;float 对齐 timer.py 的 timeout_s/fire_at)
+    LIVENESS_TIMEOUT: float = Field(ge=30, le=600)   # 断线占座/重连窗口(秒;同上 float)
     TIMER_TICK_MS: int    = Field(ge=100, le=2000)   # 扫描周期(毫秒)
     # …盲注 / 买入 / 房间 / delayDB / 日志 等既有与新增字段
 ```

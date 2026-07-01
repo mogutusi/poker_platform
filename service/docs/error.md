@@ -93,23 +93,24 @@ def take_from_pot(...) -> tuple[int, Err | None]: ... # 又出值又可能失败
 
 ## 怎么处理(shell 侧)
 
-GameLoop 拿到 `(events, err)` 后**先分支**:
+GameLoop 拿到 `(events, err)` 后**先分支**;派发与回发都**委托给它持有的 `Dispatcher`**(后者持 `conns`/`persist`/`timer`,GameLoop 只持 `world`/`inbox`/`dispatcher`,见 [connection.md](connection.md)「dispatch」):
 
 ```python
 events, err = reduce(work, cmd)
 if err is not None:                       # 失败臂:丢弃 work,只回发发起人
-    self.send_error(cmd, err)
+    self.dispatcher.send_error(cmd, err)
 else:
     commit(self.world, work)              # 成功才 commit(shell/world.py 模块函数)
     for ev in events:
-        self.dispatch(ev)
+        self.dispatcher.dispatch(ev)
 
+# —— send_error 在 Dispatcher 上(持 conns);GameLoop 委托 ——
 def send_error(self, cmd, err: Err) -> None:
     if cmd.origin is None:                # 系统命令(Timeout/Cleanup/Disconnect…)无发起连接
-        log.error("system cmd failed: %s err=%s", cmd, err.code)
+        log.warning("system cmd %s failed: %s %s", type(cmd).__name__, err.code, err.detail)
         return
     if (conn := self.conns.get(cmd.origin)) is not None:   # origin = nick(模型 2),全局按 nick 取连接
-        conn.outbound.put_nowait(ErrorMessage(code=err.code, detail=err.detail))
+        conn.outbound.put_nowait(ErrorMessage.from_err(err))
 ```
 
 **发给谁?——命令的 `origin`(= 发起连接的 nick),不是命令里的业务昵称。** 模型 2 下连接全局绑 nick(见 [connection.md](connection.md)),Receiver 构造客户端命令时盖上 `origin = nick`;Timer / 断线产生的系统命令 `origin = None`。回发只需 `conns.get(nick)`,无需 room。

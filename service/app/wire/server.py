@@ -133,7 +133,7 @@ class PlayerBoughtIn(ServerMessage):
 
 
 class RoomConfigChanged(ServerMessage):
-    # 房间参数被 0 号位占座者改动后广播给全房(含观战者),客户端据此更新桌面注码/买入默认值(见 changes/0043)。
+    # 房间参数被任何在房成员改动后广播给全房(含观战者;无房主,见 changes/0044),客户端据此更新桌面注码/买入默认值。
     # 携完整当前配置快照(不止改动项)——客户端无需累积、单条即对齐;房配不落库(storage.md),重启回 gameconfig 缺省。
     type: Literal["room_config_changed"] = "room_config_changed"
     small_blind: int  # 当前小盲额

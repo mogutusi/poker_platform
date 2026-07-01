@@ -124,8 +124,8 @@
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
 - 大厅房间列表(REST)。
 
-## 9. 怎么连(Phase D · 即将)
+## 9. 怎么连(Phase D · 已落地)
 
-明文 dev WS 端点正在做(下一步)。落地后:`ws://<host>/dev?nick=<你的昵称>`(**开发用、明文、无加密**),连上即用上面的报文收发。正式国密加密信道放在**最后**做,对你**透明**——加解密在连接边界,你收发的始终是同样的明文 `ServerMessage`/`ClientMessage` JSON。
+明文 dev WS 端点**已落地**(见 0018,`shell/lifespan.py`):`ws://<host>/dev/ws?nick=<你的昵称>`(**开发用、明文、无加密**),连上即用上面的报文收发。起服务:`cd service && .venv/bin/uvicorn app.shell.lifespan:app`。正式国密加密信道放在**最后**做,对你**透明**——加解密在连接边界,你收发的始终是同样的明文 `ServerMessage`/`ClientMessage` JSON。
 
-**现在(端点落地前)就能做的**:对着 `wire.gen.ts` 把消息类型、`switch(type)` 分发、UI 组件、桌面状态机写起来,用 mock 数据驱动;端点一通,换成真 socket 即可。
+**握手后**:连上直接进「大厅」(后端 `Connect` 对纯大厅是 no-op),主动发 `join_room{room}` 载入房间(后端读 DB 富化身份/积分,见 0030)。仍可先对着 `wire.gen.ts` 把消息类型、`switch(type)` 分发、UI 组件、桌面状态机用 mock 数据搭起来,再切真 socket。

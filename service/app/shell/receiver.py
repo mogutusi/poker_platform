@@ -126,7 +126,7 @@ def _guard_room_config(
 ) -> Command | None:
     # 房间参数配置进 reduce 前防护:按 gameconfig 上下限拒越界(core 不 import config,故 bounds 归 shell,
     # 同房聊文本防护 _guard_room_chat;见 changes/0043 / 0015)。越界回对应 Err + return None(不进 inbox);
-    # 合法构 Command(身份盖连接 nick)。授权(0 号位)/ 时机(非局中)由 reduce 兜——shell 不读 world、无法判。
+    # 合法构 Command(身份盖连接 nick)。授权(任何在房成员,无房主)/ 时机(非局中)由 reduce 兜——shell 不读 world、无法判。
     if isinstance(msg, wire_client.SetSmallBlind):
         if not (gameconfig.MIN_SMALL_BLIND <= msg.amount <= gameconfig.MAX_SMALL_BLIND):
             conn.outbound.put_nowait(

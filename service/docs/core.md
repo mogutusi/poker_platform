@@ -107,7 +107,7 @@ def reduce(work, cmd):
 - **BET**(下注/跟注/加注,合并为一个动作 + 金额):`amount` 是**本街目标总额**。校验不超过 `points+bet_amount`;等于则 `ALLIN`;`< last_bet` 仅允许 all-in;`> last_bet` 即加注、更新 `last_bet`。
 
 改完后调用**下注轮推进**(下一节)决定:换人 / 进下一街 / 摊牌 / 结束。
-产出:`Broadcast(PlayerAction)`(带 pot、下一行动者),以及推进带来的事件。
+产出:`Broadcast(PlayerActed)`(带 pot、下一行动者),以及推进带来的事件。
 
 ### 3. 下注轮推进
 
@@ -131,7 +131,7 @@ def reduce(work, cmd):
 - **落库**:产出 `Persist(HandRecordWrite)`(事件写,追加),`dedupe_key = f"{room}:{hand.seq}"`(见「手牌标识」)。`start_time = hand.start_time`(开局带入的值);`end_time` 留空,由 shell 在派发该 `Persist` 时盖墙钟(core 不读时钟)。记录存**结果**(各 participant 的 `uid`(由 `work.users[player.nickname].uid` 取)+ `initial_points`/`final_points` + `final_pot`),**不含底牌**。
 - **收尾**:`room.hand=None`、`RoomStatus → PENDING_START`、产出 `ClearAction`(停行动倒计时)。
 
-产出顺序:`Broadcast(HandShowDown)`(若摊牌)→ `Broadcast(HandEnded)` → `Persist` → `ClearAction`。
+产出顺序:`Broadcast(HandShowDown)`(若摊牌)→ `Broadcast(HandEnded)` → `Persist(HandRecordWrite)` →(若有 `room.leaving` 离桌者:逐人 `Persist(PointsWrite)` + `Broadcast/Personal(UserLeft)` 驱逐,见上「驱逐离桌者」)→ `ClearAction`。
 
 ## 边池与分配(side pots)
 
@@ -157,8 +157,8 @@ treys 评估只在 core 内做纯计算(无 IO),合法。`Evaluator` 单例在 c
 | 时机 | A 组(走队列) | B 组(同步,Timer) |
 |---|---|---|
 | 开局 | `Broadcast(HandStarted)` + 每人 `Personal(HoleCards)` + `Broadcast(HandStatusChanged)` | `TurnChanged` |
-| 动作·换人 | `Broadcast(PlayerAction)` | `TurnChanged` |
-| 动作·进街 | `Broadcast(PlayerAction)` + `Broadcast(HandStatusChanged)` | `TurnChanged` |
+| 动作·换人 | `Broadcast(PlayerActed)` | `TurnChanged` |
+| 动作·进街 | `Broadcast(PlayerActed)` + `Broadcast(HandStatusChanged)` | `TurnChanged` |
 | 摊牌 | `Broadcast(HandShowDown)` | — |
 | 结束 | `Broadcast(HandEnded)` + `Persist(HandRecord)` | `ClearAction` |
 | 买入/离桌/起身 | `Broadcast(...)` + `Persist(PointsWrite)` | — |

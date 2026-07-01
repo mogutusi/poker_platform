@@ -1,7 +1,7 @@
 # core 游戏状态机:reduce(work, cmd) -> (events, err)。
 # 纯同步、不 await、不碰 IO/DB、不读墙钟(不变量 1);改的是 GameLoop 给的工作副本,
-# 成功 commit、失败/异常丢弃(见 core.md / storage.md)。命令簇逐次落地(见 refactor/changes/),
-# 顶层 match 已实现的臂见 reduce();未实现命令落 case _ 的 INTERNAL 占位。
+# 成功 commit、失败/异常丢弃(见 core.md / storage.md)。当前命令全集(16 命令)各有 handler(见 reduce());
+# case _ 是防御性兜底(未知/未来命令 → Err(INTERNAL),绝不 raise),对现有命令集不可达。
 
 from app.core.cards import Card
 from app.core.commands import (
@@ -103,9 +103,9 @@ def reduce(work: Work, cmd: Command) -> ReduceResult:
         case SetBuyIn():
             return _set_buy_in(work, cmd)
         case _:
-            # 其余命令的 handler 随后续变更逐个落地(见 refactor/TODO P1);未实现期间
-            # 按内部错误归一(工作副本被丢弃、world 不动),全部落地后此分支应不可达。
-            return [], Err(ErrorCode.INTERNAL, f"reduce 暂未实现命令 {type(cmd).__name__}")
+            # 防御性兜底:现有命令全集都有专臂,此分支不可达。仅当日后新增命令类却漏写臂时命中——
+            # 归一为内部错误(工作副本被丢弃、world 不动),绝不 raise(守「helper/reduce 不抛」不变量)。
+            return [], Err(ErrorCode.INTERNAL, f"reduce 无此命令的 handler:{type(cmd).__name__}")
 
 
 # ── 开局(StartHand)── rules.md ① 开局那半 + core.md §1
@@ -949,8 +949,9 @@ def _set_buy_in(work: Work, cmd: SetBuyIn) -> ReduceResult:
 
 
 def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
-    # 本簇仅处理「就座内」状态切换(0014):局中坐出延到手尾 + 就座内 ready/sit-out 切换。
-    # 起身离座(→WATCHING)/ 入座 / 买入归后续座位簇(暂以 INTERNAL 占位,沿用 reduce case _ 约定)。
+    # 玩家自助状态切换:就座内 ready/sit-out 切换(0014,局中坐出延到手尾)+ 起身离座 →WATCHING(0015,
+    # 见下方 _release_seat:腾座退筹)。入座(WATCHING→SITTING_IN)走 SitDown、买入走 BuyIn(各自命令,不在此);
+    # 非自助目标(PLAYING/OFFLINE 等系统驱动态)落 INTERNAL 守卫。
     room = work.room
     nick = cmd.origin
     if room is None or nick is None or nick not in room.users_in_room:
@@ -966,7 +967,7 @@ def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} 局中仅可请求 SITTING_OUT(当前 {new_status})")
 
     if new_status not in _SELF_STATUS_TARGETS:
-        return [], Err(ErrorCode.INTERNAL, f"SetUserStatus {current}→{new_status} 暂未实现(入座走 SitDown)")
+        return [], Err(ErrorCode.INTERNAL, f"SetUserStatus {current}→{new_status}:非自助可请求目标(PLAYING/OFFLINE 系统驱动;入座走 SitDown、买入走 BuyIn)")
     if not current.userself_can_change_to(new_status):
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{nick} {current}→{new_status} 非法")
     events: list[Event] = []

@@ -42,7 +42,7 @@
 - [x] reduce 投影改产 `app/wire` DTO,删 `core/messages.py`;`tests/core/*` 改 import(字段同名;三处位置构造改关键字)— 0017
 - [x] codegen:**自包含 Python 生成器** `scripts/gen_wire_ts.py`(无 node;`pydantic2ts` 不可用)→ `frontend/src/types/wire.gen.ts`(只读产物);漂移守门 `tests/wire/test_codegen_uptodate.py` 骑 `pytest` 门槛 + `--check` 供 pre-commit — 0017(见 0017 决策 3/4)
 - [ ] 前端消费 wire.gen.ts(**延后,随前端 WS client 集成**):0017 已生成 `wire.gen.ts` 解锁前端按真类型写 WS client;但 `frontend/src/types/poker.ts` 是 **UI mockup 聚合类型 + 本地 mock 牌局逻辑**(非协议类型),且本批无 `Player`/`StateSnapshot` wire 类型——此刻删它只会破坏 mockup 无替代。删 poker.ts + 改组件归「前端 WS client + StateSnapshot」单元(见 0017 决策 8)
-- [~] 协议指南 [wire-protocol-guide.md](../wire-protocol-guide.md):收发消息目录 + 一手牌时序 + 错误码用法 + 现有/待补(增量)+ 形状铁律(type 判别/snake_case/身份不进报文/acting_position=players 下标)— 0017 后补;**dev 连接握手段**(`ws://…/dev?nick=`)随 **D 阶段** 端点补齐
+- [~] 协议指南 [wire-protocol-guide.md](../wire-protocol-guide.md):收发消息目录 + 一手牌时序 + 错误码用法 + 现有/待补(增量)+ 形状铁律(type 判别/snake_case/身份不进报文/acting_position=players 下标)— 0017 后补;**dev 连接握手段**(`ws://…/dev/ws?nick=`)已随 D 阶段端点补齐(guide §9,0018 落地 / 0047 truth-up 修正状态+路径)
 
 ## D · 最小明文 dev shell + 端点(前端真连联调)— 无加密,临时脚手架
 
@@ -99,6 +99,6 @@
 ## 持续项(随时回看)
 
 - [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))
-- [ ] 文档与实现漂移时**改文档**并在 changes/ 记录
+- [ ] 文档与实现漂移时**改文档**并在 changes/ 记录(最近一次全量 truth-up:[0047](changes/0047-doc-code-truth-up.md) —— Dispatcher 抽取 + 去房主注释 + 陈旧占位语)
 - [ ] 新增可调参数 → 进 `gameconfig` + env + example(不留裸字面量)
 - [ ] 新增持久化实体 → 归「状态写 / 事件写」,不新开通道

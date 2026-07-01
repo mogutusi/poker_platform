@@ -10,7 +10,8 @@
 
 | 组件 | 数量 | 持有 | 职责 |
 |---|---|---|---|
-| **GameLoop** | 1 | `world` / `inbox` / `conns` / `persist` / `timer` | 唯一状态写者:取命令 → 工作副本 reduce → commit → `dispatch` 事件 |
+| **GameLoop** | 1 | `world` / `inbox` / `dispatcher` | 唯一状态写者:取命令 → 工作副本 reduce → commit → 交 `Dispatcher` 派发事件 / 回发错误 |
+| **Dispatcher** | 1 | `world`(只读) / `conns` / `persist` / `timer` / `inbox` / `history` | 事件 → 物理落点(GameLoop commit 后同步调):`Broadcast`/`Personal` 入 `outbound`、`Persist` 入写缓冲、`TurnChanged`/`ClearAction` 调 Timer、错误按 `origin` 回发(见「dispatch」)|
 | **ConnectionManager**(`conns`) | 1 | `nick → Connection`(全局) | nick ↔ 物理连接的登记/查找/顶替;房间成员由 `world` 给(见「广播成员」) |
 | **Receiver** | 每连接 1 | 一个 `Connection` | FastAPI 的 ws handler:握手鉴权 → 登记 → 收帧验解 → `Command` 投 `inbox` → 退出时清理 |
 | **Sender** | 每连接 1 | 同一 `Connection` | 从该连接 `outbound` 取 `ServerMessage` → 加密成帧 → `ws.send`;单连接严格保序、隔离慢客户端 |
@@ -65,6 +66,8 @@ class ConnectionManager:
 - **加解密封装在 `SecureChannel`,挂连接、不进 `world`**:Receiver 收帧时按入站规矩验+解(见 [auth.md](auth.md) 的「先验 seq → 验 MAC → 才解密」),Sender 发帧时加密;`outbound` 里一律是**明文 `ServerMessage`**,core/dispatch 全程不知有加密(守分层)。
 - **`Connection` 是 shell 状态,不是 `UserState`**:`enc_key`/`session_id`/`ws` 这些非确定外部状态绝不进 core(同 [timer.md](timer.md) 的「时间戳只活在 shell」)。
 
+> **dev 落地 delta(明文脚手架,P5 前)**:上面的 `SecureChannel` + `Connection.channel` 是**国密加密的目标形状**(P5 落地)。**当前 dev `Connection` 无 `channel` 字段**(明文:Sender 直接 `ws.send_text(model_dump_json)`、Receiver 收明文 JSON `parse`),改挂 **`chat_bucket` / `dm_bucket`(`TokenBucket`,每连接限速)**——房聊限速随 [0033](refactor/changes/0033-room-chat-text-guard.md)、私聊限速随 [0038](refactor/changes/0038-dm-send-deliver.md) 加。P5 落地时补 `channel` + 替换 Sender/Receiver 帧编解。
+
 ## 广播成员 = world 房间成员,按 nick 解析连接
 
 `Broadcast(room)` 发给谁,以 **`world.rooms[room].users_in_room`(逻辑成员)** 为准,再按 nick 到 ConnectionManager 取连接:
@@ -83,37 +86,42 @@ for nick in world.rooms[r].users_in_room:
 
 ## dispatch:事件 → 物理落点
 
-GameLoop 成功 commit 后,对每个 event **同步**派发(只 `put_nowait` / 调本地快设施,不 `await`,守不变量 3):
+事件派发抽成独立 **`Dispatcher`**(持 `world`(只读)/ `conns` / `persist` / `timer` / `inbox` / `history`);GameLoop 成功 commit 后对每个 event 调 `dispatcher.dispatch(ev)`——**同步**派发(只 `put_nowait` / 调本地快设施,不 `await`,守不变量 3),错误回发走 `dispatcher.send_error(cmd, err)`。GameLoop 本身只持 `world`/`inbox`/`dispatcher`:
 
 ```python
-def dispatch(self, ev: Event) -> None:
-    match ev:
-        case Broadcast(room=r, msg=m):
-            room = self.world.rooms.get(r)               # reduce 可能刚销毁该房(最后一人离开)
-            if room is None:
-                return                                   # 房已销毁 → 无人可广播,跳过(见下「销毁房」)
-            for nick in room.users_in_room:              # 逻辑成员 → 按 nick 取连接
-                if (c := self.conns.get(nick)) is not None:
+class Dispatcher:                                        # 持 world(只读)/conns/persist/timer/inbox/history
+    def dispatch(self, ev: Event) -> None:
+        match ev:
+            case Broadcast(room=r, msg=m):
+                room = self.world.rooms.get(r)           # reduce 可能刚销毁该房(最后一人离开)
+                if room is None:
+                    return                               # 房已销毁 → 无人可广播,跳过(见下「销毁房」)
+                for nick in room.users_in_room:          # 逻辑成员 → 按 nick 取连接
+                    if (c := self.conns.get(nick)) is not None:
+                        self._enqueue(c, m)
+                if isinstance(m, ChatMessage):           # 房聊广播 → 入环形缓冲,供进/重进房 FetchRoomChat 拉(见 messaging.md)
+                    self.history.append(r, m)
+            case Personal(nick=n, msg=m):                # 底牌 / StateSnapshot / 离开者回执,按 nick 私发
+                if (c := self.conns.get(n)) is not None:
                     self._enqueue(c, m)
-        case Personal(nick=n, msg=m):               # 底牌 / StateSnapshot,按 nick 私发
-            if (c := self.conns.get(n)) is not None:
-                self._enqueue(c, m)
-        case Persist(payload=p):
-            self.persist.put(p)                      # 写缓冲单入口,内部 _state_key 分流,见 db.md
-        case TurnChanged(room=r, acting_nick=n, epoch=e):   # 字段序同 events.py 的 TurnChanged 数据类
-            self.timer.on_turn_changed(r, n, e)   # B 组:同步调 Timer;倒计时长由 Timer 读 gameconfig.ACTION_TIMEOUT,不随事件带
-        case ClearAction(room=r):
-            self.timer.clear_action(r)
+            case Persist(payload=p):
+                if isinstance(p, HandRecordWrite) and p.end_time is None:
+                    p = replace(p, end_time=self._now())  # 手牌记录 end_time 由 shell 派发时盖墙钟(core 不读钟,见 db.md)
+                self.persist.put(p)                      # 写缓冲单入口,内部 _state_key 分流,见 db.md
+            case TurnChanged(room=r, acting_nick=n, epoch=e):   # 字段序同 events.py 的 TurnChanged 数据类
+                self.timer.on_turn_changed(r, n, e)      # B 组:同步调 Timer;倒计时长由 Timer 读 gameconfig.ACTION_TIMEOUT,不随事件带
+            case ClearAction(room=r):
+                self.timer.clear_action(r)
 
-def _enqueue(self, conn: Connection, msg) -> None:
-    try:
-        conn.outbound.put_nowait(msg)
-    except asyncio.QueueFull:                        # ≤20 人正常不会满;满 = 该连接 Sender 卡死
-        log.warning("slow client dropped nick=%s", conn.nick)
-        self._drop_connection(conn)                  # 丢连接 + 投 Disconnect;客户端重连靠 StateSnapshot 补回
+    def _enqueue(self, conn: Connection, msg) -> None:
+        try:
+            conn.outbound.put_nowait(msg)
+        except asyncio.QueueFull:                        # ≤20 人正常不会满;满 = 该连接 Sender 卡死
+            log.warning("slow client dropped nick=%s", conn.nick)
+            self._drop_connection(conn)                  # unregister + 投 Disconnect(inbox 满则丢 + CRITICAL);重连靠 StateSnapshot 补回
 ```
 
-`Personal` 只带 `nick`(不带 room),因为连接按 nick 全局唯一。错误回发同理:`send_error` 用 `conns.get(cmd.origin)` 找发起连接(见 [error.md](error.md))。**私聊**也走 `conns.get(对方 nick)`——同一张表,这就是模型 2 把私聊变 O(1) 的地方(见 [lobby.md](lobby.md) 引的 messaging)。
+`Personal` 只带 `nick`(不带 room),因为连接按 nick 全局唯一。错误回发同理:`send_error(cmd, err)` 用 `conns.get(cmd.origin)` 找发起连接(见 [error.md](error.md));`origin=None` 的系统命令无连接可回发,只落 `log.warning`。**私聊**也走 `conns.get(对方 nick)`——同一张表,这就是模型 2 把私聊变 O(1) 的地方(见 [messaging.md](messaging.md))。
 
 > **销毁房 / 离开者的确认**:`Broadcast` 的收件人是 dispatch 时**当前 `world` 房成员**,而 `LeaveRoom`/`Cleanup` 在同一条 reduce 里已把离开者移出 `users_in_room`(房空还会销毁该房)。所以「离开者本人要不要收到回执」**不能靠 `Broadcast`**——它已经不在成员名单里(房还可能没了)。要给离开者确认,reduce 产 `Personal(nick=离开者, UserLeft)`;留在房里的人才靠 `Broadcast(room, UserLeft)`。房已销毁时 `Broadcast` 自动跳过(上面的 `rooms.get` 容错),不报错。
 
@@ -170,7 +178,7 @@ def _enqueue(self, conn: Connection, msg) -> None:
 4. 建 `World`,按配置 `ROOMS` 预置 `world.rooms`(静态房间,见 [lobby.md](lobby.md))。
 5. 建写缓冲 + 起 `PersistWriter`。
 6. 建 `Timer` + 起 `timer.run()`。
-7. 建 `ConnectionManager`、`GameLoop(world, inbox, conns, persist, timer)` + 起 `gameloop.run()`。
+7. 建 `ConnectionManager`、`Dispatcher(world, conns, persist, timer, inbox, history)`、`GameLoop(world, inbox, dispatcher)` + 起 `gameloop.run()`。
 8. 挂载 ws 端点(Receiver),**此刻起接受连接**。
 
 **关闭(必须 drain,见 [db.md](db.md))**
@@ -196,6 +204,6 @@ def _enqueue(self, conn: Connection, msg) -> None:
 ## 待定 / 未设计
 
 - **大厅 / 房间管理(lobby)**:见 [lobby.md](lobby.md)(已设计:连接模型 2、`JoinRoom`/`LeaveRoom`、房间列表 REST、静态预置房;动态建房仍待定)。
-- **私聊 / 房聊(messaging)**:见 [messaging.md](messaging.md)(房聊走 reduce、私聊走 shell 路由 `conns.get(nick)`;离线投递/限速/持久化在其中)。
-- **wire 协议清单**:`ClientMessage`/`ServerMessage` 全集 + `StateSnapshot` 字段,治理见 [wire.md](wire.md),清单在 .py(**未写**)。本文只约定路由,不定报文字段。
+- **私聊 / 房聊(messaging)**:**已落地**(房聊 reduce + shell 文本防护/限速/环形缓冲 0021/0033/0036;私聊 shell 路由 发/读游标/登录补收/保留清理 0038-0041)——设计见 [messaging.md](messaging.md);本文只约定路由(`conns.get(nick)`),shell 侧的 DM 路由 / 房聊环形缓冲写读 / 登录补收尚缺本文正式章节(待补)。
+- **wire 协议清单**:`ClientMessage`/`ServerMessage` 全集 + `StateSnapshot` 字段**已写**(`app/wire/client.py`/`server.py` + codegen `wire.gen.ts`),治理见 [wire.md](wire.md)。本文只约定路由,不定报文字段。
 - **背压上限取值**:`inbox` / `outbound` 队列大小、慢客户端判定阈值进 [config.md](config.md),具体值实测定。

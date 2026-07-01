@@ -40,12 +40,12 @@ class SetUserStatus(ClientMessage):
 
 class SetSmallBlind(ClientMessage):
     type: Literal["set_small_blind"] = "set_small_blind"
-    amount: int  # 新小盲额(0 号位占座者配置;大盲 = 2× 派生;上下限由 shell 按 gameconfig 防护)
+    amount: int  # 新小盲额(任何在房成员配置,无房主;大盲 = 2× 派生;上下限由 shell 按 gameconfig 防护)
 
 
 class SetBuyIn(ClientMessage):
     type: Literal["set_buy_in"] = "set_buy_in"
-    amount: int  # 新房间默认买入额(0 号位占座者配置;上下限由 shell 按 gameconfig 防护)
+    amount: int  # 新房间默认买入额(任何在房成员配置,无房主;上下限由 shell 按 gameconfig 防护)
 
 
 class LeaveRoom(ClientMessage):
