@@ -14,13 +14,13 @@
 3. **鉴权走 JWT**:REST 端点用现有 JWT Bearer(`sub=name`),与 ws 的 `K_user`/`session_token` 两套各管各(见 [auth.md](auth.md) 的「token 层级」)。本规模 JWT 仍明文裸奔的问题见 [auth.md](auth.md) 待办。
 4. **wire/DTO 同源**:REST 响应模型也是 Pydantic,经 OpenAPI → TS 生成,前端不手写(见 [wire.md](wire.md))。
 
-## 排行榜 leaderboard
+## 排行榜 leaderboard —— 已落地(0050)
 
 ```
-GET /leaderboard?limit=N  →  [{ rank, nickname, points }]
+GET /leaderboard?limit=N  →  [{ rank, nickname, points }]   # app/rest/leaderboard.py + db/queries.top_users_by_points
 ```
 
-- 读 DB `users` 按 `points` 降序取前 N。
+- 读 DB `users` 按 `points` 降序取前 N(同分按 `nickname` 升序 → `rank` 稳定);`limit` 由 `gameconfig.LEADERBOARD_DEFAULT_LIMIT`/`MAX_LIMIT` 兜(默认/上限)。`LeaderboardEntry` 是 REST DTO(不进 ws 联合 / `wire.gen.ts`,同 `RoomMeta`)。请求级 session(查询内 `async with sessionmaker()`)、读路径无行锁。**dev 无鉴权**(排名公开;P5 上 JWT 时按下「共同原则 3」补,可留公开)。
 - **坑 · 排的是"结算后的全局积分",不是身家**:玩家买进牌桌的筹码在 `Seat.points`(内存、不落库),**不在 DB**。所以一个把积分全买进牌桌的人,排行榜上只显示他**桌下剩余的全局积分**。这是因为「room 状态不落库」(见 [storage.md](storage.md))。
   - **决策(可改)**:排行榜定义为**银行余额(settled points)**——离桌(`LeaveRoom`)结算把筹码还回全局后才完整体现。这个定义清晰、且只读 DB 就够;若要"含桌上筹码的总身家",得读 `world`(跨切),列为 future。
 - DB 滞后:刚买入/离桌的变更可能还没 flush,排行榜短暂偏旧——可接受。

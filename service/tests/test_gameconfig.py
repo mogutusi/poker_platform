@@ -36,6 +36,8 @@ def _valid_kwargs() -> dict:
         MAX_SMALL_BLIND=100000,
         MIN_BUY_IN=1,
         MAX_BUY_IN=100000000,
+        LEADERBOARD_DEFAULT_LIMIT=20,
+        LEADERBOARD_MAX_LIMIT=100,
         DEV_ROOM="dev",
         DEV_SMALL_BLIND=1,
         DEV_BUY_IN=100,

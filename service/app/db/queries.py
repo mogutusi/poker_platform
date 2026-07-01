@@ -26,6 +26,20 @@ async def load_user_by_nick(
         return None if user is None else (user.id, user.points)
 
 
+async def top_users_by_points(
+    sessionmaker: async_sessionmaker[AsyncSession], limit: int
+) -> list[tuple[str, int]]:
+    # 排行榜(rest.md §排行榜):按 DB 结算积分降序取前 limit,返回 (nickname, points)。
+    # points 是**结算后全局积分**(桌上筹码 Seat.points 内存不落库,storage.md)。同分按 nickname 升序 → rank 稳定可复现。
+    async with sessionmaker() as session:
+        stmt = (
+            select(User.nickname, User.points)
+            .order_by(User.points.desc(), User.nickname.asc())
+            .limit(limit)
+        )
+        return [(nick, pts) for nick, pts in (await session.execute(stmt)).all()]
+
+
 async def load_uids_by_nicks(
     sessionmaker: async_sessionmaker[AsyncSession], nicks: Iterable[str]
 ) -> dict[str, int]:
