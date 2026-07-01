@@ -22,8 +22,10 @@
 ```
 报文 = selector ‖ iv(16B) ‖ ct ‖ mac(32B)          # 明文头只有 selector + iv
   ct  = sm4_cbc_enc(enc_key, iv, seq(8B,BE) ‖ 明文JSON)   # seq 藏在密文里(保密 + 被 MAC 罩住)
-  mac = hmac_sm3(mac_key, selector ‖ iv ‖ ct)             # encrypt-then-MAC
+  mac = hmac_sm3(mac_key, iv ‖ ct)                        # encrypt-then-MAC(0058 细化:mac 不盖 selector,见下)
 ```
+
+> **细化(0058 落地)**:`mac` 只盖 `iv‖ct`、**不含 selector**——错 selector → 查到错会话/错密钥 → MAC 必败,故 selector 完整性隐式受保;好处是 `SecureChannel` 原语**传输无关**(不认识 selector 字符串,ws/REST 各自剥 selector 后调 `open`)。安全等价。
 
 - **selector = `session_id`**(登录响应里已下发的公开不透明句柄;用它而非用户 id,嗅探者看不出「谁在线/谁在说话」)。服务器 `session_id → 会话(enc_key/mac_key/user)`。
 - `enc_key`/`mac_key` 由**会话密钥直接派生**(`KDF_sm3(session_token,…)`),**不再逐连接派生**(去掉旧设计的 per-connection `server_nonce` 握手)——因为要支持无连接上下文的 REST「查表即解」。

@@ -1,7 +1,7 @@
-# 逐帧安全信道原语穷举(P5,见 docs/auth.md §WS 安全信道 / changes/0054)。
-# 覆盖:hmac 性质 / 派生密钥(长度·确定·跨 nonce/token 异·域分隔)/ 封拆 round-trip /
-# seq 单调 / IV 每帧新鲜 / MAC 拒伪 / seq 拒重放(重投·gap 后旧帧)/ 先验后解(改 ct → bad_mac 而非
-# decrypt_failed,证 MAC 先于解密)/ 失败不推进序号 / 跨连接重放 / 帧过短·过长·ct 非 16 整除 / config 接线。
+# 逐会话安全信道原语穷举(P5,见 docs/auth.md §加密信道 / changes/0057 设计 / 0058 落地)。
+# 信封 iv‖ct‖mac(seq 藏 ct 内);入站铁序「结构→MAC→解密→seq」。覆盖:hmac 性质 / 派生密钥(会话密钥,无 nonce)/
+# 封拆 round-trip / seq 单调(经 open 观察)/ IV 每帧新鲜 / MAC 拒伪 / 先验后解(改 ct→bad_mac 非 decrypt/seq)/
+# seq 拒重放(重投·gap 后旧帧)/ 失败不推进序号 / 跨会话(异 token→bad_mac)/ 结构(过短·过长·ct 非 16 整除)/ config 接线 / fuzz。
 
 import secrets
 
@@ -11,7 +11,6 @@ from app import gameconfig
 from app.auth.channel import (
     _FRAME_MIN_BYTES,
     _IV_BYTES,
-    _SEQ_BYTES,
     _SM4_BLOCK_BYTES,
     FrameError,
     SecureChannel,
@@ -19,21 +18,16 @@ from app.auth.channel import (
     hmac_sm3,
 )
 
-_MAX = 65536  # 测试用单帧上限(够放常规帧)
+_MAX = 65536  # 测试用单帧上限
 
 
 def _pair(max_frame: int = _MAX) -> tuple[SecureChannel, SecureChannel]:
-    # 同 (token, nonce) 派生两端信道 → 密钥一致(client 封 / server 拆同一方向)。
+    # 同 session_token 派生两端信道 → 密钥一致(一端 seal / 一端 open,模拟一方向)。
     token = secrets.token_bytes(32)
-    nonce = secrets.token_bytes(16)
-    return (
-        SecureChannel.derive(token, nonce, max_frame),
-        SecureChannel.derive(token, nonce, max_frame),
-    )
+    return SecureChannel.derive(token, max_frame), SecureChannel.derive(token, max_frame)
 
 
 def _flip(frame: bytes, index: int) -> bytes:
-    # 翻转指定字节的所有位(篡改)。
     buf = bytearray(frame)
     buf[index] ^= 0xFF
     return bytes(buf)
@@ -52,75 +46,69 @@ def test_hmac_sm3_properties():
 
 
 def test_hmac_sm3_long_key_shrinks():
-    # key > 块长(64B)先 SM3 收缩再用;不崩、仍出 32B。
-    assert len(hmac_sm3(b"z" * 200, b"m")) == 32
+    assert len(hmac_sm3(b"z" * 200, b"m")) == 32  # key>64B 先 SM3 收缩,不崩
 
 
-# ── derive_keys ──
+# ── derive_keys(会话密钥,无 nonce)──
 
 
 def test_derive_keys_shapes_and_domain_separation():
-    token, nonce = secrets.token_bytes(32), secrets.token_bytes(16)
-    enc, mac = derive_keys(token, nonce)
+    token = secrets.token_bytes(32)
+    enc, mac = derive_keys(token)
     assert len(enc) == 16 and len(mac) == 32
-    assert enc != mac[:16]  # 域分隔(info 0x01 vs 0x02)→ 两钥不同源
-    assert derive_keys(token, nonce) == (enc, mac)  # 确定
+    assert enc != mac[:16]  # 域分隔(info 0x01 vs 0x02)
+    assert derive_keys(token) == (enc, mac)  # 确定
 
 
-def test_derive_keys_vary_by_nonce_and_token():
-    token, nonce = secrets.token_bytes(32), secrets.token_bytes(16)
-    enc, mac = derive_keys(token, nonce)
-    enc_n, mac_n = derive_keys(token, secrets.token_bytes(16))  # 换 nonce
-    enc_t, mac_t = derive_keys(secrets.token_bytes(32), nonce)  # 换 token
-    assert enc_n != enc and mac_n != mac  # 跨连接(nonce)密钥不同 → 跨重连重放根除的根
-    assert enc_t != enc and mac_t != mac  # 跨用户(token)密钥不同
+def test_derive_keys_vary_by_token():
+    enc, mac = derive_keys(secrets.token_bytes(32))
+    enc2, mac2 = derive_keys(secrets.token_bytes(32))
+    assert enc != enc2 and mac != mac2  # 跨会话(token)密钥不同 → 跨会话重放根除的根
 
 
 # ── seal / open ──
 
 
-@pytest.mark.parametrize(
-    "plaintext",
-    [b"", b"x", b'{"type":"ping"}', b"A" * 16, b"A" * 17, b"B" * 100],
-)
+@pytest.mark.parametrize("plaintext", [b"", b"x", b'{"type":"ping"}', b"A" * 16, b"A" * 17, b"B" * 100])
 def test_seal_open_round_trip(plaintext):
     sender, receiver = _pair()
     assert receiver.open(sender.seal(plaintext)) == plaintext
 
 
-def test_seq_increments_per_seal():
-    sender, _ = _pair()
-    seqs = [int.from_bytes(sender.seal(b"m")[:_SEQ_BYTES], "big") for _ in range(3)]
-    assert seqs == [1, 2, 3]  # 每连接从 1 起、严格递增
+def test_seq_strictly_increases_observed_via_open():
+    # seq 藏密文内、外部读不到;经 receiver.open 观察其严格递增(乱序旧包被拒)。
+    sender, receiver = _pair()
+    f1, f2, f3 = sender.seal(b"1"), sender.seal(b"2"), sender.seal(b"3")
+    assert receiver.open(f1) == b"1"
+    assert receiver.open(f2) == b"2"
+    assert receiver.open(f3) == b"3"
 
 
 def test_fresh_iv_per_frame():
     sender, receiver = _pair()
     f1, f2 = sender.seal(b"same"), sender.seal(b"same")
-    iv1 = f1[_SEQ_BYTES : _SEQ_BYTES + _IV_BYTES]
-    iv2 = f2[_SEQ_BYTES : _SEQ_BYTES + _IV_BYTES]
-    assert iv1 != iv2  # IV 每帧新鲜随机(非计数器)
-    assert f1 != f2  # 同明文两封整帧不同
+    assert f1[:_IV_BYTES] != f2[:_IV_BYTES]  # IV 每帧新鲜随机
+    assert f1 != f2
     assert receiver.open(f1) == b"same" and receiver.open(f2) == b"same"
 
 
-# ── 防篡改(MAC)──
+# ── 防篡改(MAC)+ 先验后解 ──
 
 
 def test_tampered_ct_rejected_before_decrypt():
-    # 改密文首字节 → 破坏 padding 与 MAC。先验后解:必在 MAC 步拒(bad_mac),绝不落到解密(decrypt_failed)。
+    # 改密文首字节 → 破坏 padding/seq 与 MAC。先验后解:必在 MAC 步拒(bad_mac),
+    # 绝不落到解密(decrypt_failed)或 seq(stale_seq)—— 证明 MAC 先于解密。
     sender, receiver = _pair()
-    frame = sender.seal(b"secret")
-    tampered = _flip(frame, _SEQ_BYTES + _IV_BYTES)  # 首个 ct 字节
+    tampered = _flip(sender.seal(b"secret"), _IV_BYTES)  # 首个 ct 字节
     with pytest.raises(FrameError) as ei:
         receiver.open(tampered)
-    assert ei.value.reason == "bad_mac"  # 证明 MAC 先于解密(否则会是 decrypt/padding 错)
+    assert ei.value.reason == "bad_mac"
 
 
 def test_tampered_iv_rejected():
     sender, receiver = _pair()
     with pytest.raises(FrameError) as ei:
-        receiver.open(_flip(sender.seal(b"m"), _SEQ_BYTES))  # iv 首字节(MAC 覆盖 iv)
+        receiver.open(_flip(sender.seal(b"m"), 0))  # iv 首字节(MAC 覆盖 iv)
     assert ei.value.reason == "bad_mac"
 
 
@@ -131,7 +119,7 @@ def test_tampered_mac_rejected():
     assert ei.value.reason == "bad_mac"
 
 
-# ── 防重放(seq)──
+# ── 防重放(seq,解密后验)──
 
 
 def test_replay_same_frame_rejected():
@@ -139,7 +127,7 @@ def test_replay_same_frame_rejected():
     frame = sender.seal(b"m")
     assert receiver.open(frame) == b"m"
     with pytest.raises(FrameError) as ei:
-        receiver.open(frame)  # 重投同帧
+        receiver.open(frame)  # 重投同帧 → 解密后 seq ≤ 已见
     assert ei.value.reason == "stale_seq"
 
 
@@ -154,7 +142,6 @@ def test_out_of_order_gap_then_old_rejected():
 
 
 def test_failed_open_does_not_advance_in_seq():
-    # 被拒的帧不推进入站序号:篡改帧被拒后,原始合法帧仍可开。
     sender, receiver = _pair()
     frame = sender.seal(b"m")
     with pytest.raises(FrameError):
@@ -162,13 +149,12 @@ def test_failed_open_does_not_advance_in_seq():
     assert receiver.open(frame) == b"m"  # 原帧仍可开(seq 未被吃掉)
 
 
-def test_cross_connection_replay_rejected():
-    # 不同 server_nonce ⇒ 逐连接密钥不同 ⇒ 一条连接的帧在另一条 MAC 必败(跨重连重放根除)。
-    token = secrets.token_bytes(32)
-    conn_a = SecureChannel.derive(token, secrets.token_bytes(16), _MAX)
-    conn_b = SecureChannel.derive(token, secrets.token_bytes(16), _MAX)
+def test_cross_session_replay_rejected():
+    # 不同 session_token ⇒ 密钥不同 ⇒ 一会话的帧在另一会话 MAC 必败(跨会话重放根除)。
+    a = SecureChannel.derive(secrets.token_bytes(32), _MAX)
+    b = SecureChannel.derive(secrets.token_bytes(32), _MAX)
     with pytest.raises(FrameError) as ei:
-        conn_b.open(conn_a.seal(b"m"))
+        b.open(a.seal(b"m"))
     assert ei.value.reason == "bad_mac"
 
 
@@ -184,7 +170,7 @@ def test_frame_too_short_rejected():
 
 def test_frame_too_large_rejected():
     sender, receiver = _pair(max_frame=256)
-    big = sender.seal(b"A" * 400)  # 封出的帧 > 256
+    big = sender.seal(b"A" * 400)
     assert len(big) > 256
     with pytest.raises(FrameError) as ei:
         receiver.open(big)
@@ -193,21 +179,35 @@ def test_frame_too_large_rejected():
 
 def test_bad_ct_length_rejected():
     _, receiver = _pair()
-    # 头(seq+iv=24)+ ct 20B(非 16 整除)+ mac(32)= 76 ≥ min,ct_len=20 → bad_ct_length。
-    frame = b"\x00" * _SEQ_BYTES + b"\x00" * _IV_BYTES + b"\x00" * 20 + b"\x00" * 32
+    # iv(16) + ct 20B(非 16 整除) + mac(32) = 68 ≥ min,ct_len=20 → bad_ct_length。
+    frame = b"\x00" * _IV_BYTES + b"\x00" * 20 + b"\x00" * 32
     assert len(frame) >= _FRAME_MIN_BYTES and (20 % _SM4_BLOCK_BYTES) != 0
     with pytest.raises(FrameError) as ei:
         receiver.open(frame)
     assert ei.value.reason == "bad_ct_length"
 
 
-# ── config 接线 ──
+# ── config 接线 + fuzz ──
 
 
 def test_wired_to_gameconfig_max_bytes():
-    token, nonce = secrets.token_bytes(32), secrets.token_bytes(16)
+    token = secrets.token_bytes(32)
     max_bytes = gameconfig.WS_FRAME_MAX_BYTES
     assert isinstance(max_bytes, int) and max_bytes >= 256
-    sender = SecureChannel.derive(token, nonce, max_bytes)
-    receiver = SecureChannel.derive(token, nonce, max_bytes)
+    sender = SecureChannel.derive(token, max_bytes)
+    receiver = SecureChannel.derive(token, max_bytes)
     assert receiver.open(sender.seal(b'{"ok":true}')) == b'{"ok":true}'
+
+
+def test_fuzz_open_never_crashes():
+    # 随机字节 + 真帧逐位变异喂 open,一律 FrameError、0 崩溃、0 误开。
+    token = secrets.token_bytes(32)
+    ch = SecureChannel.derive(token, _MAX)
+    for i in range(2000):
+        blob = secrets.token_bytes(i % 200)
+        with pytest.raises(FrameError):
+            ch.open(blob)
+    real = SecureChannel.derive(token, _MAX).seal(b'{"type":"ping"}')  # 真帧,逐位变异
+    for pos in range(len(real)):
+        with pytest.raises(FrameError):
+            SecureChannel.derive(token, _MAX).open(_flip(real, pos))

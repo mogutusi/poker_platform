@@ -140,14 +140,14 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
 报文 = selector ‖ iv(16B) ‖ ct ‖ mac(32B)
   selector = session_id                                   # 公开句柄;服务器据此查会话取 enc/mac 密钥 + 身份
   ct  = sm4_cbc_enc(enc_key, iv, seq(8B,BE) ‖ plaintext_json)   # seq 藏密文内(保密 + 被 MAC 罩住)
-  mac = hmac_sm3(mac_key, selector ‖ iv ‖ ct)             # encrypt-then-MAC
+  mac = hmac_sm3(mac_key, iv ‖ ct)                        # encrypt-then-MAC(mac 不盖 selector:错 selector→错密钥→MAC 必败,完整性隐式受保;故原语传输无关)
 ```
 
 **入站铁序(必须照此)**:读 `selector` → 查会话取 `enc_key`/`mac_key`/`user`(查不到/过期 → 拒)→ **① 验 MAC**(`compare_digest` 常量时间)→ **② 才 `sm4_cbc_dec` 解密** → 取出 `seq ‖ plaintext_json` → **③ 验 `seq > 本会话已见`**(防重放,过则推进)→ `plaintext`=wire `ClientMessage`、身份=会话 `user` → 交业务(`to_command(origin=nick)` → inbox / REST handler)。任一步失败:丢弃 +(ws)关连接 /(REST)拒。**绝不先解密后验**——库去填充是裸的,解未验数据有 padding-oracle 风险,故 **MAC 必在解密前**。
 
 > **seq 放密文内、解密后验**:内网无 DDoS 顾虑,不必解密前廉价拒重放;seq 进密文更保密、被 MAC 罩住改不了。重放的真包 MAC 能过但 `seq ≤ 已见` → 第 ③ 步拒。**seq 按会话计**(非按连接):跨重连旧包 seq 不新即被挡;进程重启会话表清空 → 会话失效 → 重登换钥,seq 从头也安全。REST 并发的 seq 处理(滑动窗 vs 只读接受重放)见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md)。
 
-**`hmac_sm3` 是带密钥的 MAC(两输入)**:`hmac_sm3(mac_key, msg)` —— key 证明持钥(=认证)、msg 防篡改;裸 `sm3(msg)` 无 key 谁都能算,故用 HMAC(标准 ipad/opad 构造,兼避裸 SM3 长度扩展)。**逐帧加解密原语**(`hmac_sm3`/`derive_keys`/`SecureChannel` 封拆)已随 [0054](refactor/changes/0054-p5-secure-frame-channel.md) 落地,正按上面信封/顺序**调整中**(0054 原为逐连接 `server_nonce` + seq 在明文头 + `seq→MAC→decrypt`,改为会话密钥 + seq 入 ct + `MAC→decrypt→seq`;见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
+**`hmac_sm3` 是带密钥的 MAC(两输入)**:`hmac_sm3(mac_key, msg)` —— key 证明持钥(=认证)、msg 防篡改;裸 `sm3(msg)` 无 key 谁都能算,故用 HMAC(标准 ipad/opad 构造,兼避裸 SM3 长度扩展)。**逐帧加解密原语**(`hmac_sm3`/`derive_keys(session_token)`/`SecureChannel`(`derive(token,max)`/`seal`/`open`))已随 [0054](refactor/changes/0054-p5-secure-frame-channel.md) 起、**并随 [0058](refactor/changes/0058-p5-session-channel-rework.md) 改造到本信封/顺序**(逐会话密钥[去 `server_nonce`] + seq 入 ct + `MAC→decrypt→seq` + mac 盖 `iv‖ct`)。selector 剥离/查会话/Receiver·Sender·REST 接线走后续砖。
 
 **身份 = 被认证的会话,不是自报的 `selector`。** selector 只是查密钥的公开句柄;真认证是「用该会话密钥解出且 MAC 验过」。报文里若还带自报 id,只能放**密文内**、由服务器校验等于会话身份(纵深防御),绝不信明文。
 
