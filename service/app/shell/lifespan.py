@@ -18,6 +18,7 @@ from app.core.domain import Room, World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
+from app.rest.lobby import make_lobby_router
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
@@ -159,6 +160,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, title="poker dev shell (plaintext, dev-only)")
     app.state.shell = shell
+    # REST 大厅房间列表(唯一读 committed world 的 REST,见 app/rest/lobby.py);world 迟绑(setup() 后才建)。
+    app.include_router(make_lobby_router(lambda: shell.world))
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]

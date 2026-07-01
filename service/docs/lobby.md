@@ -57,16 +57,18 @@ lifespan 启动时按配置 `ROOMS` 预置 `world.rooms`(每个含 `name` / `sma
 
 模型 2 下用户同时只在一个房间,所以 `PlayerAction` / `SitDown` / `BuyIn` / 房聊 等命令**不带 `room`**——reduce 用 `world.users[nick].room` 定位目标房,工作副本 `checkout` 也据此解析(只有 `JoinRoom` 例外:目标房在命令里)。**身份和房间都不进报文**(见 [wire.md](wire.md)),报文只剩动作参数。
 
-## 房间列表(REST 读)
+## 房间列表(REST 读)—— 已落地(0048)
 
 ```
-GET /lobby/rooms → [RoomMeta]
+GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lobby_router
 ```
 
-- **`RoomMeta`** = 静态配置(`id`/`name`/`small_blind`/`buy_in`/`max_seats`) + 实时(在座数/观战数/状态)。
-- 实时头数来自 `world.rooms[r].users_in_room` 的统计(**committed 只读、展示用、可滞后**;不做实时判定)。
+- **`RoomMeta`**(Pydantic,`app/rest/lobby.py`)= 静态配置(`id`/`small_blind`/`big_blind`/`buy_in`/`max_seats`)+ 实时(`seated`/`watching`/`status`)。**v1 无独立 `name` 字段**——`id` = `world.rooms` 的键,即人读名(动态建房引入命名后再拆);`big_blind` = 2×小盲派生(同 `RoomConfigChanged`)。
+- `seated` = 占用座位数(`len([s for s in room.seats if s])`,**含 OFFLINE 保座**);`watching` = `users_in_room` 中 `WATCHING` 状态数(在座与在线正交)。
+- 实时头数/状态来自 `world.rooms[r]` 的统计(**committed 只读、展示用、可滞后一拍**;不做实时判定)。**这是唯一读 `world` 的 REST 端点**——房态内存权威、从不落库(见 [storage.md](storage.md) / [rest.md](rest.md) §共同原则);投影 `list_rooms` 纯同步无 `await`,对唯一写者 GameLoop 原子读、不撕裂(同 [presence.md](presence.md) 只读范式)。
 - **v1 客户端轮询**(≤20 人,几秒一次足够);实时推送(`LobbyBroadcast`)是 future,见「待定」。
-- `RoomMeta` 是 **wire DTO ≠ `Room`**:完整游戏状态(`deck`/`hand`/各人筹码)绝不上 lobby(见 [wire.md](wire.md))。
+- `RoomMeta` 是 **REST DTO ≠ `Room`**:完整游戏状态(`deck`/`hand`/各人筹码)绝不上 lobby(见 [wire.md](wire.md));它**不进 ws `ServerMessage` 联合**(非 ws 消息),故不进 `wire.gen.ts`——前端 REST 类型走 openapi(P7 无 node 待解,见 [changes/0048](refactor/changes/0048-rest-lobby-rooms.md))。
+- **dev 明文无鉴权**(与 dev ws 端点一致);lobby-rooms 只暴露房配 + 头数(无隐私)。P5 上 JWT 时按 [rest.md](rest.md)「REST 走 JWT」补。
 
 ## 改昵称(你的决策:只能不在房间时)
 

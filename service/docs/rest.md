@@ -8,7 +8,8 @@
 
 ## 共同原则(三个模块都守)
 
-1. **读 DB,不读 `world`**:REST 读的是 delayDB 落库后的值,**比内存滞后**——这对排行榜/历史/资料的展示完全够用;**实时判定一律以内存为准**(下注、余额够不够在 reduce 里判,不在 REST)。
+1. **读 DB,不读 `world`(本篇三模块)**:排行榜/历史/资料读的是 delayDB 落库后的值,**比内存滞后**——展示完全够用;**实时判定一律以内存为准**(下注、余额够不够在 reduce 里判,不在 REST)。
+   - **唯一例外 · `GET /lobby/rooms`**(见 [lobby.md](lobby.md),0048 落地):它读 **committed `world.rooms`**,不读 DB——因为**房间花名册/头数是内存权威、从不落库**(storage.md:房态不持久,DB 里根本没有),与这三个「读结算后落库数据」的模块正交。它仍守「只读、可滞后、不做实时裁定」;读法是纯同步无 `await` 的投影,对唯一写者 GameLoop 原子、不撕裂(同 [presence.md](presence.md))。
 2. **请求级 `DBsession`**:每请求一个 session,与 PersistWriter 的写 session 互不复用(见 [db.md](db.md));读路径无行锁。
 3. **鉴权走 JWT**:REST 端点用现有 JWT Bearer(`sub=name`),与 ws 的 `K_user`/`session_token` 两套各管各(见 [auth.md](auth.md) 的「token 层级」)。本规模 JWT 仍明文裸奔的问题见 [auth.md](auth.md) 待办。
 4. **wire/DTO 同源**:REST 响应模型也是 Pydantic,经 OpenAPI → TS 生成,前端不手写(见 [wire.md](wire.md))。
