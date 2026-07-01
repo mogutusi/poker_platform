@@ -7,7 +7,7 @@
 1. **ws 端点零鉴权**:原型 `pokertable/routes.py`(已于 0027 拆除)的 `/pokertable/room?user_nickname=Y` 把昵称当**明文 query 参数**直收——任何人可冒充任何人。本篇国密信道即为根治此洞。
 2. **全程明文**:没有 wss,登录的账号密码、游戏消息在网络上裸奔,可被嗅探。
 
-对策:**应用层用国密三件套自建一条安全信道**(SM2 不用;用手输的共享密钥引导)——登录用对称加密把账号密码护住、换回会话 token;之后每条 ws 消息用 token 派生的密钥 **SM4 加密 + HMAC-SM3 完整性 + 单调序号防重放**。
+对策:**应用层用国密三件套自建一条安全信道**(SM2 不用;用手输的共享密钥引导)——登录用 `K_user` 对称加密把账号密码护住、换回**会话密钥**;**登录后每条消息(ws 与 REST 都算)按 `selector‖iv‖ct‖mac` 信封,用会话密钥 SM4 加密 + HMAC-SM3 完整 + 序号防重放,解密即认证**(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 
 > 用的库:[ttxsgm](../../lib/ttxsgm/ttxsgm/__init__.py) 的 `sm4_cbc_enc/dec`、`sm3_hash`/`sm3_hash_bytes`/`KDF_sm3`。
 
@@ -24,26 +24,24 @@
 | **`name`** | 登录账号(唯一,≤15),**不可变** | 登录、定位用户、选每用户密钥 |
 | **`nickname`** | 游戏昵称(唯一,≤50),**可改**(change_nickname) | `world.users` 的键、座位、所有牌局逻辑 |
 
-认证链:**手输密钥 + 账号密码 → 认证出 `name` → 查 DB 得 `nickname` → 握手后投 `Connect(nick)` 接入大厅**(连接绑 nick、不绑房间,模型 2)。进房与载入积分发生在之后的 `JoinRoom`(见 [lobby.md](lobby.md));JWT 的 `sub` 若保留用于 REST,放 `name`(不可变),不放 `nickname`。
+认证链:**手输密钥 + 账号密码 → 认证出 `name` → 查 DB 得 `nickname` → 握手后投 `Connect(nick)` 接入大厅**(连接绑 nick、不绑房间,模型 2)。进房与载入积分发生在之后的 `JoinRoom`(见 [lobby.md](lobby.md))。**登录定位/选密钥用不可变 `name`,不用可变 `nickname`。**
 
-## token 层级(两条平行通道)
+## 密钥层级(引导密钥 + 会话密钥)
 
-鉴权分**两条通道**,`/user/login` 一次性返回两者、前端各用各的(见「登录握手」与下文「与现有 JWT 的关系」):
+**不分 REST/WS 两套凭证——登录后一切流量走同一把会话密钥**(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md));**不用 JWT**(身份从解密得出)。
 
-| 通道 | 凭证 | 干嘛 |
+| 层 | 凭证 | 干嘛 |
 |---|---|---|
-| **REST**(查手牌/余额) | 现有 **JWT**(access + refresh) | Bearer 鉴权,`sub` 放不可变的 `name`。**本文不重新设计它**,沿用现状 |
-| **WS 游戏信道** | `K_user`(引导) → `session_token`(会话票据) | `K_user` 护住登录、送下 `session_token`;`session_token` 派生逐帧 enc/mac 密钥、握手证明身份 |
+| **引导** | `K_user`(每用户手输 SM4 密钥,每周轮换) | 只在登录时护住账号+密码、换回会话密钥;是引导密钥,不是会话凭证 |
+| **会话** | `session_token`(32B 秘密,带 `exp`)+ 公开 `session_id` | 登录下发;派生 enc/mac 密钥,**登录后 ws 与 REST 的每条消息都用它加密+认证** |
 
-- **`K_user`**:每用户一把手输 SM4 密钥,带外发放、可轮换;是**引导密钥**,不是会话票据。
-- **`session_token`**:登录生成的 32B 秘密,存内存会话表(带 `exp`)、配对公开的 `session_id`;**这是 ws 通道的会话凭证**(旧 ws 端点零鉴权,这里是新增的那层,不是替换 JWT)。
-
-> 本文只设计 **ws 游戏信道**;REST 的 JWT 沿用现状、不在本文范围(REST 仍裸奔的问题见「待办」)。
+- **`K_user`**:带外发放、手输、不进前端;可轮换(每周,见下)。
+- **`session_token`**:登录生成、存内存会话表(带 `exp`)、配对公开 `session_id`;`session_id` 即报文 `selector`(公开句柄,服务器据此查会话取密钥+身份)。**解密成功即认证,无需独立身份令牌。**
 
 **会话过期与密钥轮换**(仅指 ws 的 `session_token`):每次登录生成新 `session_token` → 派生出新的一对 enc/mac 密钥,**一次登录 = 一把密钥**。为缩小密钥泄露的影响面,密钥要**定期轮换**,且对用户**无感**:
 
 - **轮换 = 无感重连**:客户端在 `SESSION_TTL` 到期前,用本地缓存的 `K_user` **静默重跑登录握手**拿新 `session_token` → 派生新密钥 → 新连接**顶替**旧连接(见 [connection.md](connection.md)) → reduce 私发 `StateSnapshot` 对齐。整个过程用户察觉不到。
-- **服务器 exp 兜底**:`session_token.exp` 到点,服务器**拒绝该会话**(旧帧验不过 / 握手被拒);正常情况下客户端已提前轮换,不会撞到。
+- **服务器 exp 兜底**:`session_token.exp` 到点,服务器**拒绝该会话**(该会话密钥的报文一律验不过 / 拒服务);正常情况下客户端已提前轮换,不会撞到。
 - **真正掉线才需重登**:只要客户端进程还在、`K_user` 还在内存,轮换与重连都静默;若客户端彻底关闭(`K_user` 丢失)或主动登出,下次必须**用户重新手输 `K_user` 登录**。
 - **`K_user` 即长期 refresh 凭证**,WS 不另设 refresh token(双重 token 在此冗余)。
 - **不上中途 rekey / 完整前向保密**:靠"定期无感重连换钥"已够;在单条连接里搞棘轮换钥属过度工程,本规模不做。
@@ -119,54 +117,44 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 ```
 
 - `client_nonce` + 短 `exp` 防登录包重放。
-- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/密码错一律 None、绝不崩;`client_nonce` 透出供端点做重放防护)。**余**:`/user/login` 端点(铸会话 + SM4 加密响应 + JWT)+ client_nonce/exp 重放防护(端点砖)。
+- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/密码错一律 None、绝不崩;`client_nonce` 透出供端点做重放防护)。**余**:`/user/login` 端点(铸会话 + `K_user` 加密下发 `{session_id, session_token, exp}`,**无 JWT**)+ client_nonce/exp 重放防护(端点砖)。
 - 会话表是**内存 shell 状态**(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效→重新登录,可接受。**已落地** [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):`SessionStore`(`create(name,nickname,now)->(session_id, Session)` / `lookup(sid,now)`(过期删返 None)/ `revoke` / `prune(now)`)+ `Session{name,nickname,token,expires_at}`;`session_id=token_urlsafe`(公开句柄)、`token=token_bytes(32)`(秘密,派生逐帧密钥见 [channel.py](../app/auth/channel.py))。时钟外移(`now` 显式传,同 timer.md)、`exp=now+SESSION_TTL_SECONDS` 服务器兜底。**余**:`/user/login` 端点铸会话 + ws 握手 `?sid=` 查表(后续砖)。
-- **与现有 JWT 的关系**:REST 端点(查手牌/余额等)沿用现有 JWT access/refresh;ws 游戏信道用这里的 `session_id`/`session_token`。`/user/login` 一次返回两者(JWT 给 REST、session 给 ws),前端各用各的;JWT 的 `sub` 放 `name`,不放可变的 `nickname`。
+- **登录只返回会话凭证(无 JWT)**:响应(被 `K_user` 加密)含 `{session_id, session_token, exp}`。`session_id` 公开、当报文 `selector`;`session_token` 只留客户端本地、派生 enc/mac 密钥。之后 ws 与 REST 都用会话密钥加密(见 §加密信道 / [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 
-## WS 安全信道(长连接,逐帧加密)
+## 加密信道(登录后一切流量:ws 与 REST 同构)
 
-**握手 = 挑战 + 派生本连接专属密钥**:
+**登录后每条消息(ws 帧、REST 请求/响应)是同一个信封**,用会话密钥加密+认证;**无独立身份令牌,解密成功即认证**(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 
-```
-1. 客户端  ws connect /ws?sid=<session_id>     # 连接绑 nick 不绑房间(模型2);session_id 公开句柄,明文无妨。进房由 JoinRoom 命令(见 lobby.md)
-2. 服务器  查会话 → token;生成一次性 server_nonce(每连接新随机),明文下发(挑战)
-3. 双方各自派生本连接密钥(session_token 永不再上线):
-       enc_key = KDF_sm3(token + server_nonce + b"\x01", 16)   # SM4 128-bit
-       mac_key = KDF_sm3(token + server_nonce + b"\x02", 32)   # HMAC-SM3
-4. 客户端第一帧 MAC 验过 = 证明它持有 token(否则造不出 MAC)
-```
-
-**逐帧原语已落地** [`app/auth/channel.py`](../app/auth/channel.py)([changes/0054](refactor/changes/0054-p5-secure-frame-channel.md)),精确签名以代码为准:`hmac_sm3(key,msg)`、`derive_keys(token,nonce)->(enc_key,mac_key)`(即上面第 3 步)、`SecureChannel`(每连接持密钥 + 双向序号,`derive(token,nonce,max)` / `seal(plaintext)->frame` / `open(frame)->plaintext`)、`FrameError(reason)`。仅**接进 Receiver/Sender + 登录握手铸 token/nonce** 待后续砖。
-
-> **`server_nonce` 每连接新发是关键**:它让密钥**逐连接不同**,所以**上一条连接抓到的帧在新连接下 MAC 必失败——跨重连重放被根除**,序号每连接从头重置(实现 `_out_seq`/`_in_seq` 从 1 起、严格递增)也因此安全。少了它,同一 `session_id` 重连会复用同一套密钥,旧帧可被重放。
-
-**逐帧格式**(出入站对称,各自一个序号计数器):
+**密钥来自会话密钥**(登录下发的 `session_token`,永不再上线):
 
 ```
-frame = seq(8B, BE) ‖ iv(16B) ‖ ct ‖ mac(32B)
-  ct  = sm4_cbc_enc(enc_key, iv, plaintext_json)          # 明文是 wire 的 ClientMessage/ServerMessage
-  mac = hmac_sm3(mac_key, seq ‖ iv ‖ ct)                  # encrypt-then-MAC,MAC 盖住密文
+enc_key = KDF_sm3(session_token + b"\x01", 16)   # SM4 128-bit
+mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
 ```
 
-**入站校验顺序(必须照此)**:解析 `seq/iv/ct/mac` → **① 验 `seq > last_seen`**(防重放)→ **② 重算 MAC、`compare_digest` 常量时间比对**(防篡改)→ **③ 才 `sm4_cbc_dec`** 解密 → JSON → `Command`。任一步失败:丢弃该帧并关连接。**绝不先解密后验**——库的去填充是裸的(读末字节),解未验数据有 padding-oracle 风险。
+不再逐连接派 `server_nonce`——REST 无连接上下文,须「查会话即解」;跨重连重放改由**按会话计的 seq** 挡(见下)。
 
-> 落地的 `SecureChannel.open` 实为**四步**(在上面三步前置一层结构校验):**① 结构**(帧长 ≤ `WS_FRAME_MAX_BYTES`、≥ 最小帧、ct 段 16 整除)→ **② `seq > 已见`**(防重放)→ **③ 验 MAC**(常量时间)→ **④ 才解密**。任一步失败 `raise FrameError(reason)`(`frame_too_large`/`frame_too_short`/`bad_ct_length`/`stale_seq`/`bad_mac`/`decrypt_failed`),由 Receiver 捕获 → 丢帧 + 关连接(同 `ClientMessage.parse` 坏 JSON 的处理)。`reason` 只带分类、不带明文/密钥/密文。`decrypt_failed` 是防御归一(MAC 过 ⇒ ct 真实 ⇒ 正常不触发)。
+**信封格式**(出入站对称,各方向各自 seq):
 
-```python
-def hmac_sm3(key: bytes, msg: bytes) -> bytes:     # 标准 HMAC,底层 SM3(避开裸 sm3 的长度扩展)
-    if len(key) > 64: key = sm3_hash_bytes(key)
-    key = key.ljust(64, b"\x00")
-    ipad = bytes(b ^ 0x36 for b in key)
-    opad = bytes(b ^ 0x5c for b in key)
-    return sm3_hash_bytes(opad + sm3_hash_bytes(ipad + msg))
+```
+报文 = selector ‖ iv(16B) ‖ ct ‖ mac(32B)
+  selector = session_id                                   # 公开句柄;服务器据此查会话取 enc/mac 密钥 + 身份
+  ct  = sm4_cbc_enc(enc_key, iv, seq(8B,BE) ‖ plaintext_json)   # seq 藏密文内(保密 + 被 MAC 罩住)
+  mac = hmac_sm3(mac_key, selector ‖ iv ‖ ct)             # encrypt-then-MAC
 ```
 
-**身份 = 被认证的会话,不是自报的 id。** 连接在握手时已绑定到 `nickname`;消息里就算带 `id`,也只能放进**加密封套内**、由服务器**校验它等于会话的 nickname**(纵深防御),绝不信明文 id。
+**入站铁序(必须照此)**:读 `selector` → 查会话取 `enc_key`/`mac_key`/`user`(查不到/过期 → 拒)→ **① 验 MAC**(`compare_digest` 常量时间)→ **② 才 `sm4_cbc_dec` 解密** → 取出 `seq ‖ plaintext_json` → **③ 验 `seq > 本会话已见`**(防重放,过则推进)→ `plaintext`=wire `ClientMessage`、身份=会话 `user` → 交业务(`to_command(origin=nick)` → inbox / REST handler)。任一步失败:丢弃 +(ws)关连接 /(REST)拒。**绝不先解密后验**——库去填充是裸的,解未验数据有 padding-oracle 风险,故 **MAC 必在解密前**。
+
+> **seq 放密文内、解密后验**:内网无 DDoS 顾虑,不必解密前廉价拒重放;seq 进密文更保密、被 MAC 罩住改不了。重放的真包 MAC 能过但 `seq ≤ 已见` → 第 ③ 步拒。**seq 按会话计**(非按连接):跨重连旧包 seq 不新即被挡;进程重启会话表清空 → 会话失效 → 重登换钥,seq 从头也安全。REST 并发的 seq 处理(滑动窗 vs 只读接受重放)见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md)。
+
+**`hmac_sm3` 是带密钥的 MAC(两输入)**:`hmac_sm3(mac_key, msg)` —— key 证明持钥(=认证)、msg 防篡改;裸 `sm3(msg)` 无 key 谁都能算,故用 HMAC(标准 ipad/opad 构造,兼避裸 SM3 长度扩展)。**逐帧加解密原语**(`hmac_sm3`/`derive_keys`/`SecureChannel` 封拆)已随 [0054](refactor/changes/0054-p5-secure-frame-channel.md) 落地,正按上面信封/顺序**调整中**(0054 原为逐连接 `server_nonce` + seq 在明文头 + `seq→MAC→decrypt`,改为会话密钥 + seq 入 ct + `MAC→decrypt→seq`;见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
+
+**身份 = 被认证的会话,不是自报的 `selector`。** selector 只是查密钥的公开句柄;真认证是「用该会话密钥解出且 MAC 验过」。报文里若还带自报 id,只能放**密文内**、由服务器校验等于会话身份(纵深防御),绝不信明文。
 
 ## 与新架构的衔接(加解密是 shell 的事)
 
 - **加解密在 ws 边界,core 只见明文**:Receiver 收帧 → 验+解 → 明文 `ClientMessage` → `Command`;Sender 取 `Event` 的 `ServerMessage` → 序列化 → 加密成帧 → `ws.send`。**core / reduce 全程不知道有加密**,和它不知道 JSON 序列化一样(守分层、不变量 1)。
-- **会话密钥与序号是 per-connection 的 shell 状态**,挂在该连接的 Receiver/Sender 上(一个 `SecureChannel`),**绝不进 `world`**——和 [timer.md](timer.md) 的"时间戳只活在 shell"同理,墙钟/密钥/序号都是非确定外部状态,进 core 就破坏确定性。
+- **会话密钥与序号是 per-session 的 shell 状态**(挂在会话表项 / `SecureChannel` 上),**绝不进 `world`**——和 [timer.md](timer.md) 的"时间戳只活在 shell"同理,墙钟/密钥/序号都是非确定外部状态,进 core 就破坏确定性。
 - **握手 → Connect**:验完会话拿到 `nickname`,投 `Connect(nick)` 接入大厅(模型 2:连接绑 nick;进房/载入积分在 `JoinRoom`,见 [lobby.md](lobby.md))。鉴权失败:握手阶段就用 ws 关闭码拒掉,**绝不接入、绝不建 `Connection`**。
 - **鉴权字段不进 `UserState`**:`hash_password` / `K_user` / `session_token` 都是 DB/shell 的事,`world.users` 只放游戏权威字段(`points` 等),呼应 [user.md](user.md)。
 
@@ -194,7 +182,7 @@ class GameConfig(BaseSettings):
 ## 待办 / 可选升级
 
 - **每用户密钥的下发与轮换工具**(管理员侧):轮换机制已定(见「K_user 每周轮换」),具体的管理员 CLI(生成/导出/导入下发)随实现补。
-- **REST 端点同样裸奔**(查手牌、查余额的 Bearer JWT 也会被嗅):本规模可暂接受,或日后用同一条 `K_user` 信道包一层。本文聚焦 ws 游戏流量。
+- **REST 也走加密信封**(不再裸奔):查手牌/余额/排行的请求响应体套 §加密信道 的 `selector‖iv‖ct‖mac`,与 ws 同一把会话密钥(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 - **SM2 升级路径(可选)**:若想连"手输密钥"都省掉,可改用 SM2 做密钥交换(服务器持私钥、前端内置公钥)协商会话密钥;能去掉带外分发,但多一套握手。当前手输密钥方案已够本规模。
 - **wss 才是终局**:若日后能上反代(Caddy 自动证书几乎零配置),则本文的应用层加密**整套可拆除**,登录走 HTTPS、ws 用标准 JWT 即可。
 ```
