@@ -135,7 +135,9 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 4. 客户端第一帧 MAC 验过 = 证明它持有 token(否则造不出 MAC)
 ```
 
-> **`server_nonce` 每连接新发是关键**:它让密钥**逐连接不同**,所以**上一条连接抓到的帧在新连接下 MAC 必失败——跨重连重放被根除**,序号每连接从 0 重新计数也因此安全。少了它,同一 `session_id` 重连会复用同一套密钥,旧帧可被重放。
+**逐帧原语已落地** [`app/auth/channel.py`](../app/auth/channel.py)([changes/0054](refactor/changes/0054-p5-secure-frame-channel.md)),精确签名以代码为准:`hmac_sm3(key,msg)`、`derive_keys(token,nonce)->(enc_key,mac_key)`(即上面第 3 步)、`SecureChannel`(每连接持密钥 + 双向序号,`derive(token,nonce,max)` / `seal(plaintext)->frame` / `open(frame)->plaintext`)、`FrameError(reason)`。仅**接进 Receiver/Sender + 登录握手铸 token/nonce** 待后续砖。
+
+> **`server_nonce` 每连接新发是关键**:它让密钥**逐连接不同**,所以**上一条连接抓到的帧在新连接下 MAC 必失败——跨重连重放被根除**,序号每连接从头重置(实现 `_out_seq`/`_in_seq` 从 1 起、严格递增)也因此安全。少了它,同一 `session_id` 重连会复用同一套密钥,旧帧可被重放。
 
 **逐帧格式**(出入站对称,各自一个序号计数器):
 
@@ -146,6 +148,8 @@ frame = seq(8B, BE) ‖ iv(16B) ‖ ct ‖ mac(32B)
 ```
 
 **入站校验顺序(必须照此)**:解析 `seq/iv/ct/mac` → **① 验 `seq > last_seen`**(防重放)→ **② 重算 MAC、`compare_digest` 常量时间比对**(防篡改)→ **③ 才 `sm4_cbc_dec`** 解密 → JSON → `Command`。任一步失败:丢弃该帧并关连接。**绝不先解密后验**——库的去填充是裸的(读末字节),解未验数据有 padding-oracle 风险。
+
+> 落地的 `SecureChannel.open` 实为**四步**(在上面三步前置一层结构校验):**① 结构**(帧长 ≤ `WS_FRAME_MAX_BYTES`、≥ 最小帧、ct 段 16 整除)→ **② `seq > 已见`**(防重放)→ **③ 验 MAC**(常量时间)→ **④ 才解密**。任一步失败 `raise FrameError(reason)`(`frame_too_large`/`frame_too_short`/`bad_ct_length`/`stale_seq`/`bad_mac`/`decrypt_failed`),由 Receiver 捕获 → 丢帧 + 关连接(同 `ClientMessage.parse` 坏 JSON 的处理)。`reason` 只带分类、不带明文/密钥/密文。`decrypt_failed` 是防御归一(MAC 过 ⇒ ct 真实 ⇒ 正常不触发)。
 
 ```python
 def hmac_sm3(key: bytes, msg: bytes) -> bytes:     # 标准 HMAC,底层 SM3(避开裸 sm3 的长度扩展)
@@ -180,11 +184,11 @@ def hmac_sm3(key: bytes, msg: bytes) -> bytes:     # 标准 HMAC,底层 SM3(避�
 class GameConfig(BaseSettings):
     PWD_HASH_ROUNDS: int      = Field(ge=1, le=100000)   # 密码哈希迭代轮数(已落地 0053)
     SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期(随「登录握手」砖)
-    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧(随「逐帧加密」砖)
+    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧(已落地 0054)
     # K_user / 盐 等秘密存 DB,不进 env
 ```
 
-> 各字段**随其消费方砖落地**(不预铺无消费者的配置):`PWD_HASH_ROUNDS` 已随原语砖([0053](refactor/changes/0053-p5-password-hashing.md))进 `gameconfig` + `poker.env.example`;`SESSION_TTL_SECONDS`/`WS_FRAME_MAX_BYTES` 待各自砖。
+> 各字段**随其消费方砖落地**(不预铺无消费者的配置):`PWD_HASH_ROUNDS` 已随原语砖([0053](refactor/changes/0053-p5-password-hashing.md))、`WS_FRAME_MAX_BYTES` 随逐帧信道砖([0054](refactor/changes/0054-p5-secure-frame-channel.md))进 `gameconfig` + `poker.env.example`;`SESSION_TTL_SECONDS` 待「登录握手」砖。
 
 ## 待办 / 可选升级
 

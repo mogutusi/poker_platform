@@ -70,6 +70,7 @@ class GameConfig(BaseSettings):
 
     # ── 鉴权(auth.md;P5 国密安全信道)──
     PWD_HASH_ROUNDS: int = Field(ge=1, le=100000)  # 密码哈希 SM3 迭代轮数;注册/改密调 auth.passwords.hash_password 时传(拉伸抬高暴力成本)
+    WS_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576)  # 逐帧信道单帧字节上限;SecureChannel.open 拒超大帧(防解析放大)
 
     # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数
