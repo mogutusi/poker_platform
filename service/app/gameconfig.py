@@ -68,9 +68,11 @@ class GameConfig(BaseSettings):
     MIN_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的下限
     MAX_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的上限(应 ≥ MIN_BUY_IN)
 
-    # ── REST 查询(rest.md;changes/0050）──
+    # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数
     LEADERBOARD_MAX_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 的 limit 上限(防超大查询;应 ≥ DEFAULT)
+    HANDS_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /hands 不带 limit 时默认返回条数(一页手牌)
+    HANDS_MAX_LIMIT: int = Field(ge=1, le=1000)  # GET /hands 的 limit 上限(应 ≥ DEFAULT)
 
     # ── dev 房(明文 dev 脚手架,见 changes/0018;非生产)──
     # 动态房(0049):无静态预置,shell 建 JoinRoom 时用下列默认配置建房(谁都可创建 / 空则消失)。

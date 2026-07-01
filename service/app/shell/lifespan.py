@@ -18,6 +18,7 @@ from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
+from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
 from app.shell.connection import Connection, ConnectionManager
@@ -161,6 +162,8 @@ def create_app() -> FastAPI:
     app.include_router(make_lobby_router(lambda: shell.world))
     # REST 排行榜(读 DB 结算积分,见 app/rest/leaderboard.py);sessionmaker 迟绑(setup() 前已在 __init__ 建好)。
     app.include_router(make_leaderboard_router(lambda: shell.sessionmaker))
+    # REST 手牌历史(读 DB,游标分页,见 app/rest/hands.py)。
+    app.include_router(make_hands_router(lambda: shell.sessionmaker))
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]

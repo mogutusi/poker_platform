@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.db.models import DMMessage, DMReadCursor, User
+from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -38,6 +38,50 @@ async def top_users_by_points(
             .limit(limit)
         )
         return [(nick, pts) for nick, pts in (await session.execute(stmt)).all()]
+
+
+async def list_hands(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    participant_uid: int | None = None,
+    before_id: int | None = None,
+    limit: int,
+) -> list[tuple[int, str, datetime, datetime, int, tuple[tuple[str, int, int], ...]]]:
+    # 手牌历史(rest.md §手牌历史):新→旧游标分页。每手返回 (id, dedupe_key, start, end, final_pot, participants),
+    # participants = ((nickname, initial_points, final_points)...) 按 nickname 升序。游标 = HandRecord.id(单调唯一,事件写按手尾追加):
+    # before_id 给则取 id<before_id(严格小于,不重上页末条);participant_uid 给则只取该玩家参与过的手(仍返回该手全部参与者)。
+    # 隐私:HandRecord/HandParticipant 只存结果、绝无底牌(models.py / core.md 不变量 3),查询天然无牌面。一会话两查(手 + 其参与者)避 N+1。
+    async with sessionmaker() as session:
+        stmt = select(
+            HandRecord.id, HandRecord.dedupe_key, HandRecord.start_time, HandRecord.end_time, HandRecord.final_pot
+        )
+        if participant_uid is not None:
+            stmt = stmt.where(
+                HandRecord.id.in_(select(HandParticipant.hand_id).where(HandParticipant.uid == participant_uid))
+            )
+        if before_id is not None:
+            stmt = stmt.where(HandRecord.id < before_id)
+        stmt = stmt.order_by(HandRecord.id.desc()).limit(limit)
+        hand_rows = (await session.execute(stmt)).all()
+        hand_ids = [hid for hid, *_ in hand_rows]
+        parts: dict[int, list[tuple[str, int, int]]] = {}
+        if hand_ids:
+            pstmt = (
+                select(
+                    HandParticipant.hand_id,
+                    User.nickname,
+                    HandParticipant.initial_points,
+                    HandParticipant.final_points,
+                )
+                .join(User, User.id == HandParticipant.uid)  # 取参与者显示名
+                .where(HandParticipant.hand_id.in_(hand_ids))
+            )
+            for hid, nick, init, fin in (await session.execute(pstmt)).all():
+                parts.setdefault(hid, []).append((nick, init, fin))
+        return [
+            (hid, dk, _as_utc(st), _as_utc(et), pot, tuple(sorted(parts.get(hid, []))))
+            for hid, dk, st, et, pot in hand_rows
+        ]
 
 
 async def load_uids_by_nicks(

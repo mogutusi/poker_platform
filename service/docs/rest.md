@@ -25,15 +25,17 @@ GET /leaderboard?limit=N  →  [{ rank, nickname, points }]   # app/rest/leaderb
   - **决策(可改)**:排行榜定义为**银行余额(settled points)**——离桌(`LeaveRoom`)结算把筹码还回全局后才完整体现。这个定义清晰、且只读 DB 就够;若要"含桌上筹码的总身家",得读 `world`(跨切),列为 future。
 - DB 滞后:刚买入/离桌的变更可能还没 flush,排行榜短暂偏旧——可接受。
 
-## 手牌历史 hand history
+## 手牌历史 hand history —— 已落地(0051,`room` 过滤除外)
 
 ```
-GET /hands?room=&user=&limit=&before=  →  [HandRecord]   (分页)
+GET /hands?user=&limit=&before=  →  [HandRecordView]   (游标分页,新→旧)   # app/rest/hands.py + db/queries.list_hands
 ```
 
-- 读 DB 的手牌记录(由 delayDB **事件写**追加,见 [db.md](db.md));读 [`app/db/models.py`](../app/db/models.py) 的 `HandRecord`/`HandParticipant` 表(对齐 `HandRecordWrite`/`ParticipantWrite`:`start_time`/`end_time`/`final_pot` + 参与者 `uid`/`initial_points`/`final_points`;迁移见 [db-migrations.md](db-migrations.md))。事实源是 `app/db/`;原型 handrecord 查询代码已于 0027 拆除(历史实现见 git history,可作改写参考)。
-- **隐私**:记录只存**结果**,`hole_cards`/`deck` **从不落库**(见 [core.md](core.md) 不变量 3 / [log.md](log.md))——所以历史查询能看输赢、看不到底牌。摊牌时的底牌只在当时的 `HandShowDown` 事件里露过,不进历史。
-- 分页用 `before`(游标,按 `hand.seq` 或 `end_time`),不用 OFFSET 翻大表。
+- 读 DB 的手牌记录(由 delayDB **事件写**追加,见 [db.md](db.md));读 [`app/db/models.py`](../app/db/models.py) 的 `HandRecord`/`HandParticipant` 表(对齐 `HandRecordWrite`/`ParticipantWrite`)。`HandRecordView{id, dedupe_key, start_time, end_time, final_pot, participants:[{nickname, initial_points, final_points, net}]}`(REST DTO,不进 ws 联合 / `wire.gen.ts`,同 `RoomMeta`/`LeaderboardEntry`)。请求级 session、一会话两查(手 + 其参与者 join User 取 nick)避 N+1。
+- **`user` 过滤**按参与者:`?user=<nick>` → 解析 uid → 只返回该玩家参与过的手(仍含该手全部参与者);nick 不存在 → 空。
+- **隐私**:记录只存**结果**,`hole_cards`/`deck` **从不落库**(见 [core.md](core.md) 不变量 3 / [log.md](log.md))——历史看输赢、看不到底牌;两表结构上无牌面字段,查询天然不泄。
+- 分页用 `before`(游标),不用 OFFSET:游标 = **`HandRecord.id`**(自增 PK,单调唯一,事件写按手尾追加;比 `end_time` 免并列),`before=<id>` → `id < before ORDER BY id DESC LIMIT n`;`id` 兼作 DTO 里「下一页游标」。`limit` 由 `gameconfig.HANDS_DEFAULT_LIMIT`/`MAX_LIMIT` 兜。**dev 无鉴权**(P5 上 JWT 时可要求仅查自己)。
+- **`room` 过滤待做**:`HandRecord` 无 `room` 列(room 仅在 `dedupe_key="room:seq"`),动态房名任意 → `dedupe_key LIKE` 受通配符/`:` 之扰**脆弱**;正确解 = 加独立 `room` 列(改 `HandRecordWrite`+reduce+orm_persister+迁移),单列一篇(见 [changes/0051](refactor/changes/0051-rest-hands.md))。
 
 ## 用户资料 profile
 
