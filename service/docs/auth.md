@@ -61,13 +61,13 @@
 - **fail-closed**:存储串结构非法(段数≠3 / 盐或摘要非 hex / 轮数非整或 <1)一律 `return False`——无法校验绝不放行,且绝不因一行脏 DB 数据崩掉登录路径。`rounds<1` 在 `hash_password`/`_derive` 侧 `raise`(会退化成不迭代的红线),`gameconfig.PWD_HASH_ROUNDS` 的 `ge=1` 兜住正常路径。
 
 - **盐明文存,没问题**:盐不是密钥,作用是"每人哈希不同"(挡彩虹表 + 挡'相同密码→相同哈希'),不需要保密,跟哈希存一起即可。
-- **DB 列 `hash_password`(存 `salt$rounds$digest`)+ Alembic 迁移随「登录握手」砖落地**,不在原语砖:此刻加列没有写入/读取方 = 死 schema,且它与登录账号 `name` 列同属身份模型扩张,应与注册写/登录读一同落地并配测(见 [changes/0053](refactor/changes/0053-p5-password-hashing.md) 决策 1)。
+- **DB 列已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`User` 加 `name`(登录账号,唯一,≤15)/ `hash_password`(存 `salt$rounds$digest`,salt/轮数已内嵌,无需另列)/ `k_user`(SM4 密钥 hex)三列 + Alembic 迁移 `49417b108733`。**均 nullable**:本平台无历史密码数据,加可空列 = 最安全增量迁移(既有行 NULL = 未启用登录;`name` 唯一 → 不能常量 `server_default` 回填,见 [changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md) 决策 1)。校验逻辑 `authenticate`(SM4 解 blob → `verify_password`)+ `load_user_for_login` 查询同批落地;`/user/login` 端点随下一砖。
 - **初始密码由管理员生成**(高熵随机),私下发给用户;用户可自行改密。这层防的是"DB 泄露后被反推",和下面的传输加密是两件事,**两者都要**。
 
 ## 共享密钥(手输,不在前端)
 
 - 每个用户一把**对称密钥 `K_user`**(SM4 用,16 字节),由管理员**带外**(当面/私信)发放,登录时**用户手动输入**——它**不写进前端代码**,所以扒前端拿不到,这正是它和"前端内置 PSK"的关键区别。
-- 服务器存每用户的 `K_user`(可与盐同表)。**可轮换**("当前密钥"= 当下有效的那把),轮换缩小泄露窗口(每周一换,见下)。
+- 服务器存每用户的 `K_user`(与鉴权列同表:`User.k_user` hex,已随 [0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md) 落地**单把**)。**可轮换**("当前密钥"= 当下有效的那把),轮换缩小泄露窗口(每周一换,见下);双钥/版本/宽限(`k_cur`/`k_prev`/…)属「K_user 每周轮换」砖,届时扩列。
 - 取舍:**推荐每用户一把**(挡内部人互相解密、限爆炸半径)。若图省事用**全局一把**,则任何内部人都能解别人流量——仅当全员互信时才接受。
 
 ## K_user 每周轮换
@@ -119,6 +119,7 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 ```
 
 - `client_nonce` + 短 `exp` 防登录包重放。
+- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/密码错一律 None、绝不崩;`client_nonce` 透出供端点做重放防护)。**余**:`/user/login` 端点(铸会话 + SM4 加密响应 + JWT)+ client_nonce/exp 重放防护(端点砖)。
 - 会话表是**内存 shell 状态**(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效→重新登录,可接受。**已落地** [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):`SessionStore`(`create(name,nickname,now)->(session_id, Session)` / `lookup(sid,now)`(过期删返 None)/ `revoke` / `prune(now)`)+ `Session{name,nickname,token,expires_at}`;`session_id=token_urlsafe`(公开句柄)、`token=token_bytes(32)`(秘密,派生逐帧密钥见 [channel.py](../app/auth/channel.py))。时钟外移(`now` 显式传,同 timer.md)、`exp=now+SESSION_TTL_SECONDS` 服务器兜底。**余**:`/user/login` 端点铸会话 + ws 握手 `?sid=` 查表(后续砖)。
 - **与现有 JWT 的关系**:REST 端点(查手牌/余额等)沿用现有 JWT access/refresh;ws 游戏信道用这里的 `session_id`/`session_token`。`/user/login` 一次返回两者(JWT 给 REST、session 给 ws),前端各用各的;JWT 的 `sub` 放 `name`,不放可变的 `nickname`。
 

@@ -14,7 +14,12 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)  # uid;自增主键
     nickname: str = Field(max_length=50, unique=True, index=True)  # 可变显示名(仅大厅可改)
     points: int = Field(default=0)  # 全局积分余额;delayDB PointsWrite 状态写按 uid UPSERT 覆盖此列
-    # 国密鉴权列(salt/rounds/hash_password/K_user)随 P5 以新迁移加(见 docs/db-migrations.md「改模型 → 新迁移」)
+    # 国密鉴权列(P5,changes/0056)。均可空:本平台无历史用户数据,加可空列是最安全的增量迁移
+    # (既有行记 NULL = 未启用登录;name 唯一 → 不能给常量 server_default 回填,故走可空)。这三列纯 DB/shell
+    # 鉴权字段,不进 world/UserState(auth.md/user.md 红线);脱敏红线:hash_password/k_user 不进日志。
+    name: Optional[str] = Field(default=None, max_length=15, unique=True, index=True)  # 登录账号(不可变,唯一;登录按它查 + 选 K_user)
+    hash_password: Optional[str] = Field(default=None, max_length=128)  # 密码哈希 "salt$rounds$digest"(0053 格式;salt/轮数已内嵌,无需另列)
+    k_user: Optional[str] = Field(default=None, max_length=64)  # 该用户 SM4 密钥(hex,16B=32hex;解登录 blob 用)。轮换双钥/版本随 K_user 轮换砖
 
 
 class HandRecord(SQLModel, table=True):

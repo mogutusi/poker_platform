@@ -2,12 +2,35 @@
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
+
+
+class LoginUser(NamedTuple):
+    # 登录握手(auth.md)按 name 载入的账号鉴权投影(changes/0056)。name 命中 → 非 NULL;
+    # hash_password/k_user 可能 NULL(name 设了但未启用登录)→ 由 authenticate fail-closed。
+    uid: int  # 不可变账号主键(= User.id)
+    name: str  # 登录账号(唯一,不可变)
+    nickname: str  # 游戏昵称(握手后投 Connect)
+    hash_password: str | None  # 密码哈希 "salt$rounds$digest"(0053);NULL = 未设密码
+    k_user: str | None  # SM4 密钥 hex;NULL = 未发密钥(未启用登录)
+
+
+async def load_user_for_login(
+    sessionmaker: async_sessionmaker[AsyncSession], name: str
+) -> LoginUser | None:
+    # 按登录账号 name 读鉴权字段供 /user/login(auth.md §登录握手)。无此行返回 None
+    # (name 唯一 + NULL 不匹配 → 未启用登录的历史行天然跳过)。秘密 hash_password/k_user 只回给 authenticate,不进日志。
+    async with sessionmaker() as session:
+        user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()
+        if user is None:
+            return None
+        return LoginUser(user.id, user.name, user.nickname, user.hash_password, user.k_user)
 
 
 def _as_utc(dt: datetime) -> datetime:
