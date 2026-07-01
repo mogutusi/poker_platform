@@ -18,9 +18,11 @@ from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
+from app.auth.session import SessionStore
 from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
+from app.rest.login import make_login_router
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
@@ -69,6 +71,7 @@ class DevShell:
         self.persistwriter = PersistWriter(self.persist, OrmPersister(self.sessionmaker))
         self.timer = Timer(self.inbox)
         self.history = RoomChatBuffer()  # 房聊环形缓冲:dispatch 写 / Receiver 的 FetchRoomChat 读
+        self.session_store = SessionStore(gameconfig.SESSION_TTL_SECONDS)  # ws 会话表:/user/login 铸,ws 握手查(P5)
         # world 及其依赖(dispatcher/gameloop)在 setup() 从 DB 载入后建。
         self.world: World | None = None
         self.dispatcher: Dispatcher | None = None
@@ -164,6 +167,8 @@ def create_app() -> FastAPI:
     app.include_router(make_leaderboard_router(lambda: shell.sessionmaker))
     # REST 手牌历史(读 DB,游标分页,见 app/rest/hands.py)。
     app.include_router(make_hands_router(lambda: shell.sessionmaker))
+    # 登录端点(P5:K_user 护密码、铸会话、K_user 加密下发 session,见 app/rest/login.py)。sessionmaker/session_store 迟绑。
+    app.include_router(make_login_router(lambda: shell.sessionmaker, shell.session_store))
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]
