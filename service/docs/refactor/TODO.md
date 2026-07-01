@@ -84,8 +84,8 @@
 
 ## P5 · 国密安全信道(**最后做**,替换 D 的明文层)
 
-- [ ] 密码哈希:`salt$rounds$digest` + `compare_digest` + 数据迁移脚本
-- [ ] 登录握手:`/user/login` SM4 护住密码、返回 session + JWT
+- [~] 密码哈希:`salt$rounds$digest` + `compare_digest`(**0053 落地原语**:`app/auth/passwords.py` `hash_password(pw,rounds)`/`verify_password(pw,stored)`/`_derive` —— 每用户随机盐 16B + N 轮 SM3 拉伸,verify 按存储轮数重放[改配置不废旧哈希] + fail-closed 非法串 + 常量时间比对;`PWD_HASH_ROUNDS` 进 gameconfig + env;`tests/crypto/test_passwords.py` 穷举 23 测,共 486)。**余(随「登录握手」砖)**:`User` 加 `name`/`hash_password`/`K_user` 列 + Alembic 迁移(此刻加 = 死 schema,与 `name` 身份模型扩张同落地,见 changes/0053 决策 1)
+- [ ] 登录握手:`/user/login` SM4 护住密码、返回 session + JWT(+ `User.name`/`hash_password` 列 + 迁移 + `load_user_by_name` + `SESSION_TTL_SECONDS` + dev 种子带密码)
 - [ ] 逐帧加密:`SecureChannel` 入站「先验 seq → 验 MAC → 才解密」、出站加密(替换 Receiver/Sender 的 dev 明文帧)
 - [ ] `K_user` 双钥 + 每周轮换任务 + 版本/宽限
 - [ ] `tests/crypto/`:MAC 拒伪 / seq 拒重放 / 先验后解 / IV 不复用

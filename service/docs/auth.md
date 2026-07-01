@@ -52,20 +52,16 @@
 
 ## 密码存储:SM3 + 每用户盐 + 迭代
 
-现状是裸 `sm3_hash(password)`(无盐、单轮),DB 泄露后可彩虹表/撞库。改为**每用户随机盐 + N 轮 SM3**:
+现状是裸 `sm3_hash(password)`(无盐、单轮),DB 泄露后可彩虹表/撞库。改为**每用户随机盐 + N 轮 SM3**,存 `salt$rounds$digest`(全 hex)。
 
-```python
-# 注册 / 改密
-salt = secrets.token_bytes(16)                       # 每用户独立
-h = (password.encode() + salt)
-for _ in range(gameconfig.PWD_HASH_ROUNDS):          # 迭代抬高暴力成本
-    h = sm3_hash_bytes(h)
-store = f"{salt.hex()}${gameconfig.PWD_HASH_ROUNDS}${h.hex()}"   # 存进 hash_password
-# 校验:同法重算,用 hmac.compare_digest 常量时间比对
-```
+**原语已落地** [`app/auth/passwords.py`](../app/auth/passwords.py)([changes/0053](refactor/changes/0053-p5-password-hashing.md)),纯函数、精确签名以代码为准,要点:
+
+- `hash_password(password, rounds) -> "salt$rounds$digest"`:新随机盐(16B)→ 首原像 `password||salt` → 迭代 `rounds` 轮 `sm3_hash_bytes` 拉伸成 32B 摘要。**轮数由调用方(注册/改密)从 `gameconfig.PWD_HASH_ROUNDS` 传入**——原语不读全局(纯、可测),旋钮仍在配置(不硬编码)。
+- `verify_password(password, stored) -> bool`:**从存储串读回轮数**(不读当前配置)按同法重算,`hmac.compare_digest` **字节层常量时间**比对。把 rounds 写进串,正是为了「改 `PWD_HASH_ROUNDS` 不废旧哈希」(旧行按其自带轮数校验)。
+- **fail-closed**:存储串结构非法(段数≠3 / 盐或摘要非 hex / 轮数非整或 <1)一律 `return False`——无法校验绝不放行,且绝不因一行脏 DB 数据崩掉登录路径。`rounds<1` 在 `hash_password`/`_derive` 侧 `raise`(会退化成不迭代的红线),`gameconfig.PWD_HASH_ROUNDS` 的 `ge=1` 兜住正常路径。
 
 - **盐明文存,没问题**:盐不是密钥,作用是"每人哈希不同"(挡彩虹表 + 挡'相同密码→相同哈希'),不需要保密,跟哈希存一起即可。
-- `hash_password` 字段改存 `salt$rounds$digest`,**需要一次 Alembic 迁移**;`PWD_HASH_ROUNDS` 进配置。
+- **DB 列 `hash_password`(存 `salt$rounds$digest`)+ Alembic 迁移随「登录握手」砖落地**,不在原语砖:此刻加列没有写入/读取方 = 死 schema,且它与登录账号 `name` 列同属身份模型扩张,应与注册写/登录读一同落地并配测(见 [changes/0053](refactor/changes/0053-p5-password-hashing.md) 决策 1)。
 - **初始密码由管理员生成**(高熵随机),私下发给用户;用户可自行改密。这层防的是"DB 泄露后被反推",和下面的传输加密是两件事,**两者都要**。
 
 ## 共享密钥(手输,不在前端)
@@ -182,11 +178,13 @@ def hmac_sm3(key: bytes, msg: bytes) -> bytes:     # 标准 HMAC,底层 SM3(避�
 
 ```python
 class GameConfig(BaseSettings):
-    PWD_HASH_ROUNDS: int      = Field(ge=1, le=100000)   # 密码哈希迭代轮数
-    SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期
-    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧
+    PWD_HASH_ROUNDS: int      = Field(ge=1, le=100000)   # 密码哈希迭代轮数(已落地 0053)
+    SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期(随「登录握手」砖)
+    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧(随「逐帧加密」砖)
     # K_user / 盐 等秘密存 DB,不进 env
 ```
+
+> 各字段**随其消费方砖落地**(不预铺无消费者的配置):`PWD_HASH_ROUNDS` 已随原语砖([0053](refactor/changes/0053-p5-password-hashing.md))进 `gameconfig` + `poker.env.example`;`SESSION_TTL_SECONDS`/`WS_FRAME_MAX_BYTES` 待各自砖。
 
 ## 待办 / 可选升级
 

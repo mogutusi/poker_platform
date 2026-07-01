@@ -68,6 +68,9 @@ class GameConfig(BaseSettings):
     MIN_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的下限
     MAX_BUY_IN: int = Field(ge=1, le=1000000000)  # 运行时改房间默认买入的上限(应 ≥ MIN_BUY_IN)
 
+    # ── 鉴权(auth.md;P5 国密安全信道)──
+    PWD_HASH_ROUNDS: int = Field(ge=1, le=100000)  # 密码哈希 SM3 迭代轮数;注册/改密调 auth.passwords.hash_password 时传(拉伸抬高暴力成本)
+
     # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数
     LEADERBOARD_MAX_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 的 limit 上限(防超大查询;应 ≥ DEFAULT)

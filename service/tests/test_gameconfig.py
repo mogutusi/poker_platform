@@ -36,6 +36,7 @@ def _valid_kwargs() -> dict:
         MAX_SMALL_BLIND=100000,
         MIN_BUY_IN=1,
         MAX_BUY_IN=100000000,
+        PWD_HASH_ROUNDS=100000,
         LEADERBOARD_DEFAULT_LIMIT=20,
         LEADERBOARD_MAX_LIMIT=100,
         HANDS_DEFAULT_LIMIT=50,
@@ -87,6 +88,7 @@ def test_valid_kwargs_build_ok():
         ("MIN_BUY_IN", 0),  # ge=1
         ("MAX_SMALL_BLIND", 0),  # ge=1
         ("MAX_BUY_IN", 0),  # ge=1(四个房配上下限字段均有 ge=1 拒 0 的护栏)
+        ("PWD_HASH_ROUNDS", 0),  # ge=1(rounds<1 会退化成不迭代 → 护栏拒)
     ],
 )
 def test_field_bounds_reject(field, bad):
