@@ -1,0 +1,113 @@
+# ws 会话表穷举(P5,见 docs/auth.md §登录握手 / changes/0055)。
+# 时钟外移(now 显式传)→ 过期/清理逻辑可控测。覆盖:create(id≠token·每次异·exp·登记可查)/
+# lookup(命中·未知·过期删)/ 多会话并存 / revoke(删·幂等)/ prune(清过期·不误清)/ token 形制 / config 接线。
+
+from app import gameconfig
+from app.auth.session import Session, SessionStore
+
+_TTL = 3600  # 测试用会话有效期(秒)
+_T0 = 1_000_000.0  # 测试基准墙钟(epoch 秒);相对它推进 now
+
+
+def _store(ttl: int = _TTL) -> SessionStore:
+    return SessionStore(ttl)
+
+
+def test_create_returns_public_id_and_secret_token():
+    store = _store()
+    sid, session = store.create("alice_name", "alice", _T0)
+    assert isinstance(sid, str) and sid  # 公开句柄,非空串
+    assert isinstance(session.token, bytes) and len(session.token) == 32  # 秘密 32B 票据
+    assert sid.encode() != session.token  # id 与 token 不同源
+    assert session.name == "alice_name" and session.nickname == "alice"
+    assert session.expires_at == _T0 + _TTL  # exp = now + ttl
+
+
+def test_create_ids_and_tokens_unique():
+    store = _store()
+    ids, tokens = set(), set()
+    for _ in range(50):
+        sid, session = store.create("n", "nick", _T0)
+        ids.add(sid)
+        tokens.add(session.token)
+    assert len(ids) == 50 and len(tokens) == 50  # 每次铸都新随机
+
+
+def test_lookup_hits_before_expiry():
+    store = _store()
+    sid, session = store.create("n", "nick", _T0)
+    assert store.lookup(sid, _T0) is session  # 同一对象
+    assert store.lookup(sid, _T0 + _TTL - 1) is session  # exp 前一秒仍在
+
+
+def test_lookup_unknown_returns_none():
+    assert _store().lookup("no-such-sid", _T0) is None
+
+
+def test_lookup_expired_returns_none_and_evicts():
+    store = _store()
+    sid, _ = store.create("n", "nick", _T0)
+    assert store.lookup(sid, _T0 + _TTL) is None  # now >= exp → 失效(边界:恰好到点即拒)
+    assert len(store) == 0  # 惰性清:过期行被删
+    assert store.lookup(sid, _T0) is None  # 已删,再查也 None
+
+
+def test_multiple_sessions_coexist_per_name():
+    # 轮换靠新登录铸新会话(会话层不强制单例);同 name 多 sid 并存,各自独立可查。
+    store = _store()
+    sid1, s1 = store.create("n", "nick", _T0)
+    sid2, s2 = store.create("n", "nick", _T0)
+    assert sid1 != sid2 and s1.token != s2.token
+    assert store.lookup(sid1, _T0) is s1 and store.lookup(sid2, _T0) is s2
+    assert len(store) == 2
+
+
+def test_revoke_removes_and_is_idempotent():
+    store = _store()
+    sid, _ = store.create("n", "nick", _T0)
+    store.revoke(sid)
+    assert store.lookup(sid, _T0) is None
+    store.revoke(sid)  # 幂等,未知 id 无害
+    store.revoke("never-existed")
+
+
+def test_prune_clears_expired_only():
+    store = _store()
+    old_sid, _ = store.create("n", "nick", _T0)  # exp = _T0 + _TTL
+    fresh_sid, _ = store.create("n", "nick", _T0 + _TTL)  # exp = _T0 + 2*_TTL
+    cleared = store.prune(_T0 + _TTL)  # now >= old.exp,< fresh.exp
+    assert cleared == 1  # 只清过期的那条
+    assert store.lookup(old_sid, _T0 + _TTL) is None
+    assert store.lookup(fresh_sid, _T0 + _TTL) is not None
+    assert len(store) == 1
+
+
+def test_prune_empty_and_none_expired():
+    store = _store()
+    assert store.prune(_T0) == 0  # 空表
+    store.create("n", "nick", _T0)
+    assert store.prune(_T0) == 0  # 无过期
+    assert len(store) == 1
+
+
+def test_session_is_dataclass_with_expected_fields():
+    s = Session(name="n", nickname="nick", token=b"\x00" * 32, expires_at=_T0)
+    assert (s.name, s.nickname, s.token, s.expires_at) == ("n", "nick", b"\x00" * 32, _T0)
+
+
+def test_repr_redacts_secret_token():
+    # 脱敏红线(log.md):Session 的 repr 不泄 token(防误 print/log)。token 字段 repr=False。
+    _, session = _store().create("n", "nick", _T0)
+    text = repr(session)
+    assert session.token.hex() not in text  # 秘密值(hex)不在 repr
+    assert str(session.token) not in text  # 秘密值(bytes 字面)不在 repr
+    assert "token" not in text  # repr=False → 字段整个不出现
+    assert "nick" in text  # 非秘密字段仍在,repr 对调试仍有用
+
+
+def test_wired_to_gameconfig_ttl():
+    # 接线:SessionStore 用 gameconfig.SESSION_TTL_SECONDS 定 exp(端点真实用法)。
+    ttl = gameconfig.SESSION_TTL_SECONDS
+    assert isinstance(ttl, int) and ttl >= 60
+    _, session = SessionStore(ttl).create("n", "nick", _T0)
+    assert session.expires_at == _T0 + ttl

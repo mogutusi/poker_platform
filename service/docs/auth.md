@@ -119,7 +119,7 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 ```
 
 - `client_nonce` + 短 `exp` 防登录包重放。
-- 会话表是**内存 shell 状态**(同现有 `_refresh_token_pool` 的做法),进程重启即失效→重新登录,可接受。
+- 会话表是**内存 shell 状态**(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效→重新登录,可接受。**已落地** [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):`SessionStore`(`create(name,nickname,now)->(session_id, Session)` / `lookup(sid,now)`(过期删返 None)/ `revoke` / `prune(now)`)+ `Session{name,nickname,token,expires_at}`;`session_id=token_urlsafe`(公开句柄)、`token=token_bytes(32)`(秘密,派生逐帧密钥见 [channel.py](../app/auth/channel.py))。时钟外移(`now` 显式传,同 timer.md)、`exp=now+SESSION_TTL_SECONDS` 服务器兜底。**余**:`/user/login` 端点铸会话 + ws 握手 `?sid=` 查表(后续砖)。
 - **与现有 JWT 的关系**:REST 端点(查手牌/余额等)沿用现有 JWT access/refresh;ws 游戏信道用这里的 `session_id`/`session_token`。`/user/login` 一次返回两者(JWT 给 REST、session 给 ws),前端各用各的;JWT 的 `sub` 放 `name`,不放可变的 `nickname`。
 
 ## WS 安全信道(长连接,逐帧加密)
@@ -183,12 +183,12 @@ def hmac_sm3(key: bytes, msg: bytes) -> bytes:     # 标准 HMAC,底层 SM3(避�
 ```python
 class GameConfig(BaseSettings):
     PWD_HASH_ROUNDS: int      = Field(ge=1, le=100000)   # 密码哈希迭代轮数(已落地 0053)
-    SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期(随「登录握手」砖)
+    SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期(已落地 0055,SessionStore 消费)
     WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧(已落地 0054)
     # K_user / 盐 等秘密存 DB,不进 env
 ```
 
-> 各字段**随其消费方砖落地**(不预铺无消费者的配置):`PWD_HASH_ROUNDS` 已随原语砖([0053](refactor/changes/0053-p5-password-hashing.md))、`WS_FRAME_MAX_BYTES` 随逐帧信道砖([0054](refactor/changes/0054-p5-secure-frame-channel.md))进 `gameconfig` + `poker.env.example`;`SESSION_TTL_SECONDS` 待「登录握手」砖。
+> 各字段**随其消费方砖落地**(不预铺无消费者的配置):`PWD_HASH_ROUNDS`([0053](refactor/changes/0053-p5-password-hashing.md))、`WS_FRAME_MAX_BYTES`([0054](refactor/changes/0054-p5-secure-frame-channel.md))、`SESSION_TTL_SECONDS`([0055](refactor/changes/0055-p5-session-store.md),`SessionStore`)均已进 `gameconfig` + `poker.env.example`。
 
 ## 待办 / 可选升级
 

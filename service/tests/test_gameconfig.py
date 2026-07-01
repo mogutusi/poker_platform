@@ -38,6 +38,7 @@ def _valid_kwargs() -> dict:
         MAX_BUY_IN=100000000,
         PWD_HASH_ROUNDS=100000,
         WS_FRAME_MAX_BYTES=65536,
+        SESSION_TTL_SECONDS=3600,
         LEADERBOARD_DEFAULT_LIMIT=20,
         LEADERBOARD_MAX_LIMIT=100,
         HANDS_DEFAULT_LIMIT=50,
@@ -92,6 +93,8 @@ def test_valid_kwargs_build_ok():
         ("PWD_HASH_ROUNDS", 0),  # ge=1(rounds<1 会退化成不迭代 → 护栏拒)
         ("WS_FRAME_MAX_BYTES", 255),  # ge=256
         ("WS_FRAME_MAX_BYTES", 1048577),  # le=1048576
+        ("SESSION_TTL_SECONDS", 59),  # ge=60
+        ("SESSION_TTL_SECONDS", 86401),  # le=86400
     ],
 )
 def test_field_bounds_reject(field, bad):
