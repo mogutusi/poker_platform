@@ -35,6 +35,7 @@ poetry env activate                          # 或先激活、再裸跑命令
 - **venv 路径固定在 `service/.venv`**(`virtualenvs.in-project true` 的结果,Python 3.12):解释器是 `service/.venv/bin/python`,`pytest`/`alembic` 等可执行文件都在 `service/.venv/bin/` 下。IDE/编辑器把 Python interpreter 指到 `service/.venv/bin/python` 即可。
 - **裸 `python`/`pytest` 多半不存在或缺依赖**(系统环境既无项目依赖、也不在 venv 里,常见 `command not found`)——所有命令(`python`、`pytest`、`alembic`)一律走 `poetry run <cmd>`、先 `poetry env activate`,或直接调 `service/.venv/bin/<cmd>`。
 - **`poetry.lock` 要提交**:别人 `poetry install` 复现同样版本。改了依赖记得连 lock 一起提交。
+- **dev 登录(P5,changes/0060)**:dev 用户已 login-enable —— `POST /user/login`,body `{name, iv, blob}`(`name`=昵称、`blob`=`SM4(DEV_KUSER, iv, {password: DEV_PASSWORD, client_nonce})` 的 hex),响应用 `DEV_KUSER` 解密得会话。`DEV_PASSWORD`/`DEV_KUSER` 在 `poker.env`(dev-only,非生产密钥)。**注**:dev ws 端点当前仍是 `?nick=` 明文握手,尚未接会话信道(接线砖后 ws 改走 `?sid=` 加密)。
 
 ## Alembic
 

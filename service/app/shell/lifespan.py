@@ -7,12 +7,13 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 from fastapi import FastAPI, Query, WebSocket
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import gameconfig
+from app.auth.passwords import hash_password
 from app.core.commands import Command
 from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
@@ -40,16 +41,31 @@ def _dev_uid(index: int) -> int:
     return index + 1  # dev 用户主键 = 预置序号 + 1(id 自 1 起,避免 0;种子/载入一致)
 
 
+@lru_cache(maxsize=1)
+def _dev_password_hash() -> str:
+    # dev 共享口令的哈希:进程内算一次缓存(100k 轮 ≈0.16s;dev 用户共享口令 → 共享 salt$rounds$digest 无害),
+    # 免每次 setup 重算拖慢 dev 测(changes/0060)。
+    return hash_password(gameconfig.DEV_PASSWORD, gameconfig.PWD_HASH_ROUNDS)
+
+
 async def seed_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    # 幂等种子:dev 用户进 DB(id=序号+1 / nickname / points=DEV_START_POINTS)。仅当该 id 不在才 INSERT——
-    # 重启不重置已落库积分(OrmPersister 写回的最新值得以保留)。原型注册(P5)未建,此为 dev 替身。
+    # 幂等种子:dev 用户进 DB(id=序号+1 / nickname / points / 鉴权列)。新用户 INSERT;pre-P5 已存在但 name=NULL 的
+    # dev 行**回填**鉴权列(login-enable,不重置 points/nickname——承接 OrmPersister 落库积分);已启用(name 非 NULL)则跳过。
+    # 鉴权列 = dev 脚手架:name=昵称、口令=DEV_PASSWORD(共享哈希)、k_user=DEV_KUSER(共享,dev-only,见 changes/0060)。
     async with sessionmaker() as session:
         async with session.begin():
-            existing = set((await session.execute(select(User.id))).scalars())
             for i, nick in enumerate(gameconfig.DEV_USERS):
                 uid = _dev_uid(i)
-                if uid not in existing:
-                    session.add(User(id=uid, nickname=nick, points=gameconfig.DEV_START_POINTS))
+                user = await session.get(User, uid)
+                if user is None:
+                    session.add(User(
+                        id=uid, nickname=nick, points=gameconfig.DEV_START_POINTS,
+                        name=nick, hash_password=_dev_password_hash(), k_user=gameconfig.DEV_KUSER,
+                    ))
+                elif user.name is None:  # pre-P5 dev 行:补鉴权列 login-enable(不动 points/nickname)
+                    user.name = nick
+                    user.hash_password = _dev_password_hash()
+                    user.k_user = gameconfig.DEV_KUSER
 
 
 def build_dev_world() -> World:

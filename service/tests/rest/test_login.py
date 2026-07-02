@@ -133,6 +133,49 @@ async def test_db_error_returns_uniform_401():
     assert len(store) == 0  # 未铸会话
 
 
+async def test_dev_seeded_user_can_login():
+    # 端到端:seed_dev_users 补齐鉴权列 → DEV_USERS[0] 用 DEV_PASSWORD + DEV_KUSER 真登录(changes/0060)。
+    from app import gameconfig
+    from app.shell.lifespan import seed_dev_users
+
+    engine = make_engine(
+        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    await create_all(engine)
+    sm = make_sessionmaker(engine)
+    await seed_dev_users(sm)
+    store = SessionStore(_TTL)
+    dev_nick = gameconfig.DEV_USERS[0]
+    dev_key = bytes.fromhex(gameconfig.DEV_KUSER)
+    iv_hex, blob_hex = _make_blob({"password": gameconfig.DEV_PASSWORD, "client_nonce": "n"}, key=dev_key)
+    resp = await _login(store, sm, dev_nick, iv_hex, blob_hex)
+    data = json.loads(sm4_cbc_dec(dev_key, bytes.fromhex(resp.iv), bytes.fromhex(resp.blob)))
+    session = store.lookup(data["session_id"], _T0)
+    assert session is not None and session.name == dev_nick
+
+
+async def test_seed_backfills_pre_p5_dev_user():
+    # pre-P5 dev 行(只 nickname/points、name=NULL)→ seed_dev_users 回填鉴权列(login-enable),不重置 points。
+    from app import gameconfig
+    from app.shell.lifespan import _dev_uid, seed_dev_users
+
+    engine = make_engine(
+        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    await create_all(engine)
+    sm = make_sessionmaker(engine)
+    uid = _dev_uid(0)
+    async with sm() as s:
+        async with s.begin():
+            s.add(User(id=uid, nickname=gameconfig.DEV_USERS[0], points=777))  # 无鉴权列(pre-P5)
+    await seed_dev_users(sm)
+    async with sm() as s:
+        user = await s.get(User, uid)
+        assert user.points == 777  # 回填不重置积分
+        assert user.name == gameconfig.DEV_USERS[0]
+        assert user.k_user == gameconfig.DEV_KUSER and user.hash_password is not None
+
+
 def test_create_app_registers_login_route():
     # 布线:create_app() 注册 POST /user/login(不跑 lifespan,只验路由表)。
     from app.shell.lifespan import create_app

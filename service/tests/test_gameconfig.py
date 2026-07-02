@@ -49,6 +49,8 @@ def _valid_kwargs() -> dict:
         DEV_SEATS=6,
         DEV_USERS=("alice", "bob"),
         DEV_START_POINTS=1000,
+        DEV_PASSWORD="devpass123",
+        DEV_KUSER="00112233445566778899aabbccddeeff",
     )
 
 
@@ -118,3 +120,11 @@ def test_missing_field_raises_no_silent_default():
 def test_dev_users_requires_nonempty():
     with pytest.raises(ValidationError):
         _build(DEV_USERS=())
+
+
+def test_dev_kuser_must_be_16_byte_hex():
+    # DEV_KUSER 须是 32 位小写 hex(=16B SM4 密钥);非 hex / 长度不符 → 拒(启动即崩,不偷偷跑坏密钥)。
+    with pytest.raises(ValidationError):
+        _build(DEV_KUSER="not-hex")
+    with pytest.raises(ValidationError):
+        _build(DEV_KUSER="00112233")  # 太短(8 hex = 4B)
