@@ -72,6 +72,8 @@ class GameConfig(BaseSettings):
     PWD_HASH_ROUNDS: int = Field(ge=1, le=100000)  # 密码哈希 SM3 迭代轮数;注册/改密调 auth.passwords.hash_password 时传(拉伸抬高暴力成本)
     WS_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576)  # 逐帧信道单帧字节上限;SecureChannel.open 拒超大帧(防解析放大)
     SESSION_TTL_SECONDS: int = Field(ge=60, le=86400)  # ws 会话 token 有效期(秒);SessionStore exp 兜底,客户端到期前无感轮换
+    REST_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576)  # REST 加密信封字节上限;open_envelope 拒超大信封(防解析放大,见 changes/0062)
+    REST_REPLAY_WINDOW: int = Field(ge=1, le=4096)  # REST 防重放滑动窗宽度(容忍多深的并发/乱序请求;更旧一律拒,见 changes/0062)
 
     # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数

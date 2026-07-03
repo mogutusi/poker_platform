@@ -26,6 +26,7 @@ from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
 from app.rest.login import make_login_router
+from app.rest.profile import make_profile_router
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
@@ -195,6 +196,8 @@ def create_app() -> FastAPI:
     app.include_router(make_hands_router(lambda: shell.sessionmaker))
     # 登录端点(P5:K_user 护密码、铸会话、K_user 加密下发 session,见 app/rest/login.py)。sessionmaker/session_store 迟绑。
     app.include_router(make_login_router(lambda: shell.sessionmaker, shell.session_store))
+    # 用户资料(P5 REST 加密信封首个消费者:POST /user/me 走会话密钥信封,见 app/rest/profile.py / changes/0062)。
+    app.include_router(make_profile_router(lambda: shell.sessionmaker, shell.session_store))
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]

@@ -11,7 +11,7 @@
 1. **读 DB,不读 `world`(本篇三模块)**:排行榜/历史/资料读的是 delayDB 落库后的值,**比内存滞后**——展示完全够用;**实时判定一律以内存为准**(下注、余额够不够在 reduce 里判,不在 REST)。
    - **唯一例外 · `GET /lobby/rooms`**(见 [lobby.md](lobby.md),0048 落地):它读 **committed `world.rooms`**,不读 DB——因为**房间花名册/头数是内存权威、从不落库**(storage.md:房态不持久,DB 里根本没有),与这三个「读结算后落库数据」的模块正交。它仍守「只读、可滞后、不做实时裁定」;读法是纯同步无 `await` 的投影,对唯一写者 GameLoop 原子、不撕裂(同 [presence.md](presence.md))。
 2. **请求级 `DBsession`**:每请求一个 session,与 PersistWriter 的写 session 互不复用(见 [db.md](db.md));读路径无行锁。
-3. **鉴权走加密信封**:登录后 REST 与 ws 走**同一把会话密钥**——请求/响应体套 `selector‖iv‖ct‖mac`(`selector=session_id` → 查会话取密钥+身份),**解密即认证、无 JWT**(见 [auth.md](auth.md) §加密信道 / [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
+3. **鉴权走加密信封(已落地 [0062](refactor/changes/0062-p5-rest-envelope-user-me.md))**:需身份的端点请求为 `POST {sid, frame}`、响应 `{frame}`(`frame`=hex(iv‖ct‖mac),REST 域密钥 + 每会话滑动窗防重放 + 响应 seq 回显绑定),**解密即认证、无 JWT**——助手在 [app/rest/secure.py](../app/rest/secure.py)(`open_request`/`seal_response`),见 [auth.md](auth.md) §加密信道「REST 信封」。**公开读(本页 lobby/leaderboard/hands)留明文**(无隐私,明示接受;要全量加密再收编)。
 4. **wire/DTO 同源**:REST 响应模型也是 Pydantic,经 OpenAPI → TS 生成,前端不手写(见 [wire.md](wire.md))。
 
 ## 排行榜 leaderboard —— 已落地(0050)
@@ -38,15 +38,16 @@ GET /hands?room=&user=&limit=&before=  →  [HandRecordView]   (游标分页,新
 - 分页用 `before`(游标),不用 OFFSET:游标 = **`HandRecord.id`**(自增 PK,单调唯一,事件写按手尾追加;比 `end_time` 免并列),`before=<id>` → `id < before ORDER BY id DESC LIMIT n`;`id` 兼作 DTO 里「下一页游标」。`limit` 由 `gameconfig.HANDS_DEFAULT_LIMIT`/`MAX_LIMIT` 兜。**dev 无鉴权**(P5 上加密信道时可要求仅查自己)。
 - **room 列由来**(0052):早先 `HandRecord` 无 `room` 列、room 仅在 `dedupe_key="room:seq"`,`dedupe_key LIKE` 对动态房名(通配符/`:`)脆弱,故 0051 推迟 room 过滤;0052 给 `HandRecord` 加 denormalized `room` 列(改 `HandRecordWrite`+reduce+orm_persister+迁移 `010d8e8a08d7`)兑现之(见 [changes/0052](refactor/changes/0052-handrecord-room-column.md))。
 
-## 用户资料 profile
+## 用户资料 profile —— /user/me 已落地(0062,首个信封消费者)
 
 ```
-GET   /user/me            →  { name, nickname, points, ... }     # points 取 DB(滞后)
-PATCH /user/nickname      →  改昵称(仅大厅)
-PATCH /user/password      →  改密码(SM3+盐+迭代,见 auth.md)
+POST  /user/me            →  信封内 { name, nickname, points }   # 已落地(0062):app/rest/profile.py,points 取 DB(滞后)
+PATCH /user/nickname      →  改昵称(仅大厅;待落地,走同一信封)
+PATCH /user/password      →  改密码(SM3+盐+迭代,见 auth.md;待落地,走同一信封)
 ```
 
-- **`GET /user/me` 的 `points`** 取 DB(滞后);**精确余额在 ws**(进房后 `StateSnapshot` / 买入广播给的是内存权威值)。大厅展示用 DB 近似值即可。
+- **`/user/me` 走加密信封**(共同原则 3):`POST {sid, frame}`(`/user/me` 无参,内层 `{}`)→ 身份 = 会话 `name` → 读 DB 投影(`db/queries.load_profile_by_name`,**不带** hash/k_user 秘密列)→ 信封封回。信封失败统一 401;信封验过后的 DB 错/行缺失如实 500(非鉴权问题)。
+- **`points`** 取 DB(滞后);**精确余额在 ws**(进房后 `StateSnapshot` / 买入广播给的是内存权威值)。大厅展示用 DB 近似值即可。
 - **改昵称:仅当用户不在任何房间**(你的决策)。`nickname` 是 `world` 的键(座位/`contributed`/ConnectionManager 全按它),在用时改会让键错乱;大厅用户不在 `world.users`,改它安全。
   - **判定"是否在房" + 连接重挂的完整机制见 [presence.md](presence.md)**:`current_room(nick) is None`(在大厅)才允许;改名后若有 live 连接,把 ConnectionManager 从 `old_nick` 重挂到 `new_nick`(`rename`),并更新 DB/会话表的 nickname。
   - 唯一性:`nickname` 全局唯一,改名走唯一约束校验。

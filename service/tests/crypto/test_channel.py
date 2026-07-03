@@ -13,9 +13,13 @@ from app.auth.channel import (
     _IV_BYTES,
     _SM4_BLOCK_BYTES,
     FrameError,
+    ReplayWindow,
     SecureChannel,
     derive_keys,
+    derive_rest_keys,
     hmac_sm3,
+    open_envelope,
+    seal_envelope,
 )
 
 _MAX = 65536  # 测试用单帧上限
@@ -211,3 +215,93 @@ def test_fuzz_open_never_crashes():
     for pos in range(len(real)):
         with pytest.raises(FrameError):
             SecureChannel.derive(token, _MAX).open(_flip(real, pos))
+
+
+# ── REST 域(0062):derive_rest_keys / 无状态信封 / 跨信道拒 / ReplayWindow ──
+
+
+def test_derive_rest_keys_domain_separated_from_ws():
+    # 同一 token 派生的 REST 密钥对与 ws 密钥对四钥互异(info 0x03/0x04 vs 0x01/0x02 分域)。
+    token = secrets.token_bytes(32)
+    ws_enc, ws_mac = derive_keys(token)
+    rest_enc, rest_mac = derive_rest_keys(token)
+    assert len(rest_enc) == 16 and len(rest_mac) == 32
+    assert derive_rest_keys(token) == (rest_enc, rest_mac)  # 确定
+    assert len({ws_enc, rest_enc, ws_mac[:16], rest_mac[:16]}) == 4  # 四钥两两不同
+
+
+def test_stateless_envelope_round_trip_echoes_seq():
+    # 无状态 seal/open:调用方给 seq(REST 响应回显绑定的基础),round-trip 还原 seq + 明文。
+    enc, mac = derive_rest_keys(secrets.token_bytes(32))
+    frame = seal_envelope(enc, mac, 42, b'{"limit":10}')
+    seq, plaintext = open_envelope(enc, mac, frame, _MAX)
+    assert (seq, plaintext) == (42, b'{"limit":10}')
+
+
+def test_cross_protocol_frame_rejected_by_mac():
+    # 跨信道重放被密钥分域根治:ws 密钥封的帧喂 REST 密钥 open(或反向)→ bad_mac(结构同、密钥异)。
+    token = secrets.token_bytes(32)
+    ws_enc, ws_mac = derive_keys(token)
+    rest_enc, rest_mac = derive_rest_keys(token)
+    ws_frame = seal_envelope(ws_enc, ws_mac, 7, b'{"type":"leave_room"}')
+    with pytest.raises(FrameError) as ei:
+        open_envelope(rest_enc, rest_mac, ws_frame, _MAX)  # ws 帧 → REST 域
+    assert ei.value.reason == "bad_mac"
+    rest_frame = seal_envelope(rest_enc, rest_mac, 7, b"{}")
+    with pytest.raises(FrameError) as ei:
+        open_envelope(ws_enc, ws_mac, rest_frame, _MAX)  # REST 信封 → ws 域
+    assert ei.value.reason == "bad_mac"
+
+
+def test_replay_window_monotonic_and_duplicate():
+    w = ReplayWindow(4)
+    assert w.accept(1) and w.accept(2) and w.accept(3)  # 顺序推进
+    assert not w.accept(2)  # 窗内重复 = 重放,拒
+    assert not w.accept(0) and not w.accept(-5)  # 非正 seq 一律拒
+
+
+def test_replay_window_accepts_out_of_order_within_window():
+    # 并发/乱序:seq 5 先到、3 后到(窗宽 4,floor=1)→ 都收;3 再来 = 重放拒。
+    w = ReplayWindow(4)
+    assert w.accept(5)
+    assert w.accept(3)
+    assert not w.accept(3)
+
+
+def test_replay_window_rejects_too_old():
+    # 滑出窗口(seq ≤ top-size)无从判重 → 一律拒:top=10、size=4 → floor=6,seq 6 拒、7 收。
+    w = ReplayWindow(4)
+    assert w.accept(10)
+    assert not w.accept(6)
+    assert w.accept(7)
+
+
+def test_replay_window_slides_and_prunes():
+    # 推进时剔除滑出的旧项(内部集合不无界长):大步推进后旧 seq 全拒、窗内新 seq 仍可乱序收。
+    w = ReplayWindow(3)
+    assert all(w.accept(s) for s in (1, 2, 3))
+    assert w.accept(100)  # top=100,floor=97;1/2/3 全滑出
+    assert not w.accept(3) and not w.accept(97)  # 太旧
+    assert w.accept(99) and w.accept(98)  # 窗内乱序
+    assert not w.accept(99)  # 重复
+    assert len(w._seen) <= 3  # 集合被剪(不超窗宽)
+
+
+def test_secure_channel_delegates_to_stateless_envelope():
+    # 委托回归:SecureChannel.seal 出的帧,用同钥无状态 open_envelope 可拆且 seq 从 1 递增(0062 抽取未变行为)。
+    token = secrets.token_bytes(32)
+    ch = SecureChannel.derive(token, _MAX)
+    enc, mac = derive_keys(token)
+    for expect_seq in (1, 2, 3):
+        seq, plaintext = open_envelope(enc, mac, ch.seal(b"x"), _MAX)
+        assert (seq, plaintext) == (expect_seq, b"x")
+
+
+def test_kdf_info_bytes_pinned_known_answer():
+    # 客户端契约钉死(known-answer):ws=info 0x01/0x02、REST=info 0x03/0x04(auth.md §加密信道)。
+    # 不钉此项则悄悄换 info 字节(如 enc/mac 互换)全绿——前端按文档实现即全线 MAC 败(杀该变异)。
+    from ttxsgm import KDF_sm3
+
+    token = secrets.token_bytes(32)
+    assert derive_keys(token) == (KDF_sm3(token + b"\x01", 16), KDF_sm3(token + b"\x02", 32))
+    assert derive_rest_keys(token) == (KDF_sm3(token + b"\x03", 16), KDF_sm3(token + b"\x04", 32))

@@ -33,6 +33,17 @@ async def load_user_for_login(
         return LoginUser(user.id, user.name, user.nickname, user.hash_password, user.k_user)
 
 
+async def load_profile_by_name(
+    sessionmaker: async_sessionmaker[AsyncSession], name: str
+) -> tuple[str, str, int] | None:
+    # 按登录账号 name 读资料投影 (name, nickname, points) 供 POST /user/me(rest.md §用户资料)。
+    # points 是 DB 结算值(滞后;精确余额在 ws,rest.md 共同原则 1);无此行返回 None(会话在、行没了 = 内部不一致)。
+    # 与 load_user_for_login 分开:资料投影不带 hash_password/k_user 秘密列,端点拿不到就漏不了。
+    async with sessionmaker() as session:
+        user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()
+        return None if user is None else (user.name, user.nickname, user.points)
+
+
 def _as_utc(dt: datetime) -> datetime:
     # DM 时间戳一律 UTC(shell 盖 datetime.now(timezone.utc))。sqlite 读 DateTime(timezone=True) 丢 tz 标签 → naive;
     # 补回 UTC,使登录补收的 wire 形(DMDelivered.created_at / DMRead.read_through)与实时路径一致(序列化均带 Z,

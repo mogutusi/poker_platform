@@ -8,7 +8,7 @@
 import secrets
 from dataclasses import dataclass, field
 
-from app.auth.channel import SecureChannel
+from app.auth.channel import ReplayWindow, SecureChannel
 
 _SESSION_ID_BYTES = 16  # session_id 随机字节数(token_urlsafe 前);公开句柄,进 ws?sid= 明文无妨
 _SESSION_TOKEN_BYTES = 32  # session_token 秘密字节数;派生逐帧 enc/mac 密钥,永不再上线
@@ -22,6 +22,7 @@ class Session:
     token: bytes = field(repr=False)  # 32B 会话票据(= session_token;秘密,派生逐帧密钥)。repr=False:脱敏红线,防误 print/log 泄露(log.md)
     expires_at: float  # 过期墙钟(epoch 秒);now >= 此值即失效(服务器 exp 兜底)
     channel: SecureChannel | None = field(default=None, repr=False)  # 本会话逐帧信道(ws 首次握手 get-or-derive 缓存;跨重连复用 → seq 逐会话连续,见 changes/0061)。repr=False:含密钥,脱敏红线
+    rest_window: ReplayWindow | None = field(default=None, repr=False)  # 本会话 REST 防重放滑动窗(首个 REST 请求 lazy 建;与 ws seq 分域独立,见 changes/0062)
 
 
 class SessionStore:

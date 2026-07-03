@@ -117,7 +117,7 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 ```
 
 - `client_nonce` + 短 `exp` 防登录包重放。
-- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/密码错一律 None、绝不崩;`client_nonce` 透出供端点做重放防护)。**登录端点已落地**([changes/0059](refactor/changes/0059-p5-login-endpoint.md)):`app/rest/login.py` `make_login_router` —— `{name,iv,blob}` → `load_user_for_login` → `authenticate` → `SessionStore.create` → `K_user` 加密下发 `{session_id, session_token, exp}`(**无 JWT**);**fail-closed 统一 401**(不泄未知账号/密码错/blob 坏之别);挂 `create_app` + `SessionStore` 进 DevShell。**dev 种子已 login-enable**([changes/0060](refactor/changes/0060-p5-dev-seed-login-enabled.md)):`seed_dev_users` 给 DEV_USERS 补 `name`=昵称 / 共享 `DEV_PASSWORD` 哈希 / 共享 `DEV_KUSER`(dev-only),故 DEV_USERS 可真登录(生产走每用户带外 K_user)。**ws 信道接线已落地**([changes/0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):登录拿到 `{session_id, session_token}` 后,客户端以 `/ws?sid=<session_id>` 连接,此后每帧走会话密钥信封(Receiver/Sender 接进 `SecureChannel`,见 §加密信道)。**余**:client_nonce/exp 重放守卫 + REST 信封中间件。
+- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/密码错一律 None、绝不崩;`client_nonce` 透出供端点做重放防护)。**登录端点已落地**([changes/0059](refactor/changes/0059-p5-login-endpoint.md)):`app/rest/login.py` `make_login_router` —— `{name,iv,blob}` → `load_user_for_login` → `authenticate` → `SessionStore.create` → `K_user` 加密下发 `{session_id, session_token, exp}`(**无 JWT**);**fail-closed 统一 401**(不泄未知账号/密码错/blob 坏之别);挂 `create_app` + `SessionStore` 进 DevShell。**dev 种子已 login-enable**([changes/0060](refactor/changes/0060-p5-dev-seed-login-enabled.md)):`seed_dev_users` 给 DEV_USERS 补 `name`=昵称 / 共享 `DEV_PASSWORD` 哈希 / 共享 `DEV_KUSER`(dev-only),故 DEV_USERS 可真登录(生产走每用户带外 K_user)。**ws 信道接线已落地**([changes/0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):登录拿到 `{session_id, session_token}` 后,客户端以 `/ws?sid=<session_id>` 连接,此后每帧走会话密钥信封(Receiver/Sender 接进 `SecureChannel`,见 §加密信道)。**REST 信封亦已落地**([changes/0062](refactor/changes/0062-p5-rest-envelope-user-me.md),信封助手 + 路由工厂,非 middleware)。**余**:client_nonce/exp 重放守卫。
 - 会话表是**内存 shell 状态**(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效→重新登录,可接受。**已落地** [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):`SessionStore`(`create(name,nickname,now)->(session_id, Session)` / `lookup(sid,now)`(过期删返 None)/ `revoke` / `prune(now)`)+ `Session{name,nickname,token,expires_at}`;`session_id=token_urlsafe`(公开句柄)、`token=token_bytes(32)`(秘密,派生逐帧密钥见 [channel.py](../app/auth/channel.py))。时钟外移(`now` 显式传,同 timer.md)、`exp=now+SESSION_TTL_SECONDS` 服务器兜底。**余**:`/user/login` 端点铸会话 + ws 握手 `?sid=` 查表(后续砖)。
 - **登录只返回会话凭证(无 JWT)**:响应(被 `K_user` 加密)含 `{session_id, session_token, exp}`。`session_id` 公开、当报文 `selector`;`session_token` 只留客户端本地、派生 enc/mac 密钥。之后 ws 与 REST 都用会话密钥加密(见 §加密信道 / [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 
@@ -128,13 +128,14 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
 **密钥来自会话密钥**(登录下发的 `session_token`,永不再上线):
 
 ```
-enc_key = KDF_sm3(session_token + b"\x01", 16)   # SM4 128-bit
-mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
+enc_key = KDF_sm3(session_token + b"\x01", 16)   # ws SM4 128-bit
+mac_key = KDF_sm3(session_token + b"\x02", 32)   # ws HMAC-SM3
+# REST 另派一对(info b"\x03"/b"\x04",derive_rest_keys):与 ws 分域,跨信道重放 MAC 必败(0062)
 ```
 
 不再逐连接派 `server_nonce`——REST 无连接上下文,须「查会话即解」;跨重连重放改由**按会话计的 seq** 挡(见下)。
 
-**信封格式**(出入站对称,各方向各自 seq):
+**信封格式**(出入站对称;seq 计法分信道:ws 各方向各自计数、REST 响应回显请求 seq,见下/0062):
 
 ```
 报文 = selector ‖ iv(16B) ‖ ct ‖ mac(32B)
@@ -143,13 +144,22 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
   mac = hmac_sm3(mac_key, iv ‖ ct)                        # encrypt-then-MAC(mac 不盖 selector:错 selector→错密钥→MAC 必败,完整性隐式受保;故原语传输无关)
 ```
 
-**入站铁序(必须照此)**:读 `selector` → 查会话取 `enc_key`/`mac_key`/`user`(查不到/过期 → 拒)→ **① 验 MAC**(`compare_digest` 常量时间)→ **② 才 `sm4_cbc_dec` 解密** → 取出 `seq ‖ plaintext_json` → **③ 验 `seq > 本会话已见`**(防重放,过则推进)→ `plaintext`=wire `ClientMessage`、身份=会话 `user` → 交业务(`to_command(origin=nick)` → inbox / REST handler)。任一步失败:丢弃 +(ws)关连接 /(REST)拒。**绝不先解密后验**——库去填充是裸的,解未验数据有 padding-oracle 风险,故 **MAC 必在解密前**。
+**入站铁序(必须照此)**:读 `selector` → 查会话取 `enc_key`/`mac_key`/`user`(查不到/过期 → 拒)→ **① 验 MAC**(`compare_digest` 常量时间)→ **② 才 `sm4_cbc_dec` 解密** → 取出 `seq ‖ plaintext_json` → **③ 验 seq 新鲜**(ws:`seq > 本会话已见` 严格单调;REST:滑动窗判重,见「REST 信封」)→ `plaintext`=wire `ClientMessage`、身份=会话 `user` → 交业务(`to_command(origin=nick)` → inbox / REST handler)。任一步失败:丢弃 +(ws)关连接 /(REST)拒。**绝不先解密后验**——库去填充是裸的,解未验数据有 padding-oracle 风险,故 **MAC 必在解密前**。
 
-> **seq 放密文内、解密后验**:内网无 DDoS 顾虑,不必解密前廉价拒重放;seq 进密文更保密、被 MAC 罩住改不了。重放的真包 MAC 能过但 `seq ≤ 已见` → 第 ③ 步拒。**seq 按会话计**(非按连接):跨重连旧包 seq 不新即被挡;进程重启会话表清空 → 会话失效 → 重登换钥,seq 从头也安全。REST 并发的 seq 处理(滑动窗 vs 只读接受重放)见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md)。
+> **seq 放密文内、解密后验**:内网无 DDoS 顾虑,不必解密前廉价拒重放;seq 进密文更保密、被 MAC 罩住改不了。重放的真包 MAC 能过但 seq 不新鲜 → 第 ③ 步拒。**seq 按会话计**(非按连接):跨重连旧包 seq 不新即被挡;进程重启会话表清空 → 会话失效 → 重登换钥,seq 从头也安全。0057 留白的「REST 并发 seq 处理」已按**滑动窗**落地(0062,见「REST 信封已落地」)。
 
 **`hmac_sm3` 是带密钥的 MAC(两输入)**:`hmac_sm3(mac_key, msg)` —— key 证明持钥(=认证)、msg 防篡改;裸 `sm3(msg)` 无 key 谁都能算,故用 HMAC(标准 ipad/opad 构造,兼避裸 SM3 长度扩展)。**逐帧加解密原语**(`hmac_sm3`/`derive_keys(session_token)`/`SecureChannel`(`derive(token,max)`/`seal`/`open`))已随 [0054](refactor/changes/0054-p5-secure-frame-channel.md) 起、**并随 [0058](refactor/changes/0058-p5-session-channel-rework.md) 改造到本信封/顺序**(逐会话密钥[去 `server_nonce`] + seq 入 ct + `MAC→decrypt→seq` + mac 盖 `iv‖ct`)。
 
-**ws 接线已落地([0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))**:`/ws?sid=` 握手查会话 → get-or-derive **挂 Session 的** `SecureChannel`(逐会话、跨重连复用 → seq 连续)→ `Connection.channel` 引用之;Receiver 收二进制帧 `open`(验 MAC→解密→验 seq)、Sender `seal` 出站,**core/reduce 全程不知有加密**。**ws 的 selector 落在握手 URL(`?sid=`)、逐帧省略**(连接已绑会话,`open` 收 `iv‖ct‖mac`);**REST 无连接上下文才逐请求带 selector**——上面「报文=selector‖iv‖ct‖mac」是 REST/通用形态,ws 帧不含 selector。**客户端契约**:同一会话跨重连须**保留 seq**(仅新登录换会话才重置),否则重连首帧 seq 回退被 `stale_seq` 拒。**余(后续砖)**:REST 信封中间件(逐请求 selector + REST 并发 seq 策略)、client_nonce 重放守卫、K_user 每周轮换;dev 明文 `?nick=` 端点并存,前端切加密后退役。
+**ws 接线已落地([0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))**:`/ws?sid=` 握手查会话 → get-or-derive **挂 Session 的** `SecureChannel`(逐会话、跨重连复用 → seq 连续)→ `Connection.channel` 引用之;Receiver 收二进制帧 `open`(验 MAC→解密→验 seq)、Sender `seal` 出站,**core/reduce 全程不知有加密**。**ws 的 selector 落在握手 URL(`?sid=`)、逐帧省略**(连接已绑会话,`open` 收 `iv‖ct‖mac`);**REST 无连接上下文才逐请求带 selector**——落地形是 JSON `{sid, frame}`(`sid` 即 selector、`frame`=hex(iv‖ct‖mac),见「REST 信封已落地」),上面「报文=selector‖iv‖ct‖mac」是其概念形,ws 帧不含 selector。**客户端契约**:同一会话跨重连须**保留 ws seq**(仅新登录换会话才重置),否则重连首帧 seq 回退被 `stale_seq` 拒。**余(后续砖)**:client_nonce 重放守卫、K_user 每周轮换;dev 明文 `?nick=` 端点并存,前端切加密后退役。
+
+**REST 信封已落地([0062](refactor/changes/0062-p5-rest-envelope-user-me.md))**,与 ws 半边四点分化:
+
+- **密钥分域**:REST 用 `derive_rest_keys(session_token)`(info `0x03/0x04`),与 ws(`0x01/0x02`)四钥互异——截获的 REST 信封注入 ws(或反向)MAC 必败,**跨信道重放根治于密钥层**;副产品是两边 seq 空间天然独立、客户端各自计数。
+- **wire 形(hex JSON,同 login)**:请求 `POST` body `{sid, frame}`(`frame`=hex(iv‖ct‖mac),内层明文 = 端点参数 JSON,无参为 `{}`);响应 `{frame}`。信封原语复用无状态 `seal_envelope`/`open_envelope`(`SecureChannel.seal/open` 即其委托 + ws 严格单调策略)。
+- **防重放 = 每会话滑动窗**(`ReplayWindow`,IPsec 式,挂 `Session.rest_window`,宽度 `REST_REPLAY_WINDOW`):`seq > top` 推进、窗内未见过的乱序迟到收、重复/太旧拒——REST 并发请求可能乱序到达,ws 的严格单调会误拒(0057 决策 3 落地)。**客户端重试规则**:重试 = 新请求,**重封新 seq**;响应丢失后原帧重投必被窗判重 → 401(服务器无从分辨重试与重放,fail-closed),别拿 401 当「需重登」的唯一信号盲目重登——先用新 seq 重试一次。
+- **响应 seq 回显请求 seq(请求-响应绑定)**:不设第二个服务器出站计数器;客户端验「seq == 我发的」即绑定——同会话请求 seq 严格递增不复用,旧响应答不了任何后续请求。**此处偏离 0057「各方向各自计数」**(其 §4 本就注明细节实现砖定),绑定性更强且免第二计数器。**已知可接受面(记档)**:请求/响应共用同一对 REST 密钥,把请求帧**反射**回客户端当响应能过 MAC+seq,但内层是请求参数 JSON、响应形状解析必败——攻击者读不到任何东西,只是客户端一次解析错误(nuisance);要根治需再分收发两对密钥,本规模不值。
+- **错误两段式**:信封任何一步不过(sid 不识/过期、hex/结构/MAC/解密坏、seq 重放、内层非 JSON 对象)→ **统一 401** fail-closed(同 login);信封验过后的失败(DB 错等)→ **明文 500 无 body 细节**(已认证,非鉴权问题,客户端不必重登)。
+- **覆盖面(决策,可改)**:只有**需身份**的端点走信封(首个消费者 `POST /user/me`,见 [rest.md](rest.md));公开读(lobby/rooms、leaderboard、hands)**留明文**——三者无隐私(房配/头数/结算分/无底牌记录),rest.md 本就明示可留公开。日后要「一切 REST 加密」再把读端点改 POST 信封收编。
 
 **身份 = 被认证的会话,不是自报的 `selector`。** selector 只是查密钥的公开句柄;真认证是「用该会话密钥解出且 MAC 验过」。报文里若还带自报 id,只能放**密文内**、由服务器校验等于会话身份(纵深防御),绝不信明文。
 
@@ -165,7 +175,7 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
 - **密钥分发**:`K_user` 必须带外安全送达,别走同一条裸 ws/http;泄露就轮换。
 - **全局密钥的内部威胁**:用全局一把则内部人可解他人流量——选每用户密钥规避。
 - **前向保密只到"轮换窗口"粒度**:定期换钥(见「会话过期与密钥轮换」)让单把 `session_token` 泄露**只暴露它那一个 `SESSION_TTL` 窗口**的流量,不是全历史。但 **`K_user` 泄露仍是全损**——它能派生任意未来会话、解登录响应,直到 `K_user` 轮换。`K_user` 是真正要守住的根。积分非货币,这个边界接受。
-- **实现正确性(最易翻车处)**:IV **每帧新鲜随机**(别复用、别用计数器当 IV);MAC **先验后解**且**常量时间**比对;`seq` **严格递增**且双向各自计数;`session_token` 只留客户端内存、不落 URL/日志/storage;token 设 `exp` 并可吊销。
+- **实现正确性(最易翻车处)**:IV **每帧新鲜随机**(别复用、别用计数器当 IV);MAC **先验后解**且**常量时间**比对;seq 新鲜性照各信道之法(ws **严格递增**且双向各自计数;REST 请求过滑动窗、响应回显请求 seq,见「REST 信封已落地」);`session_token` 只留客户端内存、不落 URL/日志/storage;token 设 `exp` 并可吊销。
 - **脱敏照旧**:`K_user`/`token`/`password` 任何级别都不进日志(并入 [log.md](log.md) 的红线,和 `hole_cards`/`deck` 同级)。
 - **DoS 不在范围**:RST 切连无法防,客户端断线重连即可(走 [timer.md](timer.md) 的占座/重连窗口)。
 
@@ -175,7 +185,9 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # HMAC-SM3
 class GameConfig(BaseSettings):
     PWD_HASH_ROUNDS: int      = Field(ge=1, le=100000)   # 密码哈希迭代轮数(已落地 0053)
     SESSION_TTL_SECONDS: int  = Field(ge=60, le=86400)   # 会话 token 有效期(已落地 0055,SessionStore 消费)
-    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # 单帧上限,防超大帧(已落地 0054)
+    WS_FRAME_MAX_BYTES: int   = Field(ge=256, le=1048576) # ws 单帧上限,防超大帧(已落地 0054)
+    REST_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576) # REST 信封上限(已落地 0062)
+    REST_REPLAY_WINDOW: int   = Field(ge=1, le=4096)      # REST 防重放滑动窗宽度(已落地 0062)
     # K_user / 盐 等秘密存 DB,不进 env
 ```
 
