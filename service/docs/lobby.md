@@ -68,7 +68,7 @@ GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lob
 - 实时头数/状态来自 `world.rooms[r]` 的统计(**committed 只读、展示用、可滞后一拍**;不做实时判定)。**这是唯一读 `world` 的 REST 端点**——房态内存权威、从不落库(见 [storage.md](storage.md) / [rest.md](rest.md) §共同原则);投影 `list_rooms` 纯同步无 `await`,对唯一写者 GameLoop 原子读、不撕裂(同 [presence.md](presence.md) 只读范式)。
 - **v1 客户端轮询**(≤20 人,几秒一次足够);实时推送(`LobbyBroadcast`)是 future,见「待定」。
 - `RoomMeta` 是 **REST DTO ≠ `Room`**:完整游戏状态(`deck`/`hand`/各人筹码)绝不上 lobby(见 [wire.md](wire.md));它**不进 ws `ServerMessage` 联合**(非 ws 消息),故不进 `wire.gen.ts`——前端 REST 类型走 openapi(P7 无 node 待解,见 [changes/0048](refactor/changes/0048-rest-lobby-rooms.md))。
-- **dev 明文无鉴权**(与 dev ws 端点一致);lobby-rooms 只暴露房配 + 头数(无隐私)。P5 上 JWT 时按 [rest.md](rest.md)「REST 走 JWT」补。
+- **dev 明文无鉴权**(与 dev ws 端点一致);lobby-rooms 只暴露房配 + 头数(无隐私)。P5 加密信道上线时按 [rest.md](rest.md)「REST 走会话密钥信封」补(无 JWT,0057)。
 
 ## 改昵称(你的决策:只能不在房间时)
 

@@ -15,14 +15,24 @@ _WS_CLOSED = object()  # 哨兵:close() 喂入,唤醒阻塞的 receive_text → 
 
 
 class FakeWS:
-    # 最小 ws 替身:记录发出的文本、可喂入收到的文本、可关闭(close 唤醒并断开 receive)。
+    # 最小 ws 替身:记录发出的文本/二进制帧、可喂入收到的帧、可关闭(close 唤醒并断开 receive)。
+    # 明文路用 text(feed/sent),加密路用 bytes(feed_bytes/sent_bytes);同一连接只走一路。
     def __init__(self) -> None:
-        self.sent: list[str] = []
+        self.sent: list[str] = []  # send_text 记录(明文 dev 帧)
+        self.sent_bytes: list[bytes] = []  # send_bytes 记录(加密二进制帧)
         self._inbox: "asyncio.Queue" = asyncio.Queue()
+        self.accepted = False
         self.closed = False
+        self.close_code: int | None = None
+
+    async def accept(self) -> None:
+        self.accepted = True  # ws 握手接受(端点先 accept 再鉴权)
 
     async def send_text(self, text: str) -> None:
         self.sent.append(text)
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent_bytes.append(data)
 
     async def receive_text(self) -> str:
         item = await self._inbox.get()
@@ -30,12 +40,22 @@ class FakeWS:
             raise RuntimeError("ws closed")  # 真实 ws 此处抛 WebSocketDisconnect → Receiver 退出
         return item
 
+    async def receive_bytes(self) -> bytes:
+        item = await self._inbox.get()
+        if item is _WS_CLOSED:
+            raise RuntimeError("ws closed")
+        return item
+
     def feed(self, text: str) -> None:
-        self._inbox.put_nowait(text)  # 测试侧:模拟客户端发来一帧
+        self._inbox.put_nowait(text)  # 测试侧:模拟客户端发来一明文帧
+
+    def feed_bytes(self, data: bytes) -> None:
+        self._inbox.put_nowait(data)  # 测试侧:模拟客户端发来一加密帧
 
     async def close(self, code: int = 1000) -> None:
         self.closed = True
-        self._inbox.put_nowait(_WS_CLOSED)  # 唤醒阻塞的 receive_text,使其报错退出
+        self.close_code = code
+        self._inbox.put_nowait(_WS_CLOSED)  # 唤醒阻塞的 receive_*,使其报错退出
 
 
 def make_conn(nick: str) -> Connection:

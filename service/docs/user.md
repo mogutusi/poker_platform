@@ -31,7 +31,7 @@ class World:
     users: dict[str, UserState]     # nickname -> 内存权威;由 JoinRoom 命令载入(见「生命周期」)
 ```
 
-**区分两个 User**:内存的 `UserState`(在 `world`,core 读写,只放需要权威的字段如 `points`)vs DB 的 `User` 行(SQLModel,PersistWriter 落库,放鉴权字段等)。core 只碰前者;`Persist` 是唯一过桥点。**别把 `hash_password`/`refresh_token` 放进 `UserState`**——那不是游戏权威状态。
+**区分两个 User**:内存的 `UserState`(在 `world`,core 读写,只放需要权威的字段如 `points`)vs DB 的 `User` 行(SQLModel,PersistWriter 落库,放鉴权字段等)。core 只碰前者;`Persist` 是唯一过桥点。**别把 `hash_password`/`k_user`/`session_token` 放进 `UserState`**——那是 DB/会话表的鉴权秘密(见 [auth.md](auth.md)),不是游戏权威状态。
 
 ## 在 reduce 里怎么改积分(买入为例)
 

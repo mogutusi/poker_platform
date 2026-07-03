@@ -1,5 +1,5 @@
 # 连接登记/路由/顶替(见 connection.md)。连接绑 nick、不绑房间(模型 2);
-# 明文 dev 版:无 SecureChannel,outbound 装明文 ServerMessage(Sender 序列化),加密留 P5。
+# channel=None ⇒ 明文 dev 帧(?nick=);channel 非 None ⇒ 加密 ws 帧(?sid=,逐会话信道,见 changes/0061)。
 
 import asyncio
 import time
@@ -7,28 +7,31 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import gameconfig
+from app.auth.channel import SecureChannel
 from app.shell.ratelimit import TokenBucket
 
 
 @dataclass
 class Connection:
     nick: str  # 会话身份;一个 nick 全局一条有效连接
-    session_id: str  # 会话句柄(dev 用 nick / 随机),审计/日志关联
-    ws: Any  # 物理 ws(FastAPI WebSocket 或测试 fake);明文 dev 无 SecureChannel
+    session_id: str  # 会话句柄(公开 selector / dev 用 nick),审计/日志关联
+    ws: Any  # 物理 ws(FastAPI WebSocket 或测试 fake)
     outbound: "asyncio.Queue[Any]"  # 有界;装明文 ServerMessage,满 = 慢客户端(见 dispatch._enqueue)
+    channel: SecureChannel | None = None  # 逐会话安全信道(引用会话的 SecureChannel);None=明文 dev 帧、非 None=加密帧(Sender seal / Receiver open,见 changes/0061)
     sender_task: asyncio.Task | None = None  # 本连接 Sender 协程句柄;起 Sender 前为 None,退出/顶替时 cancel
     chat_bucket: TokenBucket | None = None  # 房聊发件人维度令牌桶(每连接,见 messaging.md / ratelimit);create 时建满桶
     dm_bucket: TokenBucket | None = None  # 私信发件人维度令牌桶(每连接,见 messaging.md §私信);与房聊各一桶
     # 注:用户在哪个房间是 world.users[nick].room,不是连接字段(连接绑 nick、不绑房)。
 
     @classmethod
-    def create(cls, nick: str, session_id: str, ws: Any) -> "Connection":
+    def create(cls, nick: str, session_id: str, ws: Any, channel: SecureChannel | None = None) -> "Connection":
         now = time.monotonic()
         return cls(
             nick=nick,
             session_id=session_id,
             ws=ws,
             outbound=asyncio.Queue(maxsize=gameconfig.OUTBOUND_MAX),
+            channel=channel,  # None = 明文 dev(?nick=);非 None = 加密会话信道(?sid=)
             chat_bucket=TokenBucket.create(
                 gameconfig.ROOM_CHAT_RATE_BURST, gameconfig.ROOM_CHAT_RATE_PER_SEC, now
             ),

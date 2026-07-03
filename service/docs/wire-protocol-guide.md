@@ -124,8 +124,15 @@
 **还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
 - 大厅房间列表(REST)。
 
-## 9. 怎么连(Phase D · 已落地)
+## 9. 怎么连
 
-明文 dev WS 端点**已落地**(见 0018,`shell/lifespan.py`):`ws://<host>/dev/ws?nick=<你的昵称>`(**开发用、明文、无加密**),连上即用上面的报文收发。起服务:`cd service && .venv/bin/uvicorn app.shell.lifespan:app`。正式国密加密信道放在**最后**做,对你**透明**——加解密在连接边界,你收发的始终是同样的明文 `ServerMessage`/`ClientMessage` JSON。
+**两个 WS 端点并存**(前端切到加密后,明文端点退役):
+
+- **明文 dev**(`ws://<host>/dev/ws?nick=<你的昵称>`,dev-only、无加密):连上即用上面的报文收发 —— **文本帧**(直接 `JSON.stringify(msg)` / `JSON.parse`)。搭 UI / 联调最省事。
+- **加密**(`ws://<host>/ws?sid=<session_id>`,已落地 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):先 `POST /user/login`(用 `K_user` 加密账密,拿回 `{session_id, session_token}`,见 [auth.md](auth.md) §登录握手),再用 `session_id` 连 `?sid=`;此后每帧是**二进制信封** `iv‖ct‖mac`(会话密钥 SM4 加密 + HMAC-SM3 + seq),你得实现这层帧的加解密(`send/receive` 用 binary)。**载荷仍是同样的明文 `ServerMessage`/`ClientMessage` JSON**——加密只包在外层,`switch(type)` 分发逻辑一字不改。
+
+起服务:`cd service && .venv/bin/uvicorn app.shell.lifespan:app`。
+
+**加密层要点**(实现帧编解时)：① `enc_key=KDF_sm3(session_token+\x01,16)`、`mac_key=KDF_sm3(session_token+\x02,32)`;② 出站 `ct=SM4_CBC(enc_key, iv, seq(8B,BE)‖json)`、`mac=HMAC_SM3(mac_key, iv‖ct)`,帧=`iv‖ct‖mac`;③ 入站**先验 MAC 再解密再验 seq**;④ **seq 逐会话严格递增**,**跨重连要续用同一 seq**(只有重新 `/user/login` 换会话才从头),否则重连首帧会被服务端当重放拒;⑤ `session_id` 只在握手 URL 给一次,逐帧不带。
 
 **握手后**:连上直接进「大厅」(后端 `Connect` 对纯大厅是 no-op),主动发 `join_room{room}` 载入房间(后端读 DB 富化身份/积分,见 0030)。仍可先对着 `wire.gen.ts` 把消息类型、`switch(type)` 分发、UI 组件、桌面状态机用 mock 数据搭起来,再切真 socket。

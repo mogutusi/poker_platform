@@ -1,6 +1,9 @@
-# Receiver:一条 dev 连接的一生(见 connection.md「连接生命周期」,明文版):
-# 登记(可能顶替)→ 起 Sender → 投 Connect → 收帧循环(parse→Command 盖 origin→inbox + heartbeat)→ 退出清理。
-# dev-only:?nick= 明文握手,无 MAC / 无加密;P5 国密信道落地即替换握手与帧编解(dispatch/GameLoop/reduce 不变)。
+# Receiver:一条连接的一生(见 connection.md「连接生命周期」):
+# 登记(可能顶替)→ 起 Sender → 投 Connect → 收帧循环(收→[解密]→parse→Command 盖 origin→inbox + heartbeat)→ 退出清理。
+# 帧编解按 conn.channel 分流(dispatch/GameLoop/reduce 全程不知有加密,守分层):
+#   channel None(dev ?nick=)→ 明文文本帧 receive_text → parse;
+#   channel 非 None(加密 ?sid=)→ 二进制帧 receive_bytes → channel.open(验 MAC→解密→验 seq)→ 明文 → parse(见 changes/0061)。
+# FrameError(伪造/重放/损坏)= 安全信号 → 关连接(区别于「解密成功但 JSON/type 非法」的 INVALID_MESSAGE 续跑)。
 
 import asyncio
 import logging
@@ -11,6 +14,7 @@ import pydantic
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
+from app.auth.channel import FrameError
 from app.core.commands import (
     Command,
     Connect,
@@ -56,9 +60,11 @@ async def run_receiver(
         # 登录补收:读 DB 补发离线期间的未读私信 + 已读回执(shell 路由,不进 GameLoop;best-effort,见 changes/0040)。
         await deliver_dm_catch_up(conn, sessionmaker=sessionmaker)
         while True:
-            raw = await conn.ws.receive_text()  # 让出点
-            timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick)
-            cmd = await _frame_to_command(conn, raw, conns, persist, sessionmaker, history)
+            payload = await _recv_frame(conn)  # 让出点:收帧 + 按 channel 解密/取明文
+            if payload is None:
+                break  # FrameError(伪造/重放/损坏)= 安全信号:关连接(finally 清理),不进业务
+            timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick;仅对已通过完整性校验的帧续命)
+            cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, history)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -75,9 +81,28 @@ async def run_receiver(
                 log.critical("inbox full; could not post Disconnect for nick=%s", conn.nick)
 
 
+async def _recv_frame(conn: Connection) -> str | bytes | None:
+    # 收一帧并归一成「明文载荷(str/bytes)」交 parse:
+    #   channel None(dev)→ 明文文本帧,原样返回;
+    #   channel 非 None(加密)→ 二进制帧 → channel.open(结构→验 MAC→解密→验 seq,见 auth/channel.py)→ 明文 bytes。
+    # 返回 None = FrameError(伪造/重放/损坏):log.warning(只 reason,不含明文/密钥,脱敏红线)+ 关 ws + 让上层 break 关连接。
+    if conn.channel is None:
+        return await conn.ws.receive_text()  # 让出点
+    frame = await conn.ws.receive_bytes()  # 让出点
+    try:
+        return conn.channel.open(frame)
+    except FrameError as e:
+        log.warning("frame rejected nick=%s reason=%s", conn.nick, e.reason)
+        try:
+            await conn.ws.close(code=4400)  # 拒帧即关连接(安全信号);close 幂等失败无害
+        except Exception:
+            pass
+        return None
+
+
 async def _frame_to_command(
     conn: Connection,
-    raw: str,
+    raw: str | bytes,
     conns: ConnectionManager,
     persist: WriteBuffer,
     sessionmaker: async_sessionmaker[AsyncSession],

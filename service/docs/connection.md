@@ -24,21 +24,22 @@
 
 ```python
 @dataclass
-class SecureChannel:                 # auth.md 的逐帧加密状态;per-connection,绝不进 world
-    enc_key: bytes                   # KDF_sm3(token + \x01)  —— SM4
-    mac_key: bytes                   # KDF_sm3(token + \x02)  —— HMAC-SM3
-    in_seq: int = 0                  # 入站已见最大序号(严格递增,防重放)
-    out_seq: int = 0                 # 出站递增序号
+class SecureChannel:                 # auth.md 的逐帧加密状态;挂 Session、per-session(不逐连接),绝不进 world
+    enc_key: bytes                   # KDF_sm3(session_token + \x01)  —— SM4
+    mac_key: bytes                   # KDF_sm3(session_token + \x02)  —— HMAC-SM3
+    in_seq: int = 0                  # 入站已见最大序号(严格递增,按会话计 → 跨重连挡重放,见 changes/0058/0061)
+    out_seq: int = 0                 # 出站递增序号(按会话计)
 
 @dataclass
 class Connection:                    # 一条物理 ws 的全部 shell 状态(连接绑 nick,不绑房间)
     nick: str                        # 握手时由会话定;一个 nick 全局一条连接
-    session_id: str                  # 会话句柄(公开),用于审计/日志关联
+    session_id: str                  # 会话句柄(公开 selector),用于审计/日志关联 + 加密路查会话
     ws: WebSocket
     outbound: asyncio.Queue          # 有界;满 = 慢客户端(见下「队列满」)。装明文 ServerMessage,Sender 才加密
-    channel: SecureChannel
+    channel: SecureChannel | None    # 引用**会话**的信道;None=明文 dev 帧(?nick=)、非 None=加密帧(?sid=,见 changes/0061)
     sender_task: asyncio.Task | None = None
     # 注:用户"现在在哪个房间"是 world 状态(world.users[nick].room),不是连接字段。
+    # 注:seq/密钥挂 Session(逐会话),Connection.channel 只是引用 → 顶替/重连复用同一会话信道,seq 连续。
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -63,10 +64,10 @@ class ConnectionManager:
 ```
 
 - **连接绑 nick、不绑房间**:握手只认会话身份(见「连接生命周期」),"在哪个房间"是 `world.users[nick].room`,由 `JoinRoom`/`LeaveRoom` 改(见 [lobby.md](lobby.md))。所以 ConnectionManager 全局按 nick 键——**私聊、presence 都成了 O(1) 的 nick 查找**,无需房间索引。
-- **加解密封装在 `SecureChannel`,挂连接、不进 `world`**:Receiver 收帧时按入站规矩验+解(见 [auth.md](auth.md) 的「先验 seq → 验 MAC → 才解密」),Sender 发帧时加密;`outbound` 里一律是**明文 `ServerMessage`**,core/dispatch 全程不知有加密(守分层)。
+- **加解密封装在 `SecureChannel`,挂 Session(`Connection.channel` 只引用)、不进 `world`**:Receiver 收帧时按入站铁序验+解(见 [auth.md](auth.md) 的「验 MAC → 解密 → 验 seq」,0058/0061),Sender 发帧时加密;`outbound` 里一律是**明文 `ServerMessage`**,core/dispatch 全程不知有加密(守分层)。
 - **`Connection` 是 shell 状态,不是 `UserState`**:`enc_key`/`session_id`/`ws` 这些非确定外部状态绝不进 core(同 [timer.md](timer.md) 的「时间戳只活在 shell」)。
 
-> **dev 落地 delta(明文脚手架,P5 前)**:上面的 `SecureChannel` + `Connection.channel` 是**国密加密的目标形状**(P5 落地)。**当前 dev `Connection` 无 `channel` 字段**(明文:Sender 直接 `ws.send_text(model_dump_json)`、Receiver 收明文 JSON `parse`),改挂 **`chat_bucket` / `dm_bucket`(`TokenBucket`,每连接限速)**——房聊限速随 [0033](refactor/changes/0033-room-chat-text-guard.md)、私聊限速随 [0038](refactor/changes/0038-dm-send-deliver.md) 加。P5 落地时补 `channel` + 替换 Sender/Receiver 帧编解。
+> **ws 加密接线已落地([changes/0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))+ dev 明文并存**:`Connection.channel` 已加(`SecureChannel | None`),Sender/Receiver 据它分流——**`channel is None` → 明文 dev 帧**(`?nick=`:Sender `ws.send_text(model_dump_json)`、Receiver 收明文 JSON `parse`);**`channel` 非 None → 加密帧**(`?sid=`:Sender `seal` 成二进制 `send_bytes`、Receiver `receive_bytes`→`channel.open`→明文→`parse`)。信道**挂 Session、逐会话**(首次 `?sid=` 握手 get-or-derive 缓存,跨重连复用 → seq 连续);`chat_bucket` / `dm_bucket`(`TokenBucket`,每连接限速)随房聊 [0033](refactor/changes/0033-room-chat-text-guard.md)/私聊 [0038](refactor/changes/0038-dm-send-deliver.md) 加。**两端点并存**:`/dev/ws?nick=`(明文,dev-only)+ `/ws?sid=`(加密);前端切到加密后再退役明文端点。**余(后续砖)**:REST 信封中间件、client_nonce 重放守卫、K_user 每周轮换。
 
 ## 广播成员 = world 房间成员,按 nick 解析连接
 
@@ -131,7 +132,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 握手鉴权(绑 nick) → 登记(可能顶替) → 起 Sender → 投 Connect → 收帧循环(含 JoinRoom/LeaveRoom) → 退出清理
 ```
 
-1. **握手鉴权**(详见 [auth.md](auth.md)):`ws connect ?sid=<session_id>`(**不带 room_id**)→ 按 `session_id` 查会话表得 `nick`/`token` → 派生密钥建 `SecureChannel`。**第一帧 MAC 验过 = 证明持有 token**。鉴权失败:ws 关闭码拒掉,**绝不建 `Connection`**。
+1. **握手鉴权**(详见 [auth.md](auth.md);**加密路已落地 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)**):`ws connect ?sid=<session_id>`(**不带 room_id**)→ 按 `session_id` 查会话表(`SessionStore.lookup`)得 `nickname`/`token`;查不到/过期 → ws 关闭码(4401)拒掉,**绝不建 `Connection`** → get-or-derive 会话 `SecureChannel`(挂 Session、跨重连复用)→ 建 `Connection(channel=…)`。**第一帧 MAC 验过 = 证明持有 token**(伪造/重放首帧 → `FrameError` → 关连接)。`sid` 是公开句柄,嗅探者可连上顶替但无 token 造不出合法帧、读不了下发密文(只 disruption = DoS,威胁模型外;「首帧验证前不登记」是后续硬化,见 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))。**dev 明文路** `?nick=`(无信道)并存。
 2. **登记**:建 `Connection(nick=…)` → `old = conns.register(conn)`。`old` 非空 = **顶替**(见下):关 `old.ws`、cancel `old.sender_task`,**不投 `Disconnect`**。
 3. **起 Sender**:`conn.sender_task = create_task(sender_loop(conn))`。
 4. **接入(进的是大厅,不是房间)**:投 `Connect(nick)`。reduce 按 `world` 真相分三类处理(`_connect`,0022 起、0031 补顶替臂)——
@@ -165,7 +166,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 - **无感轮换**:客户端在 `SESSION_TTL` 到期前用缓存的 `K_user` 静默重登 → 新 `session_token`/新密钥 → 新连接走**顶替**(见上)接管该 `nick` → reduce 私发 `StateSnapshot` 对齐其当前房(若在房)。顶替的身份判定保证旧连接静默退出、不投 `Disconnect`,所以用户无感。
 - **exp 兜底**:服务器在 `session_token.exp` 到点拒该会话;正常客户端已提前轮换不会撞到。
 - **真正掉线才需重登**:客户端进程还在、`K_user` 在内存 → 轮换/重连全静默;进程彻底关闭(`K_user` 丢失)或登出 → 下次必须用户手输 `K_user` 重登。
-- ws 通道凭证 = `K_user` + `session_token`,不另设 refresh token;REST 另走现有 JWT(见 [auth.md](auth.md) 的「token 层级」)。
+- ws 通道凭证 = `K_user` + `session_token`,不另设 refresh token;**REST 与 ws 走同一把会话密钥信封,无 JWT**(0057 去 JWT,身份从解密得出;见 [auth.md](auth.md) §加密信道)。
 
 ## lifespan:启动与优雅关闭
 

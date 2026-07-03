@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
@@ -13,13 +14,14 @@ from fastapi import FastAPI, Query, WebSocket
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import gameconfig
+from app.auth.channel import SecureChannel
 from app.auth.passwords import hash_password
 from app.core.commands import Command
 from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
-from app.auth.session import SessionStore
+from app.auth.session import Session, SessionStore
 from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
@@ -73,6 +75,14 @@ def build_dev_world() -> World:
     # 用户连接 → 进大厅(Connect no-op)→ 主动 join_room{room} → Receiver 读 DB 载入 + 盖建房默认配置 →
     # 房不存在则 reduce 建房、加入;最后一人离开该房则销毁(per-join 载入 0030,动态房 0049)。
     return World()
+
+
+def _channel_for(session: Session) -> SecureChannel:
+    # 取本会话逐帧信道:首次握手派生、缓存在 Session 上,跨重连复用同一实例 → seq 逐会话连续(挡跨重连重放,
+    # 见 auth.md「seq 按会话计」/ changes/0061 决策 1)。同步无 await ⇒ 检查-派生-赋值原子,并发握手无竞态。
+    if session.channel is None:
+        session.channel = SecureChannel.derive(session.token, gameconfig.WS_FRAME_MAX_BYTES)
+    return session.channel
 
 
 class DevShell:
@@ -188,12 +198,30 @@ def create_app() -> FastAPI:
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]
-        # dev 明文握手:?nick= 必须是预置 dev 用户(连接绑 nick,模型 2)。无 MAC / 无加密(P5 替换)。
+        # dev 明文握手:?nick= 必须是预置 dev 用户(连接绑 nick,模型 2)。无 MAC / 无加密(dev-only 脚手架)。
+        # 与加密端点 /ws 并存;前端切到加密后再退役本端点(见 changes/0061 决策 4)。
         await ws.accept()
         if nick not in gameconfig.DEV_USERS:
             await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
             return
-        conn = Connection.create(nick=nick, session_id=nick, ws=ws)
+        conn = Connection.create(nick=nick, session_id=nick, ws=ws)  # channel=None → 明文帧
+        await run_receiver(
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist
+        )
+
+    @app.websocket("/ws")
+    async def secure_ws(ws: WebSocket, sid: str = Query(...)):  # type: ignore[valid-type]
+        # 加密握手(P5,见 auth.md §加密信道 / changes/0061):?sid=<session_id> 查会话(存在且未过期 = 握手鉴权;
+        # 持钥证明落首帧 MAC)→ 派生/复用逐会话信道 → 建 Connection(channel 非 None → 加密帧)→ run_receiver。
+        # 无 session(未登录/过期/伪 sid)→ 关闭码拒,绝不建 Connection(connection.md 步 1)。
+        await ws.accept()
+        session = shell.session_store.lookup(sid, time.time())
+        if session is None:
+            await ws.close(code=4401)  # 未认证 / 过期 / 未知 sid:拒
+            return
+        conn = Connection.create(
+            nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session)
+        )
         await run_receiver(
             conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist
         )
