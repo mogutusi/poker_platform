@@ -42,16 +42,17 @@ GET /hands?room=&user=&limit=&before=  →  [HandRecordView]   (游标分页,新
 
 ```
 POST  /user/me            →  信封内 { name, nickname, points }   # 已落地(0062):app/rest/profile.py,points 取 DB(滞后)
-PATCH /user/nickname      →  改昵称(仅大厅;待落地,走同一信封)
-PATCH /user/password      →  改密码(SM3+盐+迭代,见 auth.md;待落地,走同一信封)
+POST  /user/password      →  信封内 { old_password, new_password } → { status:"ok" }  # 已落地(0064):验旧 → 重算 salt$rounds$digest → 同步直写
+POST  /user/nickname      →  改昵称(仅大厅;待落地,走同一信封)
 ```
 
 - **`/user/me` 走加密信封**(共同原则 3):`POST {sid, frame}`(`/user/me` 无参,内层 `{}`)→ 身份 = 会话 `name` → 读 DB 投影(`db/queries.load_profile_by_name`,**不带** hash/k_user 秘密列)→ 信封封回。信封失败统一 401;信封验过后的 DB 错/行缺失如实 500(非鉴权问题)。
+- **`/user/password` 走加密信封(0064)**:内层 `{old_password, new_password}`→ 身份 = 会话 `name` → **验旧密码**(第二因子,专防盗 token 锁死真用户;`verify_password`)→ 重算 `hash_password(new, PWD_HASH_ROUNDS)`(新盐)→ **同步直写** `db/user_writes.update_password_hash`(鉴权列 DB 权威、无内存副本,不走 delayDB,见 [storage.md](storage.md)「鉴权列写路径」)。**错误分层**:信封不过 401;旧密码错/未启用 **403**;缺参/新密码空/参数非串 **400**;DB 错/会话 name 无行 500。**v1 不吊销其它会话**(改密码防未来登录,现有已认证会话仍有效;撤销需 name→sessions 索引,记为 future)。
 - **`points`** 取 DB(滞后);**精确余额在 ws**(进房后 `StateSnapshot` / 买入广播给的是内存权威值)。大厅展示用 DB 近似值即可。
 - **改昵称:仅当用户不在任何房间**(你的决策)。`nickname` 是 `world` 的键(座位/`contributed`/ConnectionManager 全按它),在用时改会让键错乱;大厅用户不在 `world.users`,改它安全。
   - **判定"是否在房" + 连接重挂的完整机制见 [presence.md](presence.md)**:`current_room(nick) is None`(在大厅)才允许;改名后若有 live 连接,把 ConnectionManager 从 `old_nick` 重挂到 `new_nick`(`rename`),并更新 DB/会话表的 nickname。
   - 唯一性:`nickname` 全局唯一,改名走唯一约束校验。
-- **改密码**:重算 `salt$rounds$digest`(见 [auth.md](auth.md)),与传输加密正交。
+- **改密码(已落地 0064)**:重算 `salt$rounds$digest`(见 [auth.md](auth.md)),与传输加密正交;详见上「`/user/password` 走加密信封」。
 
 ## 与架构契约(必须守住)
 
@@ -60,6 +61,7 @@ PATCH /user/password      →  改密码(SM3+盐+迭代,见 auth.md;待落地,�
 3. **历史只存结果、绝无底牌**(`hole_cards`/`deck` 不落库)。
 4. **改昵称仅限大厅**(不在 `world.users`),改后重挂连接 nick 键 + 更新会话表。
 5. **REST 与 ws 走同一加密信封**(会话密钥,无 JWT);请求级 `DBsession`、无行锁。
+6. **鉴权列(密码等)同步直写、不走 delayDB**(DB 权威、无内存副本;与 PersistWriter 列不相交 ⇒ 仍无锁,见 [storage.md](storage.md)「鉴权列写路径」/ [changes/0064](refactor/changes/0064-p7-change-password.md))。
 
 ## 待定 / future
 

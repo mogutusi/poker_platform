@@ -44,6 +44,17 @@ async def load_profile_by_name(
         return None if user is None else (user.name, user.nickname, user.points)
 
 
+async def load_password_for_change(
+    sessionmaker: async_sessionmaker[AsyncSession], name: str
+) -> tuple[int, str | None] | None:
+    # 按登录账号 name 读 (uid, hash_password) 供 POST /user/password 验旧密码(changes/0064)。
+    # 只取改密码所需两列(不带 k_user,最小化);无此行返回 None(会话在、行没了 = 内部不一致 → 端点 500);
+    # hash_password 可能 None(name 设了未启用密码)→ 端点判 403(无旧密码可验)。落库写按不可变 uid(db.md)。
+    async with sessionmaker() as session:
+        user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()
+        return None if user is None else (user.id, user.hash_password)
+
+
 def _as_utc(dt: datetime) -> datetime:
     # DM 时间戳一律 UTC(shell 盖 datetime.now(timezone.utc))。sqlite 读 DateTime(timezone=True) 丢 tz 标签 → naive;
     # 补回 UTC,使登录补收的 wire 形(DMDelivered.created_at / DMRead.read_through)与实时路径一致(序列化均带 Z,

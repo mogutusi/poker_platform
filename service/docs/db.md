@@ -176,7 +176,7 @@ DM_CLEANUP_INTERVAL_SECONDS=3600   # 每小时跑一趟清理
 2. **`put_*` 同步无 `await`;PersistWriter 先 `swap` 后 `await`**(双缓冲),绝不持缓冲本体跨 `await`。
 3. **状态写按键覆盖、只落最新;事件写逐条追加、靠唯一键幂等。** 别把事件写设成可覆盖。
 4. **失败回灌「更新者优先」**(`setdefault`),绝不旧值盖新值。
-5. **唯一写者 ⇒ 无行锁;优雅关闭前必须 drain。**
+5. **唯一写者 ⇒ 无行锁;优雅关闭前必须 drain。** 例外:**鉴权列同步直写**(密码等,DB 权威、无内存副本)是 delayDB **之外**的独立写路径,与 PersistWriter **列不相交**(`SET hash_password` vs `SET points`)⇒ 仍无锁(见 [storage.md](storage.md)「鉴权列写路径」/ [changes/0064](refactor/changes/0064-p7-change-password.md))。
 6. 载入(读 DB 进内存一次、绝不重载)属存储模型,见 [storage.md](storage.md)。
 
 ## 注意点

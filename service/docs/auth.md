@@ -61,6 +61,7 @@
 - **盐明文存,没问题**:盐不是密钥,作用是"每人哈希不同"(挡彩虹表 + 挡'相同密码→相同哈希'),不需要保密,跟哈希存一起即可。
 - **DB 列已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`User` 加 `name`(登录账号,唯一,≤15)/ `hash_password`(存 `salt$rounds$digest`,salt/轮数已内嵌,无需另列)/ `k_user`(SM4 密钥 hex)三列 + Alembic 迁移 `49417b108733`。**均 nullable**:本平台无历史密码数据,加可空列 = 最安全增量迁移(既有行 NULL = 未启用登录;`name` 唯一 → 不能常量 `server_default` 回填,见 [changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md) 决策 1)。校验逻辑 `authenticate`(SM4 解 blob → `verify_password`)+ `load_user_for_login` 查询同批落地;`/user/login` 端点随下一砖。
 - **初始密码由管理员生成**(高熵随机),私下发给用户;用户可自行改密。这层防的是"DB 泄露后被反推",和下面的传输加密是两件事,**两者都要**。
+- **改密码已落地**([changes/0064](refactor/changes/0064-p7-change-password.md)):`POST /user/password` 走 §加密信道 的会话密钥信封(内层 `{old_password, new_password}`),**验旧密码**(第二因子,防盗 `session_token` 锁死真用户)→ 重算 `salt$rounds$digest`(新盐)→ **同步直写**(鉴权列 DB 权威、无内存副本,不走 delayDB,见 [storage.md](storage.md)「鉴权列写路径」)。错误分层:信封 401 / 旧密码错·未启用 403 / 请求畸形 400 / DB 错 500。**v1 不吊销其它会话**(记 [rest.md](rest.md) / future)。
 
 ## 共享密钥(手输,不在前端)
 
