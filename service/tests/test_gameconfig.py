@@ -41,6 +41,7 @@ def _valid_kwargs() -> dict:
         SESSION_TTL_SECONDS=3600,
         REST_FRAME_MAX_BYTES=65536,
         REST_REPLAY_WINDOW=64,
+        LOGIN_REPLAY_WINDOW_SECONDS=120,
         LEADERBOARD_DEFAULT_LIMIT=20,
         LEADERBOARD_MAX_LIMIT=100,
         HANDS_DEFAULT_LIMIT=50,
@@ -101,6 +102,7 @@ def test_valid_kwargs_build_ok():
         ("SESSION_TTL_SECONDS", 86401),  # le=86400
         ("REST_FRAME_MAX_BYTES", 255),  # ge=256
         ("REST_REPLAY_WINDOW", 0),  # ge=1(窗宽 0 = 一切请求都「太旧」,配置层拒)
+        ("LOGIN_REPLAY_WINDOW_SECONDS", 0),  # ge=1(窗 0 = 一切登录包都过期,配置层拒)
     ],
 )
 def test_field_bounds_reject(field, bad):

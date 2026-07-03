@@ -74,6 +74,7 @@ class GameConfig(BaseSettings):
     SESSION_TTL_SECONDS: int = Field(ge=60, le=86400)  # ws 会话 token 有效期(秒);SessionStore exp 兜底,客户端到期前无感轮换
     REST_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576)  # REST 加密信封字节上限;open_envelope 拒超大信封(防解析放大,见 changes/0062)
     REST_REPLAY_WINDOW: int = Field(ge=1, le=4096)  # REST 防重放滑动窗宽度(容忍多深的并发/乱序请求;更旧一律拒,见 changes/0062)
+    LOGIN_REPLAY_WINDOW_SECONDS: int = Field(ge=1, le=3600)  # 登录包新鲜窗 W(秒):|now - blob.ts| 超 W 拒;nonce 去重条目 TTL = 2W(须盖住 ts 超前时的整个新鲜期,见 changes/0063)
 
     # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数

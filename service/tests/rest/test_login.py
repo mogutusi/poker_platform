@@ -35,6 +35,8 @@ async def _setup():
             s.add(User(id=1, nickname="Alice", points=1000, name="alice",
                        hash_password=hash_password(_PW, _ROUNDS), k_user=_KUSER.hex()))
             s.add(User(id=2, nickname="Legacy", points=0))  # name/hash/k_user NULL:未启用登录
+            s.add(User(id=3, nickname="Bob", points=500, name="bob",
+                       hash_password=hash_password(_PW, _ROUNDS), k_user=_KUSER.hex()))  # 第二个可登录用户(nonce 按 name 隔离测)
     return sm
 
 
@@ -45,8 +47,9 @@ def _endpoint(router):
 
 
 def _make_blob(payload: dict, key: bytes = _KUSER) -> tuple[str, str]:
+    # blob 自 0063 起须带 ts(重放守卫);默认盖 _T0(= 端点注入的 now),调用方可覆盖测新鲜窗。
     iv = secrets.token_bytes(16)
-    return iv.hex(), sm4_cbc_enc(key, iv, json.dumps(payload).encode()).hex()
+    return iv.hex(), sm4_cbc_enc(key, iv, json.dumps({"ts": _T0, **payload}).encode()).hex()
 
 
 async def _login(store, sm, name, iv_hex, blob_hex, now=_T0):
@@ -183,3 +186,101 @@ def test_create_app_registers_login_route():
     app = create_app()
     routes = [r for r in app.routes if getattr(r, "path", None) == "/user/login"]
     assert len(routes) == 1 and "POST" in routes[0].methods
+
+
+async def test_stale_ts_rejected_401():
+    # freshness 窗(0063):|now - blob.ts| 超 LOGIN_REPLAY_WINDOW_SECONDS → 401(截获的旧包过窗即废)。
+    from app import gameconfig
+
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    old_ts = _T0 - gameconfig.LOGIN_REPLAY_WINDOW_SECONDS - 1
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-old", "ts": old_ts})
+    with pytest.raises(HTTPException) as ei:
+        await _login(store, sm, "alice", iv_hex, blob_hex)
+    assert ei.value.status_code == 401 and len(store) == 0
+
+
+async def test_future_ts_rejected_401():
+    # 绝对值窗:超前(坏钟/伪造未来包)同样拒,不只拒过去。
+    from app import gameconfig
+
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob(
+        {"password": _PW, "client_nonce": "n-fut", "ts": _T0 + gameconfig.LOGIN_REPLAY_WINDOW_SECONDS + 1}
+    )
+    with pytest.raises(HTTPException) as ei:
+        await _login(store, sm, "alice", iv_hex, blob_hex)
+    assert ei.value.status_code == 401
+
+
+async def test_replayed_login_blob_rejected_401():
+    # nonce 去重(0063):同一 {name, iv, blob} 原包重投——首投成功铸会话,重投 nonce 撞库 → 401、不再铸。
+    # 注:守卫状态活在 router 内,两次须走同一 router(_login 每调新建 router,故此测手持一个)。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    router = make_login_router(lambda: sm, store, now=lambda: _T0)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-replay"})
+    await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 首投成功
+    assert len(store) == 1
+    with pytest.raises(HTTPException) as ei:
+        await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 原包重放
+    assert ei.value.status_code == 401
+    assert len(store) == 1  # 未再铸会话
+
+
+async def test_fresh_nonce_second_login_succeeds():
+    # 正常二登(新 nonce)不受守卫影响——去重只挡「同 nonce 重放」,不挡真用户重复登录。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    router = make_login_router(lambda: sm, store, now=lambda: _T0)
+    for nonce in ("n-1", "n-2"):
+        iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": nonce})
+        await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))
+    assert len(store) == 2  # 两会话都铸成(轮换场景:新登录顶替旧连接,会话可并存)
+
+
+async def test_replay_blocked_across_full_freshness_window_of_skewed_blob():
+    # 回归(0063 自 review):ts 超前 now 至 W 的 blob,其新鲜期最晚到 ts+W = 首登 now+2W;nonce 条目
+    # TTL 若只 W 会「条目先过期、blob 还新鲜」留重放缝。现 TTL=2W + 严格过期剪枝:整个新鲜期内重放必 401。
+    from app import gameconfig
+
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    w = gameconfig.LOGIN_REPLAY_WINDOW_SECONDS
+    clock = {"now": _T0}
+    router = make_login_router(lambda: sm, store, now=lambda: clock["now"])
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-skew", "ts": _T0 + w})  # 最大容许超前
+    await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 首登成功
+    for replay_at in (_T0 + w, _T0 + 2 * w):  # 旧缝所在时刻 + blob 新鲜期最后一刻
+        clock["now"] = replay_at
+        with pytest.raises(HTTPException) as ei:
+            await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))
+        assert ei.value.status_code == 401
+    assert len(store) == 1  # 全程只铸首登那一个会话
+
+
+async def test_failed_auth_does_not_poison_nonce_cache():
+    # 守卫在 authenticate **之后**(0063 决策 5):错密码探测(nonce=X)灌不进缓存——随后正确登录复用 X 仍成功。
+    # 若守卫挪到 authenticate 前,无凭证者可用探测包 401-锁死合法登录(此测杀该回归)。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    router = make_login_router(lambda: sm, store, now=lambda: _T0)
+    iv_hex, blob_hex = _make_blob({"password": "WRONG", "client_nonce": "n-probe"})
+    with pytest.raises(HTTPException):
+        await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 探测:密码错 401
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-probe"})  # 同 nonce 正确登录
+    await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))
+    assert len(store) == 1  # 未被探测锁死
+
+
+async def test_nonce_isolated_per_account_name():
+    # nonce 键于 (name, nonce)(端到端):alice/bob 撞同一 nonce 串,双方都能登录(若退化成全局键则第二人 401)。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    router = make_login_router(lambda: sm, store, now=lambda: _T0)
+    for name in ("alice", "bob"):
+        iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-shared"})
+        await _endpoint(router)(LoginRequest(name=name, iv=iv_hex, blob=blob_hex))
+    assert len(store) == 2

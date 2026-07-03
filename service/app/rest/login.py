@@ -1,7 +1,8 @@
 # REST 登录端点(POST /user/login;P5 加密信道入口,见 docs/auth.md §登录握手 / changes/0057/0059)。
-# 请求 {name, iv, blob=SM4(K_user,iv,{password,client_nonce})} → load_user_for_login → authenticate →
+# 请求 {name, iv, blob=SM4(K_user,iv,{password,client_nonce,ts})} → load_user_for_login → authenticate →
 # SessionStore.create → 响应用 K_user 加密下发 {session_id, session_token, exp}(token 只此出现一次、被 K_user 护住)。
-# fail-closed:任何一步不过一律 401「login failed」,不泄未知账号/密码错/blob 坏之别。无 JWT(身份从会话密钥解密得出)。
+# fail-closed:任何一步不过一律 401「login failed」,不泄未知账号/密码错/blob 坏/重放之别。无 JWT(身份从会话密钥解密得出)。
+# 重放守卫(0063):blob 内带 ts + client_nonce —— freshness 窗(LOGIN_REPLAY_WINDOW_SECONDS)+ 窗口内 nonce 去重。
 # 本端点是引导信道的入口,登录前无会话密钥,故它走 HTTP JSON、不套 0058 会话信封。
 
 import json
@@ -15,7 +16,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ttxsgm import sm4_cbc_enc
 
+from app import gameconfig
 from app.auth.credentials import authenticate
+from app.auth.nonce import NonceCache
 from app.auth.session import SessionStore
 from app.db.queries import load_user_for_login
 
@@ -27,7 +30,7 @@ _RESP_IV_BYTES = 16  # 响应 SM4-CBC IV 长度(每次新鲜随机)
 class LoginRequest(BaseModel):
     name: str  # 登录账号(明文,非秘密;服务器据此选 K_user)
     iv: str  # 请求 IV(16B,hex)
-    blob: str  # SM4(K_user, iv, {password, client_nonce}) 的 hex
+    blob: str  # SM4(K_user, iv, {password, client_nonce, ts}) 的 hex(ts=客户端 epoch 秒,0063 起必填)
 
 
 class LoginResponse(BaseModel):
@@ -41,6 +44,8 @@ def make_login_router(
     now: Callable[[], float] = time.time,
 ) -> APIRouter:
     # 迟绑 sessionmaker(setup() 前已建);session_store 为 shell 单例;now 可注入(测试确定 exp)。
+    # nonce 去重缓存活在本 router(单 create_app 单实例;重启清空 → freshness 窗内旧包可复活一次,记档接受,0063)。
+    nonce_cache = NonceCache()
     router = APIRouter()
 
     @router.post("/user/login", response_model=LoginResponse)
@@ -60,9 +65,21 @@ def make_login_router(
             raise HTTPException(status_code=401, detail="login failed")  # 未知账号 / name=NULL 老行
         proof = authenticate(user.hash_password, user.k_user, iv, blob)
         if proof is None:
-            raise HTTPException(status_code=401, detail="login failed")  # 未启用 / 密码错 / blob 坏
-        # client_nonce 重放守卫留待办(proof.client_nonce 已备用;登录重放低危,见 changes/0059)。
-        session_id, session = session_store.create(user.name, user.nickname, now())
+            raise HTTPException(status_code=401, detail="login failed")  # 未启用 / 密码错 / blob 坏 / 缺 ts
+        # 重放守卫(0063,凭证验过才查——伪造包灌不进 nonce 缓存):① freshness:|now-ts| 超窗即旧包/坏钟;
+        # ② 窗口内 (name, nonce) 去重。两者相与:重放包要么 ts 过期、要么 nonce 撞库。失败仍统一 401(不泄败因)。
+        issued_at = now()
+        if abs(issued_at - proof.ts) > gameconfig.LOGIN_REPLAY_WINDOW_SECONDS:
+            log.warning("login rejected reason=stale_ts")  # 只记分类;不记 ts/nonce 之外的凭证内容(本就无)
+            raise HTTPException(status_code=401, detail="login failed")
+        # nonce 条目 TTL = 2×新鲜窗:blob 的 ts 可超前 now 至 W(freshness 容偏斜),其新鲜期最晚到 ts+W ≤ now+2W
+        # ——条目必须盖住 blob 整个可通过 freshness 的时段,否则「条目先过期、blob 还新鲜」出现重放缝(changes/0063)。
+        if not nonce_cache.check_and_add(
+            user.name, proof.client_nonce, issued_at, 2 * gameconfig.LOGIN_REPLAY_WINDOW_SECONDS
+        ):
+            log.warning("login rejected reason=replayed_nonce")
+            raise HTTPException(status_code=401, detail="login failed")
+        session_id, session = session_store.create(user.name, user.nickname, issued_at)
         # 响应用 K_user 加密:session_token 只在此加密下发一次、绝不明文上线(auth.md 铁律)。
         k_user = bytes.fromhex(user.k_user)  # authenticate 已验 k_user 为合法 16B hex,此处安全
         resp_iv = secrets.token_bytes(_RESP_IV_BYTES)

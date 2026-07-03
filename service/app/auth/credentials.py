@@ -4,6 +4,7 @@
 # (不放行、绝不崩登录端点)。脱敏红线(log.md):password/k_user/明文都不进日志。
 
 import json
+import math
 from dataclasses import dataclass
 
 from ttxsgm import sm4_cbc_dec
@@ -16,8 +17,9 @@ _SM4_BLOCK_BYTES = 16  # SM4 分组;blob 须为其正整数倍(否则 sm4_cbc_de
 
 @dataclass
 class LoginProof:
-    # authenticate 成功产出:密码已验通过。client_nonce 供端点做登录包重放防护(auth.md;端点砖落地)。
+    # authenticate 成功产出:密码已验通过。client_nonce/ts 供端点做登录包重放防护(freshness + nonce 去重,见 changes/0063)。
     client_nonce: str
+    ts: float  # 客户端封 blob 时的墙钟(epoch 秒);端点验 |now-ts| ≤ LOGIN_REPLAY_WINDOW_SECONDS(防旧包重放)
 
 
 def authenticate(
@@ -36,10 +38,14 @@ def authenticate(
         payload = json.loads(plaintext)  # bytes → utf-8 → JSON;坏 utf-8/坏 JSON 抛 (ValueError 系)
         password = payload["password"]
         client_nonce = payload["client_nonce"]
+        ts = payload["ts"]
     except (ValueError, KeyError, TypeError):
         return None  # 解密坏 / JSON 坏 / 缺字段 / payload 非 dict → 一律不放行
     if not isinstance(password, str) or not isinstance(client_nonce, str):
         return None  # 字段类型不符 → 拒
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+        return None  # ts 须为**有限**数值:bool 是 int 子类显式拒;json 会解析非标 NaN/Infinity,
+        # 而 NaN 与任何数比较恒 False → |now-ts| > 窗 永不成立 → freshness 守卫形同虚设,故 fail-closed 拒
     if not verify_password(password, hash_password):
         return None  # 密码错(verify_password 常量时间 + fail-closed)
-    return LoginProof(client_nonce=client_nonce)
+    return LoginProof(client_nonce=client_nonce, ts=float(ts))
