@@ -44,6 +44,23 @@ async def load_profile_by_name(
         return None if user is None else (user.name, user.nickname, user.points)
 
 
+async def load_identity_by_name(
+    sessionmaker: async_sessionmaker[AsyncSession], name: str
+) -> tuple[int, str] | None:
+    # 按登录账号 name 读 (uid, nickname) 供 POST /user/nickname(changes/0065)。昵称以 DB 为准
+    # (会话表可能滞后);无此行返回 None(会话在、行没了 = 内部不一致 → 端点 500)。
+    async with sessionmaker() as session:
+        user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()
+        return None if user is None else (user.id, user.nickname)
+
+
+async def nickname_taken(sessionmaker: async_sessionmaker[AsyncSession], nickname: str) -> bool:
+    # 新昵称是否已被占(改昵称预查 → 409;与写之间有 await 窗,最终裁判是 User.nickname 唯一约束,见 changes/0065)。
+    async with sessionmaker() as session:
+        row = (await session.execute(select(User.id).where(User.nickname == nickname))).first()
+        return row is not None
+
+
 async def load_password_for_change(
     sessionmaker: async_sessionmaker[AsyncSession], name: str
 ) -> tuple[int, str | None] | None:

@@ -34,9 +34,9 @@ class Presence:                       # app/shell/presence.py
 
 改昵称仅当**不在任何游戏房**(你定的规则,见 [lobby.md](lobby.md)/[rest.md](rest.md)):
 
-1. **判定**:`current_room(nick) is None`(在大厅)才允许;否则 `Err(CANT_CHANGE_NICK_IN_ROOM)`。读已提交 world,只读。
-2. **改库**:更新 DB `nickname`(唯一约束)+ 会话表的 `nickname`。大厅用户**不在 `world.users`**,所以不触碰 core 权威键。
-3. **连接重挂**:若该 nick 此刻有 live 连接,把 ConnectionManager **从 `old_nick` 重挂到 `new_nick`**——`rename(old, new)`:移 dict 键 + 改 `Connection.nick`;否则私聊/路由按新 nick 找不到旧连接。
+1. **判定**:`current_room(old_nick) is None`(在大厅)才允许——`old_nick` 以 **DB** 为准(会话表可能滞后,0065 决策 1);否则 REST **403**(ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 码保留给未来 ws 形态)。读已提交 world,只读。
+2. **改库**:**CAS** 更新 DB `nickname`(`WHERE id=uid AND nickname=old_nick`,并发双改名只有一个赢;唯一约束兜撞名)+ 会话表的 `nickname`(该账号全部会话)。大厅用户**不在 `world.users`**,所以不触碰 core 权威键。
+3. **连接重挂**:若 `old_nick` 此刻有 live 连接(改名 handler 在 await 前捕获**该对象**),用 `rekey(conn, new)` 按对象 `is` 判定重挂(防 await 窗内键被并发 rename/顶替动过时误挂他人连接;`rename(old,new)` 按键版保留给不涉并发窗的调用方)。
 
 ```python
 def rename(self, old: str, new: str) -> None:        # ConnectionManager
@@ -46,8 +46,8 @@ def rename(self, old: str, new: str) -> None:        # ConnectionManager
         self._by_nick[new] = conn
 ```
 
-- **落点**:改昵称走 REST(见 [rest.md](rest.md)),REST handler 同进程调 `conns.rename` + 改 DB/会话表。`ConnectionManager.rename`(连接重挂原语)**已落地 [0037](refactor/changes/0037-presence.md)**;「仅大厅判定 + 改 DB/会话表」的 REST handler 待 P7 REST。**决策(可改)**:也可做成 ws 命令在 shell 处理;REST 更贴"资料管理",且未连接时也能改(只改库)。
-- **微小竞态**:判定读 world 可能滞后一拍(刚 JoinRoom、REST 仍看到在大厅)→ 极小窗口可能放过一次改名。≤20 友善用户接受;要严就把改名也经一次 reduce 守门(本规模不必)。
+- **落点(已全落地)**:改昵称走 REST(`POST /user/nickname` 走加密信封,见 [rest.md](rest.md);**handler 已落地 [0065](refactor/changes/0065-p7-change-nickname.md)**),同进程顺序调:同步直写 DB → `SessionStore.rename_nickname`(该账号全部会话)→ `conns.rename`(有 live 连接才动)。`ConnectionManager.rename` 原语早随 [0037](refactor/changes/0037-presence.md) 落地。**决策(保留记录)**:也可做成 ws 命令在 shell 处理;选 REST 因更贴"资料管理",且未连接时也能改(只改库)。
+- **微小竞态(最坏后果记准,0065)**:判定读 world 可能滞后一拍(刚 JoinRoom、REST 仍看到在大厅)→ 极小窗口可能放过一次改名。**最坏情形**:改名与同刻的 `join_room` 精确交错时,world 以旧名装入成员、连接键已改新名 → 该成员收不到房间消息、命令 `NOT_IN_ROOM`、`Cleanup` 因 WATCHING≠OFFLINE 不清 → **幽灵占位直到重启**(房不空不销毁)。触发需同一用户同刻双发(UI 无此路径),≤20 友善用户接受;要严就把改名也经一次 reduce 守门(本规模不必,升级路径保留)。
 
 ## 与架构契约(必须守住)
 

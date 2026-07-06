@@ -111,3 +111,15 @@ def test_wired_to_gameconfig_ttl():
     assert isinstance(ttl, int) and ttl >= 60
     _, session = SessionStore(ttl).create("n", "nick", _T0)
     assert session.expires_at == _T0 + ttl
+
+
+def test_rename_nickname_updates_all_sessions_of_account():
+    # 改昵称联动(changes/0065):同账号全部会话(多设备)nickname 齐改;他账号不动;返回改动条数。
+    store = SessionStore(ttl_seconds=3600)
+    _, s1 = store.create("alice", "Alice", now=_T0)
+    _, s2 = store.create("alice", "Alice", now=_T0)  # 第二设备
+    _, other = store.create("bob", "Bob", now=_T0)
+    assert store.rename_nickname("alice", "Neo") == 2
+    assert s1.nickname == "Neo" and s2.nickname == "Neo"
+    assert other.nickname == "Bob"  # 他账号不受影响
+    assert store.rename_nickname("nobody", "X") == 0  # 无此账号:no-op

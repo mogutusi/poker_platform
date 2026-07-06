@@ -69,3 +69,38 @@ def test_rename_missing_old_is_noop():
     mgr = ConnectionManager()
     mgr.rename("nobody", "somebody")  # 未连接时改名只改库 → 连接层 no-op,不建空连接
     assert mgr.get("nobody") is None and mgr.get("somebody") is None
+
+
+def test_rekey_moves_only_the_given_connection():
+    # 身份安全重挂(changes/0065):按对象 `is` 判定——是当前登记者才摘旧键、挂新键。
+    m = ConnectionManager()
+    conn = make_conn("alice")
+    m.register(conn)
+    m.rekey(conn, "neo")
+    assert m.get("neo") is conn and m.get("alice") is None and conn.nick == "neo"
+
+
+def test_rekey_displaced_connection_does_not_touch_table():
+    # 该键已被别的连接占(顶替/并发 rename 动过)→ 只改对象自身 .nick,不摘不挂(防误挂他人连接)。
+    m = ConnectionManager()
+    old = make_conn("alice")
+    m.register(old)
+    usurper = make_conn("alice")
+    m.register(usurper)  # 顶替:表里 "alice" 现在是 usurper
+    m.rekey(old, "neo")  # old 已不是当前登记者
+    assert m.get("alice") is usurper  # 表未动
+    assert m.get("neo") is None
+    assert old.nick == "neo"  # 只同步了对象自身
+
+
+def test_rekey_overwrites_orphan_key_with_warning():
+    # new 键被孤儿占(无 DB 行背书)→ 覆盖(孤儿 unregister 有 `is` 判定,退出无害)。
+    m = ConnectionManager()
+    orphan = make_conn("neo")
+    m.register(orphan)
+    conn = make_conn("alice")
+    m.register(conn)
+    m.rekey(conn, "neo")
+    assert m.get("neo") is conn  # 正主上位
+    m.unregister(orphan)  # 孤儿退出:`is` 判定不误删正主
+    assert m.get("neo") is conn

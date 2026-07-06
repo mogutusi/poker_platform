@@ -2,6 +2,7 @@
 # channel=None ⇒ 明文 dev 帧(?nick=);channel 非 None ⇒ 加密 ws 帧(?sid=,逐会话信道,见 changes/0061)。
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from app import gameconfig
 from app.auth.channel import SecureChannel
 from app.shell.ratelimit import TokenBucket
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -69,3 +72,17 @@ class ConnectionManager:
         if conn is not None:
             conn.nick = new
             self._by_nick[new] = conn
+
+    def rekey(self, conn: Connection, new: str) -> None:
+        # 身份安全版重挂(0065 自 review 抓修):只动**这一个** Connection 对象——按其当前 nick 查表、
+        # `is` 同一才摘旧键(防改名 await 窗内别的 rename/顶替已换了该键,误摘/误挂他人连接);
+        # new 键若已被占(只可能是 DB 无行背书的孤儿键,CAS 后正主不可能占)则覆盖 + WARNING,
+        # 被覆盖孤儿的 unregister 有 `is` 判定、退出无害。conn 不在表(已断)→ 只改 .nick,无键可挂。
+        if self._by_nick.get(conn.nick) is conn:
+            del self._by_nick[conn.nick]
+            if new in self._by_nick:
+                log.warning("rekey overwrote orphan connection key nick=%s", new)
+            conn.nick = new
+            self._by_nick[new] = conn
+        else:
+            conn.nick = new  # 已被顶替/已断:不动表,只同步对象自身的 nick

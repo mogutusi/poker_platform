@@ -23,3 +23,18 @@ async def update_password_hash(
     async with sessionmaker() as session:
         async with session.begin():
             await session.execute(update(User).where(User.id == uid).values(hash_password=new_hash))
+
+
+async def update_nickname(
+    sessionmaker: async_sessionmaker[AsyncSession], uid: int, old_nick: str, new_nick: str
+) -> bool:
+    # 同步改一个用户的昵称(仅大厅可调,见 rest.md/changes/0065):**CAS** 定向 UPDATE、commit。
+    # WHERE 同时钉 uid 与 old_nick(compare-and-swap):同账号并发双改名时输者 0 命中 → False,
+    # 调用方回 409 且**跳过内存联动**——否则 DB/会话表/连接键三处会各随一个赢家、永久发散(0065 自 review 抓修)。
+    # 撞名(唯一约束)在 commit 抛 IntegrityError,由调用方兜 409(预查 + 约束双保险)。
+    async with sessionmaker() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(User).where(User.id == uid, User.nickname == old_nick).values(nickname=new_nick)
+            )
+            return (result.rowcount or 0) > 0

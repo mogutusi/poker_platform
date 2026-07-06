@@ -21,12 +21,13 @@ from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
+from app.db.queries import load_user_by_nick
 from app.auth.session import Session, SessionStore
 from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
 from app.rest.login import make_login_router
-from app.rest.profile import make_profile_router
+from app.rest.profile import make_nickname_router, make_profile_router
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
@@ -198,6 +199,10 @@ def create_app() -> FastAPI:
     app.include_router(make_login_router(lambda: shell.sessionmaker, shell.session_store))
     # 用户资料(P5 REST 加密信封首个消费者:POST /user/me 走会话密钥信封,见 app/rest/profile.py / changes/0062)。
     app.include_router(make_profile_router(lambda: shell.sessionmaker, shell.session_store))
+    # 改昵称(仅大厅;presence 在 setup() 后才建 → 迟绑 getter,见 changes/0065)。
+    app.include_router(
+        make_nickname_router(lambda: shell.sessionmaker, shell.session_store, lambda: shell.presence, shell.conns)
+    )
 
     @app.websocket("/dev/ws")
     async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]
@@ -206,6 +211,11 @@ def create_app() -> FastAPI:
         await ws.accept()
         if nick not in gameconfig.DEV_USERS:
             await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
+            return
+        # 名下须仍有 DB 行:dev 用户改名后旧名无行——放行会造出「无 DB 背书的孤儿连接键」,
+        # 与后续改名撞键、_build_join 还会按 nick 错配他人行(0065 自 review 抓修;正路走 /ws?sid=)。
+        if await load_user_by_nick(shell.sessionmaker, nick) is None:
+            await ws.close(code=4404)
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)  # channel=None → 明文帧
         await run_receiver(

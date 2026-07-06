@@ -54,6 +54,16 @@ class SessionStore:
         # 吊销单个会话(登出 / 疑似泄露);未知 id 无害幂等。
         self._by_id.pop(session_id, None)
 
+    def rename_nickname(self, name: str, new_nick: str) -> int:
+        # 改昵称联动(changes/0065):该登录账号 name 的**全部**会话(含其它设备)nickname 改为 new_nick,
+        # 返回改动条数。否则旧会话再握手 ws 会以旧 nick 接入。纯内存同步操作,与 DB 写的顺序由调用方保证。
+        changed = 0
+        for session in self._by_id.values():
+            if session.name == name:
+                session.nickname = new_nick
+                changed += 1
+        return changed
+
     def prune(self, now: float) -> int:
         # 周期主动清过期会话(避免过期行长滞留;惰性清只在 lookup 命中时触发)。返回清理条数。
         expired = [sid for sid, session in self._by_id.items() if now >= session.expires_at]

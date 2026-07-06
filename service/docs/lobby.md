@@ -16,7 +16,7 @@
 - **大厅态**:连接存在(ConnectionManager 有它,presence 可见),但 **`world.users` 里没有这个 nick**——大厅不占 world 游戏状态。
 - **房间态**:`JoinRoom` 把 nick 装进 `world.users`(`room=R` + 载入积分),`LeaveRoom`/清理时驱逐。
 
-> **这条直接让你定的「只能不在房间时改昵称」成立**:大厅用户不是任何 `world` 键(座位/`contributed`/键都没用到它),所以改昵称只动 DB + 会话表,不会让 world 的键错乱(见下「改昵称」)。
+> **这条直接让你定的「只能不在房间时改昵称」成立**:大厅用户不是任何 `world` 键(座位/`contributed`/键都没用到它),所以改昵称只动 DB + 会话表 + 连接键,不会让 world 的键错乱(见下「改昵称」)。
 
 ## 房间从哪来(动态:谁都可创建 / 空则消失,0049)
 
@@ -70,11 +70,11 @@ GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lob
 - `RoomMeta` 是 **REST DTO ≠ `Room`**:完整游戏状态(`deck`/`hand`/各人筹码)绝不上 lobby(见 [wire.md](wire.md));它**不进 ws `ServerMessage` 联合**(非 ws 消息),故不进 `wire.gen.ts`——前端 REST 类型走 openapi(P7 无 node 待解,见 [changes/0048](refactor/changes/0048-rest-lobby-rooms.md))。
 - **dev 明文无鉴权**(与 dev ws 端点一致);lobby-rooms 只暴露房配 + 头数(无隐私)。P5 加密信道上线时按 [rest.md](rest.md)「REST 走会话密钥信封」补(无 JWT,0057)。
 
-## 改昵称(你的决策:只能不在房间时)
+## 改昵称(你的决策:只能不在房间时)—— 已落地(0065)
 
-- **规则**:仅当 nick **不在 `world.users`**(即在大厅)才允许改昵称;在房间内一律拒(`CANT_CHANGE_NICK_IN_ROOM`)。
-- **为什么**:`nickname` 是 `world` 的键(座位、`contributed`、ConnectionManager 都按它索引),在用时改会让键错乱。大厅用户不是 world 键,改它只是 DB + 会话表更新。
-- **落点**:走 **REST**(`PATCH /user/nickname`)或大厅操作——因为大厅用户不在 `world`,直接改 DB + 更新会话表里的 `nickname` 即可,**不经 reduce**。下次 `JoinRoom` 自然用新 nick 当键。
+- **规则**:仅当 nick **不在 `world.users`**(即在大厅)才允许改昵称;在房间内一律拒(REST 403;ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 码保留给未来 ws 形态)。
+- **为什么**:`nickname` 是 `world` 的键(座位、`contributed`、ConnectionManager 都按它索引),在用时改会让键错乱。大厅用户不是 world 键,改它只是 DB + 会话表 + 连接键更新。
+- **落点(已落地 [0065](refactor/changes/0065-p7-change-nickname.md))**:走 **REST**(`POST /user/nickname`,加密信封)——大厅用户不在 `world`,直接改 DB + 会话表 + 连接键,**不经 reduce**。下次 `JoinRoom` 自然用新 nick 当键。详见 [rest.md](rest.md) §用户资料。
 
 ## 与架构契约(必须守住)
 
