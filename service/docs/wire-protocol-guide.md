@@ -44,7 +44,7 @@
 | `room_chat` | `text` | 房间聊天(广播给全房,含观战者);后端文本防护把关:空→`error(INVALID_MESSAGE)`、超长→`error(MESSAGE_TOO_LONG)`、刷屏→`error(RATE_LIMITED)`(见 0033)|
 | `open_free_entry_vote` | — | 为当前新玩家开一次免盲投票(有新人 + 有合格投票人时;否则回 `error`) |
 | `vote_free_entry` | `approve` | 对免盲投票表态;**全体投票人 approve 才免**、任一 `false` 即失败 |
-| `fetch_room_chat` | `room` | 拉该房最近 N 条房聊(进/重进房对齐历史);后端 shell 直回 `room_chat_history`(不进游戏循环,见 0036)|
+| `fetch_room_chat` | `room` | 拉该房最近 N 条房聊(进/重进房对齐历史);后端直回 `room_chat_history`(不进游戏循环)。**历史随房间销毁而消失**(同名新房是全新历史,0071);房不存在 → 空 |
 | `direct_message` | `to_nick, text` | 私聊某人(跨房/大厅均可);后端 shell 路由:落库(未读)+ 对方在线即投 `dm_delivered`,不进游戏循环(见 0038)。对端不存在→`dm_undelivered`;空/超长/发给自己/刷屏→`error`(`INVALID_MESSAGE`/`MESSAGE_TOO_LONG`/`CANNOT_DM_SELF`/`RATE_LIMITED`)|
 | `dm_mark_read` | `peer_nick, read_through` | 标记和 `peer_nick` 的会话已读到 `read_through`(回传你收到的 `dm_delivered.created_at`);后端落已读游标 + 对方在线即回 `dm_read`,不进游戏循环(见 0039)。对端不存在→`error(INVALID_MESSAGE)`、=自己→`error(CANNOT_DM_SELF)`|
 

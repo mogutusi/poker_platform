@@ -6,7 +6,6 @@ from app.core.commands import Command
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
-from app.shell.history import RoomChatBuffer
 from app.shell.persist import WriteBuffer
 from app.shell.timer import Timer
 
@@ -77,9 +76,9 @@ class Shell:
         self.inbox: "asyncio.Queue[Command]" = asyncio.Queue(maxsize=inbox_maxsize)
         self.conns = ConnectionManager()
         self.persist = WriteBuffer()
-        self.history = RoomChatBuffer()
+        self.world = world  # 供 Receiver 只读(FetchRoomChat 读房内聊天历史,0071)
         self.timer = Timer(self.inbox)
-        self.dispatcher = Dispatcher(world, self.conns, self.persist, self.timer, self.inbox, self.history)
+        self.dispatcher = Dispatcher(world, self.conns, self.persist, self.timer, self.inbox)
         self.gameloop = GameLoop(world, self.inbox, self.dispatcher)
 
     def connect(self, *nicks: str) -> dict[str, Connection]:

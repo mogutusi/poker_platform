@@ -38,7 +38,7 @@ async def test_stop_drains_inflight_inbox_commands_to_db(tmp_path):
     shell.inbox.put_nowait(
         JoinRoom(
             origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS,
-            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS),
+            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS, gameconfig.ROOM_CHAT_HISTORY_SIZE),
         )
     )
     shell.inbox.put_nowait(SitDown(origin="alice", seat=0))
@@ -101,7 +101,7 @@ async def test_stop_drains_concurrently_with_live_gameloop_exactly_once(tmp_path
     shell.inbox.put_nowait(
         JoinRoom(
             origin="alice", room=gameconfig.DEV_ROOM, uid=1, loaded=gameconfig.DEV_START_POINTS,
-            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS),
+            create=RoomCreate(gameconfig.DEV_SMALL_BLIND, gameconfig.DEV_BUY_IN, gameconfig.DEV_SEATS, gameconfig.ROOM_CHAT_HISTORY_SIZE),
         )
     )
     shell.inbox.put_nowait(SitDown(origin="alice", seat=0))

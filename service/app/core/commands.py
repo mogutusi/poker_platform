@@ -17,6 +17,7 @@ class RoomCreate:
     small_blind: int  # 新房小盲(大盲 = 2× 派生)
     buy_in: int  # 新房默认买入额(Room.buy_in)
     seats: int  # 新房座位数(Room.seats 长度)
+    chat_history_size: int  # 新房房聊环形历史条数(Room.chat_history 的 maxlen;shell 从 ROOM_CHAT_HISTORY_SIZE 盖,0071)
 
 
 @dataclass(frozen=True, slots=True)

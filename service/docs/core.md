@@ -13,7 +13,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | 实体 | 职责 | 要点 |
 |---|---|---|
 | `World` | 内存权威:全部房间 + 全局用户表 | `users` 键为 nick,只装在房用户(大厅用户不进,见 [user.md](user.md)) |
-| `Room` | 一个牌桌的全部状态 | 定长 `seats`、`button_position`、`hand_seq`(手牌标识);`entry_vote`/`waive_entry_for` 见免盲投票、`leaving`(局中离桌待手尾驱逐)/`sitting_out_next`(局中请求坐出待手尾生效)见局中生命周期([rules.md](rules.md) ①④) |
+| `Room` | 一个牌桌的全部状态 | 定长 `seats`、`button_position`、`hand_seq`(手牌标识);`entry_vote`/`waive_entry_for` 见免盲投票、`leaving`(局中离桌待手尾驱逐)/`sitting_out_next`(局中请求坐出待手尾生效)见局中生命周期([rules.md](rules.md) ①④);`chat_history`(房聊环形历史,纯展示、规则不读,随房生灭,0071) |
 | `EntryVote` | 免盲投票进行态 | `approvals` 集合 + 任一 `rejected` 即失败([rules.md](rules.md) ①) |
 | `Seat` | 「在桌」的钱与身份,跨手牌存活 | `points`(桌上筹码)/`in_game_points`(锁入本手的快照)/`new_here`/`wait_for_big_blind`(入局方式) |
 | `Hand` | 一手牌的全部状态 | `players` 按行动序([0]=SB、[1]=BB);`contributed`(本手累计投入,旧名 pots);`last_bet`/`last_raise_size` 供下注规则;`epoch`(staleness)/`seq`(标识)/`start_time`(shell 盖、core 不读) |
@@ -40,7 +40,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 
 | Command | origin | 来源 | 语义 |
 |---|---|---|---|
-| `JoinRoom(room, uid, loaded, create?)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;**房不存在则动态建房**(谁都可创建,见「房间生命周期」/0049:用 shell 盖的 `create` 配置建空房再加入;`create=None` 且房不存在 → `NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(进房 0022 / 建房 0049);client 报文 `join_room{room}`(建房配置不进报文,shell 盖) |
+| `JoinRoom(room, uid, loaded, create?)` | nick | wire | 大厅→房间;`uid`/`loaded` 为 DB 读出的账号主键与积分;**房不存在则动态建房**(谁都可创建,见「房间生命周期」/0049:用 shell 盖的 `create` 配置建空房再加入,`RoomCreate{small_blind,buy_in,seats,chat_history_size}`;`create=None` 且房不存在 → `NO_SUCH_ROOM`)/未在别房(`ALREADY_IN_ROOM`),装入 `world.users` 为 WATCHING(`ROOM_FULL` v1 不强制,见 [lobby.md](lobby.md))。core 已落地(进房 0022 / 建房 0049);client 报文 `join_room{room}`(建房配置不进报文,shell 盖) |
 | `LeaveRoom()` | nick | wire | 退分离桌,回大厅;驱逐出 `world.users` |
 | `SitDown(seat, wait_for_big_blind)` | nick | wire | 观战→入座;`wait_for_big_blind` 声明入局方式(等大盲免费 / 默认付盲即玩,见 [rules.md](rules.md) ①) |
 | `BuyIn(seat, amount)` | nick | wire | 全局积分→座位筹码 |
@@ -48,7 +48,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | `SetSmallBlind(amount)` / `SetBuyIn(amount)` | nick | wire | **任何在房成员**配置房间参数(无房主,0044;大盲 = 2×小盲派生);仅两手之间(`HAND_IN_PROGRESS` 拒局中,correctness 非授权)、上下限由 shell 按 `gameconfig.MIN/MAX_*` 防护(`INVALID_SMALL_BLIND`/`INVALID_BUY_IN`),产 `Broadcast(RoomConfigChanged)` 全房对齐、**不落库**(房状态不持久,见 [storage.md](storage.md))。core 已落地(0043;0044 去房主) |
 | `StartHand(seat, started_at, deck?)` | nick | wire | 开新一手;`started_at`(墙钟)由 shell 盖好带入,`deck` 可选(重放用,见下) |
 | `PlayerAction(action, bet_amount?)` | nick | wire | fold / check / bet |
-| `RoomChat(text)` | nick | wire | 房间聊天;只读命令、不改游戏状态,产出 `Broadcast(ChatMessage)`(私聊不走这里,见 [messaging.md](messaging.md)) |
+| `RoomChat(text)` | nick | wire | 房间聊天;追加进 `Room.chat_history`(随房生灭,0071)+ 产出 `Broadcast(ChatMessage)`,除此不改游戏状态(私聊不走这里,见 [messaging.md](messaging.md)) |
 | `OpenFreeEntryVote()` | nick | wire | 有 `new_here` 时开一次免盲投票(见 [rules.md](rules.md)) |
 | `VoteFreeEntry(approve)` | nick | wire | 对免盲投票表态;已入局玩家全票 `approve` 则新玩家免费入局 |
 | `Connect(nick)` | None | shell | 握手后接入**大厅**(不带 room/积分)。按 world 分三类:nick 在房且 `OFFLINE`→重连恢复 + 广播 + 私发 `Personal(StateSnapshot)`;在房且在线→顶替再连,只私发快照对齐(状态不变、不广播);不在 `world.users`→纯大厅,core 无事(见 [connection.md](connection.md)) |
@@ -63,7 +63,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 - **动态房(0049,唯一模型)**:**无静态预置房——谁都可创建、空则销毁**。用户明示的设计;所有房都动态。
 - **创建**:`JoinRoom` 到不存在的房时 `checkout(world, cmd)` 给「无此房间」的副本(`work.room is None`),reduce 用 `cmd.create`(`RoomCreate{small_blind,buy_in,seats}`,由 shell 从 `gameconfig` 盖——core 不 import config)在副本上新建 `Room`(空座、`PENDING_START`)再加入用户(WATCHING),`commit` 插回 `world.rooms`(见 [storage.md](storage.md))。**创建者无特权**(peer / 无房主,同 0044);建后任何在房成员可 `SetSmallBlind`/`SetBuyIn` 调参。`create=None` 且房不存在 → `NO_SUCH_ROOM`(防御:shell 应总带 `create`)。
 - **销毁**:**最后一人离开房间时销毁**。`reduce()` 顶层一处归一守「已提交的房永不为空」:任一成功命令后若目标房 `users_in_room` 变空 → 置 `work.room=None` → `commit` 销毁。覆盖 `LeaveRoom` / `Cleanup` / **手尾 `_finalize_hand` 驱逐**所有清空路径。销毁前 `_evict`/`_finalize_hand` 已先退座位筹码回全局(`Persist(PointsWrite)`)再移出,顺序不反;`Persist(HandRecordWrite)` 与房存亡无关照常落库;**销毁的房不再 `Broadcast`**(见 [connection.md](connection.md))。
-- `Disconnect` **不**移出房间、不销毁(只标 `OFFLINE`、保留座位);起身(→WATCHING)留房不销毁;真正的移出/销毁等 `Cleanup` 到期或 `LeaveRoom`。
+- `Disconnect` 对**在座者**不移出房间、不销毁(只标 `OFFLINE`、保留座位),真正的移出/销毁等 `Cleanup` 到期或 `LeaveRoom`;对**观战者**即时移出(可触发末人销房,0070)。起身(→WATCHING)留房不销毁。
 
 ## reduce 的结构
 

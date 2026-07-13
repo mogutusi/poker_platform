@@ -19,7 +19,7 @@ def test_join_creates_room_when_absent():
     world = make_world()  # 空 world,无任何房
     world, ev, err = run(
         world,
-        JoinRoom(origin="C", room="new", uid=9, loaded=100, create=RoomCreate(small_blind=5, buy_in=200, seats=4)),
+        JoinRoom(origin="C", room="new", uid=9, loaded=100, create=RoomCreate(small_blind=5, buy_in=200, seats=4, chat_history_size=50)),
     )
     assert err is None
     assert "new" in world.rooms  # 建房落定
@@ -35,7 +35,7 @@ def test_leave_last_user_destroys_room():
     world = make_world()
     world, _, _ = run(
         world,
-        JoinRoom(origin="C", room="new", uid=9, loaded=100, create=RoomCreate(small_blind=1, buy_in=100, seats=4)),
+        JoinRoom(origin="C", room="new", uid=9, loaded=100, create=RoomCreate(small_blind=1, buy_in=100, seats=4, chat_history_size=50)),
     )
     assert "new" in world.rooms
     world, ev, err = run(world, LeaveRoom(origin="C"))

@@ -11,7 +11,7 @@
 | 组件 | 数量 | 持有 | 职责 |
 |---|---|---|---|
 | **GameLoop** | 1 | `world` / `inbox` / `dispatcher` | 唯一状态写者:取命令 → 工作副本 reduce → commit → 交 `Dispatcher` 派发事件 / 回发错误 |
-| **Dispatcher** | 1 | `world`(只读) / `conns` / `persist` / `timer` / `inbox` / `history` | 事件 → 物理落点(GameLoop commit 后同步调):`Broadcast`/`Personal` 入 `outbound`、`Persist` 入写缓冲、`TurnChanged`/`ClearAction` 调 Timer、错误按 `origin` 回发(见「dispatch」)|
+| **Dispatcher** | 1 | `world`(只读) / `conns` / `persist` / `timer` / `inbox` | 事件 → 物理落点(GameLoop commit 后同步调):`Broadcast`/`Personal` 入 `outbound`、`Persist` 入写缓冲、`TurnChanged`/`ClearAction` 调 Timer、错误按 `origin` 回发(见「dispatch」)|
 | **ConnectionManager**(`conns`) | 1 | `nick → Connection`(全局) | nick ↔ 物理连接的登记/查找/顶替;房间成员由 `world` 给(见「广播成员」) |
 | **Receiver** | 每连接 1 | 一个 `Connection` | FastAPI 的 ws handler:握手鉴权 → 登记 → 收帧验解 → `Command` 投 `inbox` → 退出时清理 |
 | **Sender** | 每连接 1 | 同一 `Connection` | 从该连接 `outbound` 取 `ServerMessage` → 加密成帧 → `ws.send`;单连接严格保序、隔离慢客户端 |
@@ -37,6 +37,7 @@ class Connection:                    # 一条物理 ws 的全部 shell 状态(�
     ws: WebSocket
     outbound: asyncio.Queue          # 有界;满 = 慢客户端(见下「队列满」)。装明文 ServerMessage,Sender 才加密
     channel: SecureChannel | None    # 引用**会话**的信道;None=明文 dev 帧(?nick=)、非 None=加密帧(?sid=,见 changes/0061)
+    session: Session | None          # 所属会话引用(exp 兜底强制到活连接:收/发帧前比对 expires_at,0070);dev 明文 None
     sender_task: asyncio.Task | None = None
     # 注:用户"现在在哪个房间"是 world 状态(world.users[nick].room),不是连接字段。
     # 注:seq/密钥挂 Session(逐会话),Connection.channel 只是引用 → 顶替/重连复用同一会话信道,seq 连续。
@@ -87,10 +88,10 @@ for nick in world.rooms[r].users_in_room:
 
 ## dispatch:事件 → 物理落点
 
-事件派发抽成独立 **`Dispatcher`**(持 `world`(只读)/ `conns` / `persist` / `timer` / `inbox` / `history`);GameLoop 成功 commit 后对每个 event 调 `dispatcher.dispatch(ev)`——**同步**派发(只 `put_nowait` / 调本地快设施,不 `await`,守不变量 3),错误回发走 `dispatcher.send_error(cmd, err)`。GameLoop 本身只持 `world`/`inbox`/`dispatcher`:
+事件派发抽成独立 **`Dispatcher`**(持 `world`(只读)/ `conns` / `persist` / `timer` / `inbox`);GameLoop 成功 commit 后对每个 event 调 `dispatcher.dispatch(ev)`——**同步**派发(只 `put_nowait` / 调本地快设施,不 `await`,守不变量 3),错误回发走 `dispatcher.send_error(cmd, err)`。GameLoop 本身只持 `world`/`inbox`/`dispatcher`:
 
 ```python
-class Dispatcher:                                        # 持 world(只读)/conns/persist/timer/inbox/history
+class Dispatcher:                                        # 持 world(只读)/conns/persist/timer/inbox
     def dispatch(self, ev: Event) -> None:
         match ev:
             case Broadcast(room=r, msg=m):
@@ -100,8 +101,6 @@ class Dispatcher:                                        # 持 world(只读)/con
                 for nick in room.users_in_room:          # 逻辑成员 → 按 nick 取连接
                     if (c := self.conns.get(nick)) is not None:
                         self._enqueue(c, m)
-                if isinstance(m, ChatMessage):           # 房聊广播 → 入环形缓冲,供进/重进房 FetchRoomChat 拉(见 messaging.md)
-                    self.history.append(r, m)
             case Personal(nick=n, msg=m):                # 底牌 / StateSnapshot / 离开者回执,按 nick 私发
                 if (c := self.conns.get(n)) is not None:
                     self._enqueue(c, m)
@@ -179,7 +178,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 4. 建**空** `World`(`world.rooms` 为空;**动态房——谁都可创建 / 空则消失**,房随 `JoinRoom` 到不存在的房而建、随空房而销毁,见 [lobby.md](lobby.md) / [changes/0049](refactor/changes/0049-dynamic-rooms.md))。
 5. 建写缓冲 + 起 `PersistWriter`。
 6. 建 `Timer` + 起 `timer.run()`。
-7. 建 `ConnectionManager`、`Dispatcher(world, conns, persist, timer, inbox, history)`、`GameLoop(world, inbox, dispatcher)` + 起 `gameloop.run()`。
+7. 建 `ConnectionManager`、`Dispatcher(world, conns, persist, timer, inbox)`、`GameLoop(world, inbox, dispatcher)` + 起 `gameloop.run()`。(房聊历史挂 `Room.chat_history`,0071 起无独立 buffer 组件;Receiver 的 `FetchRoomChat` 只读 committed world 直服务)
 8. 挂载 ws 端点(Receiver),**此刻起接受连接**。
 
 **关闭(必须 drain,见 [db.md](db.md))**

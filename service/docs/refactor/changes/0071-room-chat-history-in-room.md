@@ -1,8 +1,8 @@
-# 0071 · 房聊历史挂进 Room(随房生灭)——设计定案,待实施
+# 0071 · 房聊历史挂进 Room(随房生灭)
 
 日期:2026-07-13(设计)· 范围(计划):`app/core/domain.py`(`Room.chat_history`)、`app/core/commands.py`(`RoomCreate.chat_history_size`)、`app/core/reduce.py`(`_join_room` 建房带 maxlen / `_room_chat` 追加)、`app/shell/receiver.py`(FetchRoomChat 改读 committed world;签名去 `history` 换 `world`)、`app/shell/dispatch.py`(去 history 参数与追加分支)、`app/shell/lifespan.py`(接线)、**删除 `app/shell/history.py`**、tests、docs(messaging/connection/core/storage + frontend/BACKEND_GUIDE.md)。
 
-> **状态:设计已与用户定案(本篇),实施在 0070(连接与会话生命周期)落地之后。** 若上下文压缩,凭本篇即可完整实施。
+> ~~状态:设计已与用户定案(本篇),实施在 0070 落地之后~~ → **已实施**(见「实际改了什么」)。
 
 ## 背景 / 为什么
 
@@ -39,8 +39,27 @@
 
 ## 实际改了什么(与「打算」对照)
 
-(实施后回填)
+按蓝图 1–6 全部落地,两处实现细化:
+
+- `Room.chat_history` 的 `ChatMessage` 类型标注走 `TYPE_CHECKING` 延迟引用(运行期 `wire.server` 也引 `core.enums`,eager import 会构成环;core import wire DTO 的许可不变,reduce 仍运行期构造 DTO)。
+- `_room_chat` 的 0021「只读 + 深比较守护」测试改为:断言唯一改动是 `chat_history` 追加且入历史的就是广播那条,快照补上该条后其余字段深等(守护语义保留、面收窄)。
+
+落点:`domain.py`(字段)/`commands.py`(`RoomCreate.chat_history_size`)/`reduce.py`(建房 deque(maxlen)/`_room_chat` 追加)/`receiver.py`(签名 `history`→`world`;`_serve_room_chat_history` 只读 committed world;`_build_join` 盖 `ROOM_CHAT_HISTORY_SIZE`)/`dispatch.py`(去 history 参数与追加分支)/`lifespan.py`(去 buffer、run_receiver 传 world)/**删除 `shell/history.py` + `tests/shell/test_history.py`**/`_fakes.Shell` 持 world/`gameconfig` 注释。
+
+测试:新 `tests/core/test_room_chat_history.py` 3 测(**主钉:销房→同名重建→历史为空**[0071 前必红] / 环形上限经 RoomCreate / 工作副本 deepcopy 保内容+maxlen)+ 迁移(receiver 三个 fetch 测改走 world、r2 预置改挂 Room / dispatch 删「chat 入缓冲」测[职责已移 reduce] / RoomCreate 构造点 +chat_history_size ×5 / 0021 只读守护收窄);698 全绿(700 − test_history 2 − dispatch 1 + 新 3;净 −2)。
+
+docs:messaging.md(§房聊环形历史改写:挂 Room/随房生灭/cap 经 RoomCreate/契约 7)、connection.md(Dispatcher 全景与伪码去 history + lifespan 步 7 注 + Connection 伪码补 `session` 字段[0070 欠账顺手补])、core.md(Room 要点/RoomChat 行/RoomCreate 字段/房间生命周期 Disconnect 句同步 0070+0071)、storage.md(动态房一句:房内一切含 chat_history 随房消亡是有意语义)、wire-protocol-guide §3(fetch_room_chat 行:历史随房销毁)、**frontend/BACKEND_GUIDE.md §8**(同句,按 0070 新纪律)、gameconfig 注释。
 
 ## 自 review
 
-(push 前回填)
+对照 [review.md](../review.md) 逐维:
+
+- **① 分层 / 不变量**:追加在 reduce 经工作副本(world 只由 commit 改);Receiver 读 world 是 presence/lobby-REST 同款**只读豁免**(tuple() 快照、容忍滞后、不做实时裁定),已写进 receiver 注释与 connection.md;core→wire import 走 TYPE_CHECKING 防环;`RoomCreate.chat_history_size` 由 shell 盖,core 不 import config;同一 msg 对象入历史与事件——构造后无人改,不违不变量 7(注释记明)。
+- **② 代码↔文档**:七处文档与实现逐条对齐(上列);messaging.md 契约 7 的「reduce 维持只读」已改(那句 0071 后为假)。
+- **③ 文档↔文档**:messaging ↔ core ↔ connection ↔ storage ↔ 两份前端文档的「随房生灭」口径一致;0036 历史记录保留原样(历史准确:当时确是 shell 缓冲)。
+- **④ 数据模型**:`chat_history` 注明「纯展示、规则不读」+ 直接构造默认无界仅测试用;`deepcopy` 保 maxlen 有测钉(环形上限不静默失效)。
+- **⑤ 规范**:删 history.py 不留死代码;无新裸字面量(cap 走 RoomCreate←gameconfig;测试的 cap=3 是用例值)。
+- **⑥ 测试**:主钉直击被修缺陷(跨世代泄露);上限/深拷/receiver 读 world(三个迁移的 fetch 测端到端穿 reduce→world→Sender)全覆盖;0021 守护收窄后仍深比较其余字段。
+- **⑦ 流程账本**:设计先行且已单独提交(e9e0b39);打算↔实际差异两处上记;BACKEND_GUIDE 同步践行 0070 新纪律。
+
+**对抗自问(crux)**:①「每命令深拷 ≤N 条消息」的代价——用户知情定案,messaging.md 记档;N 上限 1000(gameconfig Field),最坏一房 1000 条短消息深拷仍毫秒级,可接受。②Receiver 读 world 会不会读到「销毁半途」?——单线程 asyncio,commit 是同步替换引用,读者要么见旧要么见新,不撕裂(与 presence 同理)。③事件与历史共享对象:commit 后旧副本不再被改(替换引用),Sender 序列化的与历史存的同为不可变使用的 Pydantic 对象,无写者。0 未处置发现。

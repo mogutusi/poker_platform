@@ -13,7 +13,7 @@
 - 凡需持久化的数据(当前:全局积分;手牌结束写手牌记录),**从 DB 读一次进内存,内存即权威**;此后改内存、由 delayDB 落库,**DB 不参与任何实时判定**。
 - 读 DB 是 IO,**只能在 shell**(Receiver / lifespan),把读到的值随**命令**带进 core(如 `Connect(loaded=...)`),由 reduce 决定是否安装。**core 内绝不 `await` DB。**
 - **绝不重载已在内存的实体**:内存比 DB 新(DB 滞后),重载会丢未落库的变更。是否安装的判定在 reduce(见 [user.md](user.md)),shell 不读 `world`(守不变量 2)。
-- **启动初始化例外**:进程启动时内存为空、无任何已安装实体,故 **lifespan 在启动阶段直读 DB 初始化 `world`** 是允许的(典型:种子用户进 DB)——没有「内存更新值」会被覆盖,「绝不重载」针对的是**运行期**对已安装实体的重读。**用户积分一律在其 `JoinRoom` 时载入**(shell 读 DB → 随命令带进 core → reduce 决定安装)。dev shell 曾用启动期整体载入用户([0029](refactor/changes/0029-p4-db-backed-dev-shell.md)),**[0030](refactor/changes/0030-p4-per-join-wire-load.md) 起改为真 per-join 载入**(连接→大厅→`join_room`→Receiver 读 DB)。**动态房([0049](refactor/changes/0049-dynamic-rooms.md)):无静态预置,启动期 `world.rooms` 为空——房随 `JoinRoom` 到不存在的房而建、随空房而销毁。**
+- **启动初始化例外**:进程启动时内存为空、无任何已安装实体,故 **lifespan 在启动阶段直读 DB 初始化 `world`** 是允许的(典型:种子用户进 DB)——没有「内存更新值」会被覆盖,「绝不重载」针对的是**运行期**对已安装实体的重读。**用户积分一律在其 `JoinRoom` 时载入**(shell 读 DB → 随命令带进 core → reduce 决定安装)。dev shell 曾用启动期整体载入用户([0029](refactor/changes/0029-p4-db-backed-dev-shell.md)),**[0030](refactor/changes/0030-p4-per-join-wire-load.md) 起改为真 per-join 载入**(连接→大厅→`join_room`→Receiver 读 DB)。**动态房([0049](refactor/changes/0049-dynamic-rooms.md)):无静态预置,启动期 `world.rooms` 为空——房随 `JoinRoom` 到不存在的房而建、随空房而销毁**(房内一切含 `chat_history` 随之消亡——历史随房生灭是有意语义,0071)。
 - 好处:买入这类高频操作是**纯内存转账**,不需要在 GameLoop 里 `await` DB(那会撞碎「reduce 不 await」);无并发写者 ⇒ **无行锁 / `with_for_update`**。
 
 ## ② 工作副本回滚(进业务就深复制一份)

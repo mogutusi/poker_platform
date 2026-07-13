@@ -26,9 +26,9 @@ from app.core.commands import (
     SetSmallBlind,
 )
 from app.core.errors import Err, ErrorCode
+from app.core.domain import World
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
-from app.shell.history import RoomChatBuffer
 from app.shell.messaging import deliver_dm_catch_up, route_direct_message, route_dm_mark_read
 from app.shell.persist import WriteBuffer
 from app.shell.sender import sender_loop
@@ -45,7 +45,7 @@ async def run_receiver(
     inbox: "asyncio.Queue[Command]",
     timer: Timer,
     sessionmaker: async_sessionmaker[AsyncSession],
-    history: RoomChatBuffer,
+    world: World,
     persist: WriteBuffer,
 ) -> None:
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
@@ -63,7 +63,7 @@ async def run_receiver(
             payload = await _recv_frame(conn)  # 让出点:收帧 + 按 channel 解密/取明文
             if payload is None:
                 break  # FrameError/会话过期 = 安全信号:关连接(finally 清理),不进业务
-            cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, history)
+            cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, world)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -116,7 +116,7 @@ async def _frame_to_command(
     conns: ConnectionManager,
     persist: WriteBuffer,
     sessionmaker: async_sessionmaker[AsyncSession],
-    history: RoomChatBuffer,
+    world: World,
 ) -> Command | None:
     # 明文帧 → Command:解析失败(非法 JSON / 未知 type / 字段不合法)直接回发 ErrorMessage(error.md),不进 reduce。
     try:
@@ -132,7 +132,7 @@ async def _frame_to_command(
     if isinstance(msg, (wire_client.SetSmallBlind, wire_client.SetBuyIn)):
         return _guard_room_config(conn, msg)  # 房配进 reduce 前按 gameconfig 上下限防护(见 changes/0043)
     if isinstance(msg, wire_client.FetchRoomChat):
-        _serve_room_chat_history(conn, msg, history)  # 房聊历史 shell 直服务(读环形缓冲回 outbound,见 changes/0036)
+        _serve_room_chat_history(conn, msg, world)  # 房聊历史 shell 直服务(只读 committed world,见 changes/0071)
         return None
     if isinstance(msg, wire_client.DirectMessage):
         # 私信 shell 路由:防护 → 解析 uid → 落库 DMWrite → 在线投 DMDelivered,不进 GameLoop(见 changes/0038)。
@@ -190,10 +190,13 @@ def _guard_room_config(
     return SetBuyIn(origin=conn.nick, amount=msg.amount)
 
 
-def _serve_room_chat_history(conn: Connection, msg: wire_client.FetchRoomChat, history: RoomChatBuffer) -> None:
-    # 房聊历史拉取(messaging.md §持久化 / changes/0036):shell 直服务、不进 GameLoop——读环形缓冲回该连接 outbound。
-    # 房名取自报文(shell 不读 world、无法解析当前房;同 JoinRoom 带 room)。历史是公开房聊、非敏感,v1 不校验成员资格。
-    conn.outbound.put_nowait(RoomChatHistory(room=msg.room, messages=history.recent(msg.room)))
+def _serve_room_chat_history(conn: Connection, msg: wire_client.FetchRoomChat, world: World) -> None:
+    # 房聊历史拉取(changes/0071):shell 直服务、不进 GameLoop——**只读 committed world**(presence/lobby-REST
+    # 同款豁免:只读、展示用、容忍滞后一拍;单线程 asyncio 下 tuple() 快照不撕裂)。历史挂 Room 随房生灭,
+    # 房不存在(已销毁/从未有)→ 空。历史是公开房聊、非敏感,v1 不校验成员资格。
+    room = world.rooms.get(msg.room)
+    messages = tuple(room.chat_history) if room is not None else ()
+    conn.outbound.put_nowait(RoomChatHistory(room=msg.room, messages=messages))
 
 
 async def _build_join(
@@ -219,6 +222,7 @@ async def _build_join(
         small_blind=gameconfig.DEV_SMALL_BLIND,
         buy_in=gameconfig.DEV_BUY_IN,
         seats=gameconfig.DEV_SEATS,
+        chat_history_size=gameconfig.ROOM_CHAT_HISTORY_SIZE,  # 房聊环形历史上限(挂 Room,0071)
     )
     return JoinRoom(origin=conn.nick, room=msg.room, uid=uid, loaded=loaded, create=create)
 

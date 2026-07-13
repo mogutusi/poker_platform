@@ -31,7 +31,6 @@ from app.rest.profile import make_nickname_router, make_profile_router
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
-from app.shell.history import RoomChatBuffer
 from app.shell.logsetup import setup_logging
 from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.presence import Presence
@@ -101,7 +100,6 @@ class DevShell:
         # 接真 OrmPersister(替 NullPersister):周期 swap → 落 DB;stop 时 drain。
         self.persistwriter = PersistWriter(self.persist, OrmPersister(self.sessionmaker))
         self.timer = Timer(self.inbox)
-        self.history = RoomChatBuffer()  # 房聊环形缓冲:dispatch 写 / Receiver 的 FetchRoomChat 读
         self.session_store = SessionStore(gameconfig.SESSION_TTL_SECONDS)  # ws 会话表:/user/login 铸,ws 握手查(P5)
         # world 及其依赖(dispatcher/gameloop)在 setup() 从 DB 载入后建。
         self.world: World | None = None
@@ -118,7 +116,7 @@ class DevShell:
         await create_all(self.engine)
         await seed_dev_users(self.sessionmaker)
         self.world = build_dev_world()
-        self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox, self.history)
+        self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
         self.presence = Presence(self.world, self.conns)  # 只读聚合,持稳定 world 引用(commit 原地改其 .users/.rooms)
 
@@ -222,7 +220,7 @@ def create_app() -> FastAPI:
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)  # channel=None → 明文帧
         await run_receiver(
-            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist
         )
 
     @app.websocket("/ws")
@@ -239,7 +237,7 @@ def create_app() -> FastAPI:
             nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session), session=session
         )
         await run_receiver(
-            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist
         )
 
     return app

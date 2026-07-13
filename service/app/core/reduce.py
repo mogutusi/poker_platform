@@ -3,6 +3,8 @@
 # 成功 commit、失败/异常丢弃(见 core.md / storage.md)。当前命令全集(16 命令)各有 handler(见 reduce());
 # case _ 是防御性兜底(未知/未来命令 → Err(INTERNAL),绝不 raise),对现有命令集不可达。
 
+from collections import deque
+
 from app.core.cards import Card
 from app.core.commands import (
     BuyIn,
@@ -612,7 +614,12 @@ def _join_room(work: Work, cmd: JoinRoom) -> ReduceResult:
     if room is None:  # 房不存在 → 建房(需 shell 带 create 配置;越界由 gameconfig Field 兜)。检在单房间约束之后,失败不建房。
         if cmd.create is None:
             return [], Err(ErrorCode.NO_SUCH_ROOM, f"无此房间 {cmd.room} 且无建房配置")
-        room = Room(seats=[None] * cmd.create.seats, small_blind=cmd.create.small_blind, buy_in=cmd.create.buy_in)
+        room = Room(
+            seats=[None] * cmd.create.seats,
+            small_blind=cmd.create.small_blind,
+            buy_in=cmd.create.buy_in,
+            chat_history=deque(maxlen=cmd.create.chat_history_size),  # 房聊环形历史随房生灭(0071)
+        )
         work.room = room  # 装入工作副本 → commit 插入 world.rooms(storage.md)
     # ROOM_FULL 暂不强制(v1:不限观战;座位可用性由 SitDown 的 SEAT_TAKEN 兜,见 lobby.md / changes/0022)
     work.users[nick] = UserState(uid=cmd.uid, nickname=nick, points=cmd.loaded, room=room_name)
@@ -914,13 +921,17 @@ def _maybe_resolve_entry_vote(work: Work, room: Room) -> list[Event]:
 
 # ── 房间聊天(RoomChat)── messaging.md §房间聊天:只读命令,产 Broadcast(ChatMessage)
 def _room_chat(work: Work, cmd: RoomChat) -> ReduceResult:
-    # 只读:不改任何游戏状态(messaging.md 契约 7),仅校验发送者在房 → 广播给全房(派发按 users_in_room,含观战者)。
-    # 文本非空/长度/限速归 shell 文本防护(同限速,见 messaging.md),core 只认「在不在房」这一游戏判据。
+    # 校验发送者在房 → 追加进房内环形历史(随房生灭,进/重进房经 FetchRoomChat 拉,0071)→ 广播全房
+    # (派发按 users_in_room,含观战者)。除 chat_history 外不改任何游戏状态(messaging.md);
+    # 文本非空/长度/限速归 shell 文本防护,core 只认「在不在房」这一游戏判据。
+    # 同一 msg 对象入历史与事件:构造后无人再改,不违不变量 7(产出 event 后不改其引用对象)。
     room = work.room
     nick = cmd.origin
     if room is None or nick is None or nick not in room.users_in_room:
         return [], Err(ErrorCode.NOT_IN_ROOM, f"{nick} 不在任何房间,无法房聊")
-    return [Broadcast(room=work.room_name, msg=ChatMessage(from_nick=nick, text=cmd.text))], None
+    msg = ChatMessage(from_nick=nick, text=cmd.text)
+    room.chat_history.append(msg)
+    return [Broadcast(room=work.room_name, msg=msg)], None
 
 
 # ── 房间参数配置(SetSmallBlind / SetBuyIn)── core.md 命令表 / changes/0043(0044 放开授权:去房主)

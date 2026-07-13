@@ -103,7 +103,7 @@ async def test_encrypted_frame_flows_through_pipeline():
     sh = Shell(world)
     gl = asyncio.create_task(sh.gameloop.run())
     conn = Connection.create(nick="alice", session_id="s1", ws=FakeWS(), channel=server_ch)
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history, sh.persist))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), world, sh.persist))
     try:
         # 初始 Connect(alice 预置在房在线)→ 顶替快照;等它先 seal 出去(sent_bytes[0])
         await _settle(lambda: len(conn.ws.sent_bytes) >= 1)
@@ -125,7 +125,7 @@ async def test_forged_frame_closes_connection_and_posts_disconnect():
     world = _world()
     sh = Shell(world)  # 不起 gameloop:让 Connect/Disconnect 留在 inbox 供断言
     conn = Connection.create(nick="alice", session_id="s1", ws=FakeWS(), channel=server_ch)
-    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), sh.history, sh.persist))
+    rx = asyncio.create_task(run_receiver(conn, sh.conns, sh.inbox, sh.timer, _sm(), world, sh.persist))
     await _settle(lambda: sh.conns.is_current(conn))  # 已登记
     conn.ws.feed_bytes(secrets.token_bytes(64))  # 结构合法(64B)但 MAC 必不过 → bad_mac
     await _settle(lambda: rx.done())

@@ -1,8 +1,13 @@
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from app.core.cards import Card
 from app.core.enums import HandStatus, PlayerStatus, RoomStatus, UserStatus
+
+if TYPE_CHECKING:  # 仅类型标注引用 wire DTO(core 可 import wire,见 models.md;延迟以避免运行期环:wire.server 亦引 core.enums)
+    from app.wire.server import ChatMessage
 
 
 @dataclass
@@ -71,6 +76,7 @@ class Room:
     waive_entry_for: set[str] = field(default_factory=set)  # 快照:下一手免费入局的 new_here 集合
     leaving: set[str] = field(default_factory=set)  # 局中 LeaveRoom/Cleanup 已标记、待手尾结算后驱逐
     sitting_out_next: set[str] = field(default_factory=set)  # 局中请求 SITTING_OUT、延到手尾生效(留房、下手不发)
+    chat_history: "deque[ChatMessage]" = field(default_factory=deque)  # 房聊环形历史(纯展示,规则不读;随房生灭,0071)。生产房经 _join_room 建,maxlen=RoomCreate.chat_history_size;直接构造默认无界(测试用)
 
 
 @dataclass

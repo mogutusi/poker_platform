@@ -43,7 +43,7 @@ class GameConfig(BaseSettings):
     ROOM_CHAT_MAX_TEXT_LEN: int = Field(ge=1, le=10000)  # 房聊单条正文最大字符数;超则 Receiver 拒(MESSAGE_TOO_LONG)
     ROOM_CHAT_RATE_BURST: float = Field(ge=1, le=100)  # 令牌桶容量(突发上限):静默后最多连发几条
     ROOM_CHAT_RATE_PER_SEC: float = Field(gt=0, le=100)  # 令牌桶稳态补充速率(每秒令牌数 = 每秒可发条数)
-    ROOM_CHAT_HISTORY_SIZE: int = Field(ge=0, le=1000)  # 每房内存环形缓冲保留的最近房聊条数(不落库;进/重进房经 FetchRoomChat 拉,见 messaging.md)
+    ROOM_CHAT_HISTORY_SIZE: int = Field(ge=0, le=1000)  # 每房房聊环形历史条数(建房时经 RoomCreate 盖进 Room.chat_history 的 maxlen,随房生灭、不落库;进/重进房经 FetchRoomChat 拉,0071)
 
     # ── 私信 DM 文本防护 / 限速(见 messaging.md §私信;shell 进路由前防护)──
     DM_MAX_TEXT_LEN: int = Field(ge=1, le=10000)  # 私信单条正文最大字符数;超则 shell DM 路由拒(MESSAGE_TOO_LONG)

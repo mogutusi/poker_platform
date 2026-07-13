@@ -81,6 +81,9 @@ def test_room_chat_readonly_during_active_hand():
 
     world, ev, err = run(world, RoomChat(origin="A", text="ty"))  # 在局玩家发言
     assert err is None and isinstance(ev[0].msg, ChatMessage)
+    # 0071:房聊唯一改动 = 追加进房内环形历史(且入历史的就是广播那条);其余游戏状态深比较一字未动
+    assert tuple(world.rooms["r1"].chat_history) == (ev[0].msg,)
+    room_before.chat_history.append(ev[0].msg)  # 快照补上这条后,其余字段应完全相等
     assert world.rooms["r1"] == room_before  # 进行中手牌/座位/底池一字未动(深比较,非引用)
     assert world.users == users_before  # 全局积分未动
     assert not any(isinstance(e, Persist) for e in ev)

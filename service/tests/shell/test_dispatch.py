@@ -54,18 +54,6 @@ def test_personal_routes_to_single_nick():
     assert drain(conns["bob"]) == []
 
 
-def test_chat_broadcast_appended_to_history_others_not():
-    # 房聊广播(ChatMessage)入环形缓冲;非房聊广播(UserStatusChanged)不入(messaging.md / changes/0036)。
-    world = _world()
-    sh = Shell(world)
-    sh.connect("alice")
-    cm = ChatMessage(from_nick="alice", text="nh")
-    sh.dispatcher.dispatch(Broadcast(room="r1", msg=cm))
-    assert sh.history.recent("r1") == (cm,)  # 房聊入缓冲
-    sh.dispatcher.dispatch(Broadcast(room="r1", msg=_msg()))  # UserStatusChanged 广播
-    assert sh.history.recent("r1") == (cm,)  # 仍只 1 条:非 ChatMessage 不入缓冲
-
-
 def test_persist_goes_to_buffer():
     sh = Shell(_world())
     sh.dispatcher.dispatch(Persist(payload=PointsWrite(uid=1, points=400)))
@@ -83,7 +71,7 @@ def test_persist_hand_record_stamps_end_time():
     world = _world()
     sh = Shell(world)
     t = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    d = Dispatcher(world, sh.conns, sh.persist, sh.timer, sh.inbox, sh.history, now=lambda: t)
+    d = Dispatcher(world, sh.conns, sh.persist, sh.timer, sh.inbox, now=lambda: t)
     d.dispatch(Persist(payload=HandRecordWrite(dedupe_key="r1:1", room="r1", start_time=t, final_pot=0, participants=())))
     buffered = sh.persist.snapshot()
     assert len(buffered) == 1

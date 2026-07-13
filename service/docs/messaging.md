@@ -62,9 +62,9 @@
 
 > 落定本篇的持久化决策(取代旧「待定·持久化 / 新进房看历史」)。一句话:**房聊只在内存留最近 N 条(不落库)、私信落库做「未读收件箱 + 完整已读回执」**。判据延续分两路那条——房聊是「此刻在场」的同步消息,离线即错过、阅后即焚足矣;私信点对点、天然异步,好友离线也得收到。
 
-### 房聊:shell 内存环形缓冲(不持久化,已落地 [changes/0036](refactor/changes/0036-room-chat-history.md))
+### 房聊:房内内存环形历史(不持久化;0036 落地 shell 缓冲,**[0071](refactor/changes/0071-room-chat-history-in-room.md) 迁入 `Room.chat_history` 随房生灭**)
 
-- **存哪**:shell [`RoomChatBuffer`](../app/shell/history.py) 持 `dict[room, deque(maxlen=ROOM_CHAT_HISTORY_SIZE)]`——每房一个定长环形缓冲,**只在内存,不进 world、不落库**。
+- **存哪**:`Room.chat_history`(`deque(maxlen=…)`,[domain.py](../app/core/domain.py))——**挂在房间对象上,生命周期与房同步**:房间销毁(末人离开)历史随之消亡,同名新房是全新历史(0071 修复跨「房间世代」泄露 + 按房名无界增长;用户定案「进 Room」而非 shell 钩子)。上限经 `RoomCreate.chat_history_size` 由 shell 从 `ROOM_CHAT_HISTORY_SIZE` 盖入(core 不 import config);追加在 reduce `_room_chat`(经工作副本,world 只由 commit 改);**不落库**。纯展示数据、规则不读——「进 world 的代价」(每命令深拷 ≤N 条消息)已记档接受。
 - **决策(可改)· 放 shell 不放 world**:这样 `RoomChat` 的 reduce 维持**只读**(只产 `Broadcast(ChatMessage)`、不改状态,见上「房间聊天」/[storage.md](storage.md))。备选「`chat_log` 放 `world.rooms[room]`」会让 RoomChat 变写命令、把非游戏状态塞进 core 域模型——否决。
 - **写入**:dispatch 派发 `Broadcast(room, msg)` 时,`msg` 是 `ChatMessage` 就 `buffer.append(room, msg)`(一处 `isinstance`;RoomChat reduce 只产这一种 chat 广播)。次序由 GameLoop 串行保证;房已销毁(`rooms.get` 为 None)早退不入。
 - **看历史(新进房 / 重连)**:客户端 (重)进房后发 `FetchRoomChat{room}`(ws),**Receiver/shell 直接处理、不进 GameLoop**,**直接 enqueue `RoomChatHistory{room, messages}`** 到该连接 `outbound`(非 `Personal` 事件——同私聊 `DMDelivered` / Receiver 错误回执的直发路径)。决策(可改):拉取式比「dispatch 发 `StateSnapshot` 时自动附带」更解耦。
@@ -109,7 +109,7 @@
 4. **限速在 shell**(进 reduce / 进路由之前),防刷屏拖累 GameLoop。
 5. **正文不含游戏隐私**;默认不把聊天正文写日志(私信落库不等于可写日志)。
 6. **私信落库走「未读收件箱」**:发即 `put(DMWrite)`(事件写,未读)、读 `put(DMReadCursorWrite)`(状态写)推进游标、已读满保留期由 PersistWriter 清;私信路由是**写缓冲的第二个生产者**(`put` 同步无 await),唯一写库者仍 PersistWriter,路由内**绝不 `await commit`**。
-7. **房聊只在内存留最近 N 条**(shell 环形缓冲,不落库),`RoomChat` reduce 维持**只读**;新进房/重连靠 `FetchRoomChat` 拉。
+7. **房聊只在内存留最近 N 条**(`Room.chat_history` 环形,随房生灭,不落库;0071),`RoomChat` reduce 除追加历史外不改任何游戏状态;新进房/重连靠 `FetchRoomChat` 拉(Receiver 只读 committed world 直服务,presence 同款豁免)。
 8. **持久化键用 `uid` 不用 `nick`;保留期 / 容量 / 限速一律配置化**(见 [config.md](config.md))。
 9. **表情是前端渲染约定 + codegen 共享目录**(`[code]`),后端透传:`ChatMessage`/`_room_chat`/wire 字段**不变**,目录单一事实源(见上「表情」/ [changes/0034](refactor/changes/0034-emoji-catalog-design.md))。
 
