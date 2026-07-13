@@ -1,0 +1,125 @@
+{
+  "_readme": "国密已知答案测试向量(由 service/scripts/gen_crypto_vectors.py 从后端原语生成,勿手改)。用途:前端 TS 加密实现的单元测试基准——每节先逐字节对上,再连真服务器。字节约定:所有 *_hex 为小写 hex;JSON 明文以 *_utf8 给出精确串(线上任意 JSON 格式皆可,向量需字节精确)。",
+  "sm3": {
+    "_note": "标准 GB/T 32905 SM3;含空串与分组边界(55/64 字节)输入。",
+    "cases": [
+      {
+        "input_utf8": "",
+        "hash_hex": "1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b"
+      },
+      {
+        "input_utf8": "abc",
+        "hash_hex": "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"
+      },
+      {
+        "input_utf8": "天地玄黄",
+        "hash_hex": "304b508cf2ed24bf964dd9940ea1ee98f2611db2df3e402fc285db6fbd6d0d28"
+      },
+      {
+        "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343536",
+        "hash_hex": "a79cf9dcee3404abf7f769698201647fd9d3ff61d629d0f58bb4b5579a427db8"
+      },
+      {
+        "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "hash_hex": "93566f236d157aae078d1ddb5cebdbba1520b5142e22a8915564345ba2ae1d63"
+      }
+    ]
+  },
+  "sm4_cbc": {
+    "_note": "SM4-CBC + PKCS#7 填充。坑:明文恰为 16 字节整数倍时(含空串)**仍要再补一整块** 0x10×16——看 len=0/16 两例的密文都比明文多整块。解密方向用同一组用例反着验(dec(ct)==plaintext)。",
+    "key_hex": "0123456789abcdeffedcba9876543210",
+    "iv_hex": "000102030405060708090a0b0c0d0e0f",
+    "cases": [
+      {
+        "plaintext_hex": "",
+        "ciphertext_hex": "4b910651754b5553f10cfa0c8a09e9e5"
+      },
+      {
+        "plaintext_hex": "000102030405060708090a0b0c0d0e",
+        "ciphertext_hex": "4d950697534850c92dca2e02785d5ef4"
+      },
+      {
+        "plaintext_hex": "000102030405060708090a0b0c0d0e0f",
+        "ciphertext_hex": "2677f46b09c122cc975533105bd4a22a3b880e6867772522ae55d2f0ae7478ae"
+      },
+      {
+        "plaintext_hex": "000102030405060708090a0b0c0d0e0f10",
+        "ciphertext_hex": "2677f46b09c122cc975533105bd4a22afa0d4b95a5e96da824f52031975c7efc"
+      },
+      {
+        "plaintext_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        "ciphertext_hex": "2677f46b09c122cc975533105bd4a22ad9ee98830e69745c9827f934a19621f8db9222b553b1f80c13b9d8005f6f5a4d"
+      }
+    ]
+  },
+  "hmac_sm3": {
+    "_note": "标准 HMAC 构造:块长 64B;key>64B 先 SM3 收缩;短 key 补零到 64;ipad=0x36/opad=0x5C。",
+    "cases": [
+      {
+        "key_hex": "0123456789abcdeffedcba9876543210",
+        "msg_hex": "",
+        "mac_hex": "f14b797b559216b73d3816adfb790250af3f21198a1ae867123762bb63a00945"
+      },
+      {
+        "key_hex": "0123456789abcdeffedcba9876543210",
+        "msg_hex": "616263",
+        "mac_hex": "28d8a61be67d8bf7652c4eda7092b612f88be62184f55005c57ddf076e764199"
+      },
+      {
+        "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "msg_hex": "6d657373616765",
+        "mac_hex": "cbb6f6b8cabf7c73fd40a903b8087c7b77c10424bc9ba957e195e8f47be0a083"
+      },
+      {
+        "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263",
+        "msg_hex": "6d657373616765",
+        "mac_hex": "61f228fea1aac7834b03543f6dffc921a4a0d4c8d1438876a5cc569e2de8977c"
+      }
+    ]
+  },
+  "kdf": {
+    "_note": "KDF_sm3(x, n) = SM3(x) 的前 n 字节。四个域:ws enc/mac = token‖0x01/0x02,REST = token‖0x03/0x04。",
+    "session_token_hex": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+    "ws_enc_key_hex": "b8c24566e43b8f6c94d0a9c82ef37153",
+    "ws_mac_key_hex": "57721594a535d5993f6b91a8163a80f5d4c0e941625b874296d1744772ad2cc2",
+    "rest_enc_key_hex": "807c2ce08bf2226feaca15af6e5c1a0e",
+    "rest_mac_key_hex": "499cb30d5936986e28f72448ddbceb113ea13865be7268a25d7eebaa9e10c780"
+  },
+  "ws_frame": {
+    "_note": "ws 二进制帧 = iv(16B)‖ct‖mac(32B);ct = SM4(enc_key, iv, seq(8B 大端)‖明文 JSON);mac = HMAC(mac_key, iv‖ct)。首帧 seq=1。密钥用上面 kdf 节的 ws 对。",
+    "session_token_hex": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+    "case": {
+      "seq": 1,
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "plaintext_utf8": "{\"type\":\"room_chat\",\"text\":\"hi\"}",
+      "ct_hex": "b569d5dcf1c69a57b340b98a8d02f2ce96ed3c3b809c1886d3365ef65a6e098fabc666f78f14c66f3d360698b6d06ffd",
+      "mac_hex": "715f175e26fe67096e5d647d881bdf5f6935aad36f4ea372a9d2e7324442b293",
+      "frame_hex": "000102030405060708090a0b0c0d0e0fb569d5dcf1c69a57b340b98a8d02f2ce96ed3c3b809c1886d3365ef65a6e098fabc666f78f14c66f3d360698b6d06ffd715f175e26fe67096e5d647d881bdf5f6935aad36f4ea372a9d2e7324442b293"
+    }
+  },
+  "rest_envelope": {
+    "_note": "REST 信封 frame 字段的内容(请求 body 形为 {sid, frame});成帧同 ws 帧但用 REST 域密钥,内层无参数时明文就是 {}。响应帧内层 seq 回显请求 seq。",
+    "session_token_hex": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+    "case": {
+      "seq": 1,
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "plaintext_utf8": "{}",
+      "ct_hex": "5f84b4c3586dae57773eeb708ac25dfe",
+      "mac_hex": "fea53fe5867a509019f4988749ef1eb29629b4383aacae16ede4d1895a3f9d1e",
+      "frame_hex": "000102030405060708090a0b0c0d0e0f5f84b4c3586dae57773eeb708ac25dfefea53fe5867a509019f4988749ef1eb29629b4383aacae16ede4d1895a3f9d1e"
+    }
+  },
+  "login_blob": {
+    "_note": "登录请求 blob = SM4(K_user, iv, 请求 JSON) 的 hex(无 seq、无 MAC——引导信道只有这一处例外);响应 blob 同法加密,给出解密方向用例。",
+    "k_user_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "iv_hex": "000102030405060708090a0b0c0d0e0f",
+    "request": {
+      "plaintext_utf8": "{\"password\":\"pw123\",\"client_nonce\":\"nonce-1\",\"ts\":1000000}",
+      "blob_hex": "31d1bcc988521ad7d0c9fd548dbf7265a2a2b13d3acb6822ce43d3e436e501b6ba14d5d10f0c8a2fd7ba5f425a67d48f401129a393a091f3650e285811f80f31"
+    },
+    "response": {
+      "plaintext_utf8": "{\"session_id\":\"sid-1\",\"session_token\":\"00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100\",\"exp\":1003600.0,\"rotate\":false}",
+      "blob_hex": "82acb40b76779a9b7ee7bb461a535e7c91d7442d72ccc702642558c30c0643d277b3788c78c46a67aee7ed95dfb44c1e2329caa24c8fc69ab99038a47f772fc5329d6651f7d06572b967debb7371d8de388320593d79c1b659f1cd67ea1d5caee0500d5d1b3c7a53a842f62423bec9b2f97d46341560b7938cb9ebb6c9166b9158f2e07d2084e49038786f7bc238356a"
+    }
+  }
+}

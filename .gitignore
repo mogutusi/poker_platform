@@ -1,7 +1,6 @@
 *.key
 *.env
 .env
-.gitignore
 __pycache__/
 *.pyc
 
@@ -12,6 +11,7 @@ __pycache__/
 
 .vscode/
 .idea/
+.claude/settings.local.json
 
 .venv/
 
@@ -25,4 +25,5 @@ test_winner_pot.py
 asyncioExample.py
 count.py
 
-*.json
+# 注:曾有一揽子 `*.json`(原型期遗留)——会把合法的生成产物(如 frontend/crypto-test-vectors.json)
+# 静默挡在 git 外,0069 移除;要忽略的 json 逐个点名。

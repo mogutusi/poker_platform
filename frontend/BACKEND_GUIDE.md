@@ -58,7 +58,9 @@
 KDF_sm3(input, n) = SM3(input) 的前 n 字节
 ```
 
-Python 参考实现:算法本体在 [`lib/ttxsgm/ttxsgm/`](../lib/ttxsgm/ttxsgm/)(`sm3.py`/`sm4.py`),信道封装在 [`service/app/auth/channel.py`](../service/app/auth/channel.py)。**强烈建议**:把 [`service/tests/crypto/`](../service/tests/crypto/) 里的用例值抄成你 TS 实现的已知答案测试,先保证逐字节对上,再接真服务器。
+Python 参考实现:算法本体在 [`lib/ttxsgm/ttxsgm/`](../lib/ttxsgm/ttxsgm/)(`sm3.py`/`sm4.py`),信道封装在 [`service/app/auth/channel.py`](../service/app/auth/channel.py)。
+
+**已知答案测试向量:[`crypto-test-vectors.json`](crypto-test-vectors.json)(就在本目录)**——从后端同一套原语生成,覆盖 SM3/SM4(含填充边界 0/15/16/17/33 字节)/HMAC(含超长 key)/四个 KDF 域/完整 ws 帧与 REST 信封/登录 blob 双向。**先让你的 TS 实现把这份向量逐字节跑绿,再连真服务器**——向量过了,填充/字节序/域字节这类互通坑就已排除;剩下的端到端验证就是用 dev 口令真登录一次(§7)。该文件由后端生成、有测试守门,勿手改。
 
 ### 4.2 两把钥匙
 
@@ -171,6 +173,8 @@ start_hand 后你会收到:
 REST 的请求/响应类型**没有**自动生成(和 ws 不同),按上表和后端 [`service/app/rest/`](../service/app/rest/) 的字段注释手写,别把它们加进 `wire.gen.ts`。
 
 ## 7. 本地联调
+
+从零把后端跑起来(含新机器 pull 后的完整步骤)见仓库根的 [QUICKSTART.md](../QUICKSTART.md);已配好环境的话一条命令:
 
 ```bash
 cd service
