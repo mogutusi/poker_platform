@@ -32,7 +32,7 @@
 
 | `type` | 字段 | 语义 |
 |---|---|---|
-| `join_room` | `room` | 从大厅进某房(观战);后端按你的连接身份**读 DB 富化** `uid`/积分,回 `user_joined` 广播 + 私发 `state_snapshot`。失败 `error`(`NO_SUCH_ROOM`/`ALREADY_IN_ROOM`)|
+| `join_room` | `room` | 从大厅进某房(观战);后端按你的连接身份**读 DB 富化** `uid`/积分,回 `user_joined` 广播 + 私发 `state_snapshot`。**房不存在则自动创建**(动态房,0049:谁都可建、你无特权;盲注/买入/座位数用服务端默认,建后任何成员 `set_small_blind`/`set_buy_in` 可调;最后一人离开即销毁)。失败 `error(ALREADY_IN_ROOM)`(已在别房,先 `leave_room`);`NO_SUCH_ROOM` 是后端防御臂,正常流程不会见到 |
 | `sit_down` | `seat, wait_for_big_blind?` | 观战 → 入座该座位;`wait_for_big_blind=true`=等大盲免费入局,缺省 `false`=付盲即玩(见 rules.md ①) |
 | `buy_in` | `seat, amount` | 全局积分 → 座位筹码(`amount` 为转入额) |
 | `set_user_status` | `status, seat?` | `ready_to_play`/`sitting_in`/`sitting_out` 切换;`watching`=起身离座(退筹) |
@@ -80,6 +80,8 @@
 | `error` | `code`(`ErrorCode`)、`detail?` | 见 §6 |
 
 > **`acting_position` 是 `players[]` 的下标,不是座位号**:`hand_started.players` 按行动序排(`[0]`=小盲、`[1]`=大盲)。"轮到谁"= `players[acting_position]`,它的座位是 `.seat_position`。`acting_position` 为 `null` 表示无人可行动(手已结束/全 all-in)。
+>
+> **聊天正文的表情是 `[code]` 文本 token**(房聊 `chat_message` 与私聊 `dm_delivered` 同规则,后端纯透传,见 0034/0035):渲染时按 `wire.gen.ts` 里的 `EMOJI_CATALOG` 把 `[thumbs_up]` 这类 token 换成 glyph(`frontend/src/utils/emoji.ts` 的 `tokenizeChat` 已提供);**不认识的 code 原样显示**(向后兼容)。发送侧插表情就是往 `text` 里拼 `[code]`,无新协议字段。
 
 ## 5. 一手牌的典型时序(已落地部分)
 
@@ -117,22 +119,62 @@
 
 **已交付**:**进房(`join_room` ↔ `user_joined` + 私发 `state_snapshot`;后端读 DB 富化 `uid`/积分,见 0030)**、座位(`sit_down`)、买入(`buy_in`)、状态/起身(`set_user_status`)、**房间参数配置(`set_small_blind`/`set_buy_in` ↔ `room_config_changed`;任何在房成员、两手之间,见 0043/0044)**、开局(`start_hand`)、动作(`player_action`)、离开(`leave_room`)、**免盲投票(`open_free_entry_vote`/`vote_free_entry` ↔ `free_entry_vote_updated`/`free_entry_vote_closed`)**、**房间聊天(`room_chat` ↔ `chat_message`)**、**整桌快照 `state_snapshot`**(进房私发,或重连经后端 `Connect` 私发;`your_hole_cards` 只含你自己的牌)+ 上面所有其它 `ServerMessage`。
 
-**已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`,见 0038)+ 「读」路·已读回执(`dm_mark_read` ↔ `dm_read`,在线实时,见 0039)+ 登录补收(见 0040:(重)连时后端自动补发离线期的未读 `dm_delivered` + 已读回执 `dm_read`,复用同形报文,按 `msg_id` 去重)**。
+**已交付(续)**:**私聊「发」路(`direct_message` ↔ `dm_delivered` / `dm_undelivered`,见 0038)+ 「读」路·已读回执(`dm_mark_read` ↔ `dm_read`,在线实时,见 0039)+ 登录补收(见 0040:(重)连时后端自动补发离线期的未读 `dm_delivered` + 已读回执 `dm_read`,复用同形报文,按 `msg_id` 去重)+ 聊天表情 `[code]` 目录(0035,见 §4 注)+ 全套 REST 面(大厅列表/排行/历史/登录/资料,见 §10)**。
 
 > **登录补收对前端透明**:连上后端会主动私发你离线期间的未读 `dm_delivered`(旧→新)+ 别人读你消息的 `dm_read`,**无需你发任何请求**;与在线实时收到的同形,按 `msg_id` 去重即可(实时 + 补收同一条只显一次)。
 
-**还没有(随后端模块增量补到 `wire.gen.ts`,你 pull 最新生成文件即可)**:
-- 大厅房间列表(REST)。
+**还没有**:
+- **REST DTO 的 TS 生成**(本机无 node,`openapi-typescript` 待解,见 [wire.md](wire.md)):§10 各端点的请求/响应形状暂以后端 `.py` 为准,手写调用时**别**把它们塞进 `wire.gen.ts`(那是 ws codegen 的只读产物)。
+- 前端 WS client / 组件消费本身(用 `wire.gen.ts` + 本指南实现,替换 mock 的 `poker.ts`)。
 
 ## 9. 怎么连
 
 **两个 WS 端点并存**(前端切到加密后,明文端点退役):
 
 - **明文 dev**(`ws://<host>/dev/ws?nick=<你的昵称>`,dev-only、无加密):连上即用上面的报文收发 —— **文本帧**(直接 `JSON.stringify(msg)` / `JSON.parse`)。搭 UI / 联调最省事。
-- **加密**(`ws://<host>/ws?sid=<session_id>`,已落地 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):先 `POST /user/login`(用 `K_user` 加密账密,拿回 `{session_id, session_token}`,见 [auth.md](auth.md) §登录握手),再用 `session_id` 连 `?sid=`;此后每帧是**二进制信封** `iv‖ct‖mac`(会话密钥 SM4 加密 + HMAC-SM3 + seq),你得实现这层帧的加解密(`send/receive` 用 binary)。**载荷仍是同样的明文 `ServerMessage`/`ClientMessage` JSON**——加密只包在外层,`switch(type)` 分发逻辑一字不改。
+- **加密**(`ws://<host>/ws?sid=<session_id>`,已落地 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):先 `POST /user/login`(拿回 `{session_id, session_token}`,精确形状见 **§10 登录**),再用 `session_id` 连 `?sid=`;此后每帧是**二进制信封** `iv‖ct‖mac`(会话密钥 SM4 加密 + HMAC-SM3 + seq),你得实现这层帧的加解密(`send/receive` 用 binary)。**载荷仍是同样的明文 `ServerMessage`/`ClientMessage` JSON**——加密只包在外层,`switch(type)` 分发逻辑一字不改。
 
 起服务:`cd service && .venv/bin/uvicorn app.shell.lifespan:app`。
 
 **加密层要点**(实现帧编解时)：① `enc_key=KDF_sm3(session_token+\x01,16)`、`mac_key=KDF_sm3(session_token+\x02,32)`;② 出站 `ct=SM4_CBC(enc_key, iv, seq(8B,BE)‖json)`、`mac=HMAC_SM3(mac_key, iv‖ct)`,帧=`iv‖ct‖mac`;③ 入站**先验 MAC 再解密再验 seq**;④ **seq 逐会话严格递增**,**跨重连要续用同一 seq**(只有重新 `/user/login` 换会话才从头),否则重连首帧会被服务端当重放拒;⑤ `session_id` 只在握手 URL 给一次,逐帧不带。
 
 **握手后**:连上直接进「大厅」(后端 `Connect` 对纯大厅是 no-op),主动发 `join_room{room}` 载入房间(后端读 DB 富化身份/积分,见 0030)。仍可先对着 `wire.gen.ts` 把消息类型、`switch(type)` 分发、UI 组件、桌面状态机用 mock 数据搭起来,再切真 socket。
+
+## 10. REST 面(大厅 / 排行 / 历史 / 登录 / 资料)
+
+> REST DTO **暂无 TS 生成**(无 node,见 §8「还没有」):下列形状以后端 [`app/rest/*.py`](../app/rest/) 为准,本节只给「怎么调」。设计细节见 [rest.md](rest.md) / [auth.md](auth.md)。
+
+**公开读(明文 GET,无鉴权;数据来自 DB/committed world,可滞后一拍,只作展示别做实时判定):**
+
+| 端点 | 响应 | 说明 |
+|---|---|---|
+| `GET /lobby/rooms` | `[{id, small_blind, big_blind, buy_in, max_seats, seated, watching, status}]` | 大厅房间列表;v1 **轮询**(几秒一次足够);`seated` 含断线保座 |
+| `GET /leaderboard?limit=N` | `[{rank, nickname, points}]` | 排行 = **结算后**全局积分(买进牌桌的筹码不计,离桌结算后才回来) |
+| `GET /hands?room=&user=&limit=&before=` | `[{id, dedupe_key, start_time, end_time, final_pot, participants:[{nickname, initial_points, final_points, net}]}]` | 手牌历史,新→旧;**游标分页**:`before`=上一页末条的 `id`;`user`=昵称过滤参与的手;记录只有结果、无底牌 |
+
+**登录(引导信道:明文 HTTP,body 用 `K_user` 加密;`K_user` 是管理员带外发你、手输的 16 字节密钥):**
+
+```
+POST /user/login   { name, iv, blob }
+  blob = hex( SM4_CBC(K_user, iv, JSON{ password, client_nonce, ts }) )
+    ts           = 当前 epoch 秒(须落在服务端新鲜窗内;NTP 大漂移会 401)
+    client_nonce = 每次新随机串(同包重投会被判重放 → 401)
+  响应 { iv, blob = hex( SM4_CBC(K_user, iv2, JSON{ session_id, session_token, exp, rotate }) ) }
+    session_token 只留内存、绝不落 storage/URL;exp 到点前用 K_user 静默重登换会话(无感轮换)
+    rotate=true   = 你用的是**旧一代** K_user(轮换宽限期内):提示用户尽快换用管理员新发的密钥
+```
+
+任何失败(账号/密码/blob/重放)统一 `401`,不泄具体原因;重试用**新 nonce + 新 ts** 重封。
+
+**需身份的端点(会话信封,0062;拿到会话后一切带身份的 REST 都长这样):**
+
+- 请求 `POST { sid, frame }`:`sid`=登录拿的 `session_id`;`frame`=hex(`iv‖ct‖mac`),内层明文 = `seq(8B,BE) ‖ 参数 JSON`(无参数就是 `{}`)。
+- **密钥与 ws 分域**:REST 用 `KDF_sm3(session_token+\x03,16)`/`(+\x04,32)` 派生 enc/mac——**别拿 §9 的 ws 密钥封 REST**(分域是防跨信道重放,封错 MAC 必败 401)。
+- **seq 规则**:同会话请求 seq **严格递增、不复用**(并发就各占一个号,乱序到达服务端滑动窗能容);响应内层**回显你的请求 seq**,校验相等即防旧响应答新请求。**重试 = 新 seq 重新封帧**——原帧重投必被判重 401;所以别把 401 当「必须重登」的唯一信号,先换 seq 重试一次。
+- **错误两段式**:信封任何一步不过 → 统一 `401`(fail-closed);信封验过之后的失败(DB 错等)→ 明文 `500`(不用重登)。
+
+| 端点 | 内层请求 | 内层响应 / 失败 |
+|---|---|---|
+| `POST /user/me` | `{}` | `{name, nickname, points}`(`points` 是 DB 滞后值;精确余额看 ws 的 `state_snapshot`/买入广播) |
+| `POST /user/password` | `{old_password, new_password}` | `{status:"ok"}`;旧密码错/未启用 → `403`,缺参/空 → `400` |
+| `POST /user/nickname` | `{new_nickname}` | `{status:"ok", nickname}`;**仅大厅可改**(在房 → `403`),撞名 → `409`,同名/空/首尾空白/超长 → `400` |
