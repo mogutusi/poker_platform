@@ -37,6 +37,11 @@ poetry env activate                          # 或先激活、再裸跑命令
 - **`poetry.lock` 要提交**:别人 `poetry install` 复现同样版本。改了依赖记得连 lock 一起提交。
 - **dev 登录(P5,changes/0060/0063)**:dev 用户已 login-enable —— `POST /user/login`,body `{name, iv, blob}`(`name`=昵称、`blob`=`SM4(DEV_KUSER, iv, {password: DEV_PASSWORD, client_nonce, ts})` 的 hex;`ts`=当前 epoch 秒,须落在 `LOGIN_REPLAY_WINDOW_SECONDS` 窗内、`client_nonce` 每次新随机——0063 重放守卫),响应用 `DEV_KUSER` 解密得会话。`DEV_PASSWORD`/`DEV_KUSER` 在 `poker.env`(dev-only,非生产密钥)。**ws 双端点并存(0061)**:`?sid=` 加密(登录后)/ `?nick=` 明文(dev 脚手架,前端切加密后退役)。
 - **K_user 管理(P5,changes/0066)**:生产用户的密钥首发/每周轮换走管理员 CLI `.venv/bin/python scripts/kuser_admin.py issue|rotate|list`(直连 `DATABASE_URL` 指的库;`rotate` 挂系统 cron 每周跑,幂等——只轮到期账号)。新钥/新口令只打到管理员终端 stdout,**带外**私发给用户;勿重定向进会入 git/日志采集的文件(秘密零容忍)。dev 种子钥不排程,cron 不会轮走 `DEV_KUSER`。详见 [auth.md](auth.md) §K_user 每周轮换。
+  ```
+  # 管理员 crontab 示例:每周日 03:00 轮换到期密钥,输出落管理员私有文件(chmod 600,发完密钥即清)
+  0 3 * * 0  cd <repo>/service && .venv/bin/python scripts/kuser_admin.py rotate >> ~/kuser-rotate.out 2>&1
+  ```
+  **换钥半自动、发钥永远手动(设计使然)**:cron 只完成「DB 里换上新钥」;把新钥送到用户手里必须管理员带外私发(自动经信道下发会被旧钥持有者链式解出,见 auth.md「别用信道自动下发」决策)。忘跑 cron 不锁人:`k_cur_until` 只是排程、登录不查它;换钥后旧钥有 `KUSER_GRACE_DAYS` 宽限,期间登录响应带 `rotate=true` 提示。
 
 ## Alembic
 
