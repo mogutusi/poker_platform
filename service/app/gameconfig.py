@@ -31,7 +31,7 @@ class GameConfig(BaseSettings):
 
     # ── 定时器(见 timer.md)──
     ACTION_TIMEOUT: float = Field(ge=5, le=120)  # 行动倒计时(秒):轮到某人后多久没动作即投 Timeout(默认 check / fold)
-    LIVENESS_TIMEOUT: float = Field(ge=30, le=600)  # 在线保活(秒):距最后一帧超此值即投 Cleanup(退筹释座);须 ≫ ACTION_TIMEOUT
+    LIVENESS_TIMEOUT: float = Field(ge=30, le=600)  # 断线占座窗口(秒):断线后超此值投 Cleanup 退筹释座(0070:断线装表/重连拆表;观战者断线即清不经此窗);须 ≫ ACTION_TIMEOUT
     TIMER_TICK_MS: int = Field(ge=100, le=2000)  # Timer 扫描周期(毫秒):到点最多迟一个 tick
 
     # ── 背压(见 architecture.md「队列有界」)──

@@ -58,24 +58,30 @@ def test_clear_action_cancels(monkeypatch):
     assert inbox.empty()  # 已清:不触发
 
 
-def test_liveness_fires_cleanup_and_heartbeat_extends(monkeypatch):
+def test_arm_cleanup_fires_after_window_and_rearm_overwrites(monkeypatch):
+    # 断线装表(0070):arm 后满窗触发 Cleanup;重复 arm(再次断线)覆盖旧到期时刻;一次性触发后表干净。
     t, clock, inbox = _timer_with_clock(monkeypatch)
-    t.heartbeat("alice")  # fire_at = 1000 + LIVENESS_TIMEOUT(90)
+    t.arm_cleanup("alice")  # fire_at = 1000 + LIVENESS_TIMEOUT(90)
     clock.t += 50
-    t.heartbeat("alice")  # 续命:fire_at = 1050 + 90 = 1140
+    t.arm_cleanup("alice")  # 重复断线:fire_at = 1050 + 90 = 1140
     clock.t += 50  # t=1100 < 1140
     t.tick()
-    assert inbox.empty()  # 续命后未到期
+    assert inbox.empty()  # 覆盖后未到期
     clock.t += 50  # t=1150 > 1140
     t.tick()
     cmd = inbox.get_nowait()
     assert isinstance(cmd, Cleanup) and cmd.nick == "alice" and cmd.origin is None
+    clock.t += 1000
+    t.tick()
+    assert inbox.empty()  # 触发即删,不重复投
 
 
-def test_drop_liveness_removes(monkeypatch):
+def test_cancel_cleanup_removes(monkeypatch):
+    # 重连拆表(0070):窗口内重连取消断线倒计时,满窗不触发;未知 nick 幂等无害。
     t, clock, inbox = _timer_with_clock(monkeypatch)
-    t.heartbeat("alice")
-    t.drop_liveness("alice")
+    t.arm_cleanup("alice")
+    t.cancel_cleanup("alice")
+    t.cancel_cleanup("nobody")  # 在线用户不进表(0070):cancel 未知 nick 无害
     clock.t += 1000
     t.tick()
     assert inbox.empty()

@@ -5,7 +5,7 @@
 | 层 | 常量 | 时长 | 谁驱动 | 到期动作 |
 |---|---|---|---|---|
 | **行动倒计时**(游戏层) | `ACTION_TIMEOUT` | 短(~15s) | reduce → dispatch | 投 `Timeout(nick, epoch)`,reduce 执行默认动作(能 check 则 check,否则 fold) |
-| **在线保活 / 占座**(连接层) | `LIVENESS_TIMEOUT` | 长(~90s) | **Receiver** | 投 `Cleanup(nick)`,reduce 退还筹码、释放座位、广播离场 |
+| **断线占座窗口**(连接层) | `LIVENESS_TIMEOUT` | 长(~90s) | **断线装表 / 重连拆表**(Receiver 退出清理 + dispatch 踢慢客户端两处装;新连接接入拆,0070) | 投 `Cleanup(nick)`,reduce 退还筹码、释放座位、广播离场 |
 
 务必 `ACTION_TIMEOUT ≪ LIVENESS_TIMEOUT`:前者让掉线者**不卡牌局**(自动 fold,桌子继续转),后者给**重连留窗口**(座位筹码先留着)。两层一叠加,掉线重连不需要单独写逻辑(见「三条流程」)。
 
@@ -21,7 +21,8 @@ Timer 是 shell 协程,**只做三件事**:维护两张「到期时刻」表 →
 ## 谁驱动哪一层
 
 - **行动倒计时由 reduce 驱动**:「该给谁起倒计时、起多久」是游戏状态转移的结果——只有 reduce 知道下家是谁、手牌是否结束。Receiver 不掌握「轮到谁」。
-- **在线保活由 Receiver 驱动**:「这条连接还活着吗」是 Receiver 第一手知道的(它正在收这条连接的消息),收到任意消息就给该玩家续命。**模型 2 下连接只绑 nick**(见 [connection.md](connection.md)),Receiver 既不知道也不准读 `world` 里的房间(不变量 2),所以**保活表只能按 nick 单键**;`Cleanup(nick)` 进 reduce 后才由 `world.users[nick].room` 解析目标房(在房才退筹释座,在大厅则 no-op)。`_action` 仍按 room 键——它由 reduce 经 `TurnChanged(room,…)` 驱动,reduce 知道房间。
+- **断线占座窗口由连接生命周期驱动(0070 重设计)**:「谁掉线了」由**传输层**权威判定——正常断开时 Receiver 的 `receive` 立刻报错;拔电/NAT 失效这类死连接由 ws **协议级 ping/pong** 兜住(uvicorn+websockets 默认 20s ping/20s 超时,死连接 ≤~40s 变成正常断线;浏览器自动回 pong,客户端零实现)。因此本表**不做探活**,只回答「已断线的人座位再留多久」:**凡投 `Disconnect` 处必 `arm_cleanup`**(Receiver 退出清理 + `dispatch._drop_connection` 两处),新连接接入时 `cancel_cleanup`。在线用户不进表 ⇒ 纯观战者静默任意久也无空触发,更无「触发即删后断线漏清」坑(0070 修复的 A1)。**模型 2 下连接只绑 nick**,表按 nick 单键;`Cleanup(nick)` 进 reduce 后才由 `world.users[nick].room` 解析目标房。`_action` 仍按 room 键——它由 reduce 经 `TurnChanged(room,…)` 驱动。
+  > 历史:0018–0069 间本层语义是「收到任意帧续命(距最后一帧超时即触发)」并要求客户端周期 ping——该要求从未进协议,且「触发即删 + 断线不重装」使断线清理实际失效(0070 审计 A1);现语义下不再需要任何客户端心跳。
 
 两层都**通过 Timer 的公共方法**操作(封装),无需队列/锁:这些方法是瞬时 dict 写、无 IO,单线程 asyncio 下同步调用本就原子(无 `await`,不与 `run()` 扫描交错)。对比 Sender / PersistWriter 用队列,是因为它们要做慢 IO;Timer 没这问题。
 
@@ -52,11 +53,11 @@ class Timer:
     def clear_action(self, room):
         self._action.pop(room, None)
 
-    # ── 连接层:由 Receiver 调用(Receiver 只知 nick、不知房间,也不读 world)──
-    def heartbeat(self, nickname):
+    # ── 连接层:断线装表 / 重连拆表(0070;调用方只知 nick、不读 world)──
+    def arm_cleanup(self, nickname):        # 断线时刻起算占座窗口(Receiver 退出 / dispatch 踢慢客户端)
         self._liveness[nickname] = now() + gameconfig.LIVENESS_TIMEOUT
 
-    def drop_liveness(self, nickname):
+    def cancel_cleanup(self, nickname):     # 窗口内重连/顶替:拆表(竞态漏拆由 reduce OFFLINE staleness 兜)
         self._liveness.pop(nickname, None)
 ```
 
@@ -105,21 +106,20 @@ if room.users_in_room.get(cmd.nickname) is not UserStatus.OFFLINE:
 3. A 在 15s 内行动 → reduce 再次推进 → 新 `TurnChanged` 覆盖旧 deadline;旧的即便漏触发,`Timeout` 也因 `epoch` 不符被忽略。
 4. A 超时未动 → 投 `Timeout` → reduce 校验仍是该回合 → 执行默认动作。
 
-**掉线 → 占座 → 清理**
-1. 连接期间 Receiver 每收一条消息(含 ping)就 `heartbeat`,保活时刻不断后移。
-2. ws 断开:Receiver 停止 `heartbeat`,投 `Disconnect(nick)`。
-3. reduce 标记 `OFFLINE`、广播、**保留座位**(清理由保活到期负责)。
-4. 期间若轮到该玩家,行动倒计时(短)先触发 → 自动 fold,牌局不卡。
-5. 距最后一条消息超 `LIVENESS_TIMEOUT` → 投 `Cleanup` → reduce 校验仍 `OFFLINE` → 真正退筹释座。
+**掉线 → 占座 → 清理**(0070 语义)
+1. ws 断开(正常断开立即;死连接由协议级 ping 在 ≤~40s 内判死):Receiver 退出清理 → `arm_cleanup(nick)` + 投 `Disconnect(nick)`。
+2. reduce:**观战者即时离场**(无座无筹码,重进零成本;末人离房销房);在座者标 `OFFLINE`、广播、**保留座位**。
+3. 期间若轮到该玩家,行动倒计时(短)先触发 → 自动 fold,牌局不卡。
+4. 断线起 `LIVENESS_TIMEOUT` 满 → 投 `Cleanup` → reduce 校验仍 `OFFLINE` → 真正退筹释座(观战者已在步 2 离场,`Cleanup` 见不在房 no-op)。
 
-**重连**(隐式取消清理)
-1. 同一 nick 在保活窗口内重新连上、发消息 → Receiver `heartbeat` 续命 + 投 `Connect`。
+**重连**(拆表 + 快照对齐)
+1. 同一 nick 在占座窗口内重新连上 → Receiver 接入时 `cancel_cleanup` 拆表 + 投 `Connect`。
 2. reduce 把状态从 `OFFLINE` 改回(恢复座位),私发 `Personal(StateSnapshot)` 让客户端一次对齐全量桌面(含自己的底牌)。
-3. 即便此前 `Cleanup` 已投,reduce 见状态已非 `OFFLINE` → 忽略。座位筹码安然无恙。
+3. 即便拆表前 `Cleanup` 已投(竞态),reduce 见状态已非 `OFFLINE` → 忽略。座位筹码安然无恙。
 
 ## 注意点
 
-- **在线但沉默会被误判掉线**:保活靠「收到消息续命」,所以纯观战、不操作的玩家也必须周期性 **ping**(或用 WS 协议层 ping/pong),**ping 间隔须 < `LIVENESS_TIMEOUT`**。
+- **不需要任何应用层心跳**(0070):在线用户不进占座表,静默观战任意久无影响;死连接由传输层协议 ping 判定(见「谁驱动哪一层」)。
 - **封装**:`_action` / `_liveness` 私有,外部只经公共方法,不直接戳内部 dict。
 - **单调时钟 / 一次性触发**:fire 后立刻从表删,避免重复投。
 - **精度 = `TICK`**:0.5~1s 足够,到点最多迟一个 tick,打牌无感。

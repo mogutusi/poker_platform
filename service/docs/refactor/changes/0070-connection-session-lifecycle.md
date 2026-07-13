@@ -35,8 +35,31 @@
 
 ## 实际改了什么(与「打算」对照)
 
-(收工回填)
+与「打算改什么」一致落地:
+
+- timer:`heartbeat/drop_liveness` → `arm_cleanup/cancel_cleanup`,`_liveness` 语义注释改「断线占座窗口(条目只在离线期存在)」;tick 一次性触发在新语义下正确。
+- receiver:接入 `cancel_cleanup`;删每帧续命;finally `was_current` → `arm_cleanup` + `Disconnect`;`_recv_frame` 加密臂收帧后先比 `session.expires_at`,过期关 4401(在 MAC 之前——过期会话不值得验)。
+- sender:取到消息后、封帧前同样比对,过期关 4401 后 return(覆盖「只收不发」的过期连接;双向零流量的过期连接存活到下次任一方向活动,记档接受)。
+- dispatch:`_drop_connection` 补 `arm_cleanup`(凡投 Disconnect 处必 arm 的第二处)。
+- connection:`Connection.session: Session | None` 字段 + `create` 透传;lifespan `/ws` 握手传 session(dev 明文 None 不查)。
+- reduce:`_disconnect` 加 `WATCHING → _begin_leave` 臂(观战者必不在手 → 即时 `_evict` + 投票重算;末人离房由顶层空房归一销毁)。
+- session:`create()` 先 `prune(now)`。
+- gameconfig:`LIVENESS_TIMEOUT` 注释改断线窗语义。
+
+测试:既有 3 处迁移(timer 两测改名并入触发即删断言、session prune 测避开 create 预扫)+ 新 `tests/shell/test_lifecycle_0070.py` 8 测(观战者断线即清·末人销房 / 有他人房保留 / 在座断线仍 OFFLINE+Cleanup 退筹回归 / **A1 主钉:在线静默极久零 Cleanup、断线后满窗必触发**(旧实现必红)/ B4 收帧过期 4401 / 出站过期 4401 / 未过期放行到 MAC(4400 证明走到 open))+ session `create` 预扫 1 测;692→**700** 全绿。
+
+docs:timer.md(表格/驱动者/接口/流程/注意点①全按新语义重写 + 历史注)、connection.md(步 5/6 + 断开语义分观战/在座)、core.md(Disconnect 行)、architecture.md(断开行)、user.md(驱逐来源 + 观战者即时)、auth.md(exp 兜底扩到活连接)、**frontend/BACKEND_GUIDE.md**(§1 心智模型第 4 条改写 + 新增第 5 条「心跳不用你操心」+ §4.3 exp 强制/4401 语义)、coding_principle.md + TODO 持续项(**前端手册同步纪律入规**)。
 
 ## 自 review
 
-(push 前回填)
+对照 [review.md](../review.md) 逐维(本单元与用户逐条讨论定案,方案本身经过了两轮外部对抗;实现后自查如下):
+
+- **① 分层 / 不变量**:reduce 只改工作副本(`_disconnect` 观战臂复用 `_begin_leave`,失败路径不存在——观战者臂无 Err);shell 不写 world(arm/cancel 是 Timer 私有表);exp 检查在 shell 收发边界,core 不知情;`connection.py` import `auth.session` 无环(session→channel,不回指 shell)。
+- **② 代码↔文档**:timer.md/connection.md/core.md/architecture.md/user.md/auth.md 与实现逐条对齐;「凡投 Disconnect 处必 arm」两处(receiver finally / dispatch._drop_connection)都已写进文档;gameconfig 注释同步。
+- **③ 文档↔文档**:timer.md ↔ connection.md ↔ BACKEND_GUIDE 的断线语义三处一致(观战者即清/在座 90s/无应用层心跳);config.md 的 LIVENESS 示例注释是通用示意,不与新语义冲突。
+- **④ 数据模型**:`Connection.session` 与 `channel` 同源(都来自握手的 Session),dev 明文两者皆 None,不可表达「有 session 无 channel」的怪态(create 参数成对传)。
+- **⑤ 规范**:无新裸字面量(4400/4401 是既有关闭码;窗口取 `gameconfig.LIVENESS_TIMEOUT`);注释讲为什么(为何删每帧续命/为何 sender 也查)。
+- **⑥ 测试**:A1 主钉直接模拟旧坏链时序(静默极久→零触发→断线→必触发),旧实现在此必红;B4 三测覆盖收/发/未过期放行;观战者臂含末人销房与非末人保留;`receiver finally → arm` 的一行由既有 receiver e2e 测试保护路径、由 timer 单测保护语义(组合面记为覆盖空缺,风险低)。
+- **⑦ 流程账本**:变更记录先行(计划已先行提交 e9e0b39);打算↔实际无偏差;新纪律(前端手册同步)已入 coding_principle + TODO 持续项并在本单元自身践行(BACKEND_GUIDE 三处更新)。
+
+**对抗自问(crux)**:①「观战者即清」会不会误伤"闪断 3 秒的观战者"?——会让他重新 join_room,但客户端可自动重进(指南已写),换来的是房间名册即时真实、空房即销;与用户确认过的取舍。②「断线装表」漏装即回到 A1?——装表点 = 投 Disconnect 点,两处枚举齐且文档立了「凡投必 arm」规则;新增第三处 Disconnect 投递时此规则是显式检查项。③ exp 检查放 MAC 前是否给未认证者探测面?——检查只依赖本连接已绑定的会话对象,不解析帧内容,无新输入面。0 未处置发现。

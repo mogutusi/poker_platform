@@ -103,5 +103,6 @@
 
 - [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))
 - [ ] 文档与实现漂移时**改文档**并在 changes/ 记录(最近一次全量 truth-up:[0047](changes/0047-doc-code-truth-up.md) —— Dispatcher 抽取 + 去房主注释 + 陈旧占位语)
+- [ ] **变动涉及前端可见面(协议/连接语义/关闭码/加密细节)→ 同一变更内同步 [frontend/BACKEND_GUIDE.md](../../../frontend/BACKEND_GUIDE.md)**(用户指示,0070 起;协议指南 wire-protocol-guide.md 照旧)
 - [ ] 新增可调参数 → 进 `gameconfig` + env + example(不留裸字面量)
 - [ ] 新增持久化实体 → 归「状态写 / 事件写」,不新开通道

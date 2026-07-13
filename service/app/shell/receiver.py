@@ -53,7 +53,7 @@ async def run_receiver(
         await _displace(old)  # 顶替:cancel 旧 Sender + 关旧 ws,不投 Disconnect(connection.md 顶替语义)
     conn.sender_task = asyncio.create_task(sender_loop(conn))
     try:
-        timer.heartbeat(conn.nick)
+        timer.cancel_cleanup(conn.nick)  # 重连/顶替落在占座窗口内:拆断线倒计时(0070;竞态由 reduce OFFLINE 兜)
         # 接入(reduce:dev 预置用户 no-op;重连恢复待 P1)。用 await put(背压安全),且在 try 内
         # ——即便 inbox 满/异常,finally 也会 cancel Sender + unregister,不留半初始化的泄漏连接。
         await inbox.put(Connect(origin=None, nick=conn.nick))
@@ -62,8 +62,7 @@ async def run_receiver(
         while True:
             payload = await _recv_frame(conn)  # 让出点:收帧 + 按 channel 解密/取明文
             if payload is None:
-                break  # FrameError(伪造/重放/损坏)= 安全信号:关连接(finally 清理),不进业务
-            timer.heartbeat(conn.nick)  # 每帧续命(保活按 nick;仅对已通过完整性校验的帧续命)
+                break  # FrameError/会话过期 = 安全信号:关连接(finally 清理),不进业务
             cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, history)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
@@ -75,8 +74,9 @@ async def run_receiver(
         if conn.sender_task is not None:
             conn.sender_task.cancel()
         if was_current:
+            timer.arm_cleanup(conn.nick)  # 断线装表:占座窗口自此起算(0070;凡投 Disconnect 处必 arm)
             try:
-                inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))  # 仅当前连接断开才标 OFFLINE
+                inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))  # 仅当前连接断开才投
             except asyncio.QueueFull:  # inbox 满(已是 CRITICAL 态);清理不抛
                 log.critical("inbox full; could not post Disconnect for nick=%s", conn.nick)
 
@@ -84,11 +84,21 @@ async def run_receiver(
 async def _recv_frame(conn: Connection) -> str | bytes | None:
     # 收一帧并归一成「明文载荷(str/bytes)」交 parse:
     #   channel None(dev)→ 明文文本帧,原样返回;
-    #   channel 非 None(加密)→ 二进制帧 → channel.open(结构→验 MAC→解密→验 seq,见 auth/channel.py)→ 明文 bytes。
-    # 返回 None = FrameError(伪造/重放/损坏):log.warning(只 reason,不含明文/密钥,脱敏红线)+ 关 ws + 让上层 break 关连接。
+    #   channel 非 None(加密)→ 会话未过期(exp 兜底强制到活连接,0070)→ 二进制帧 → channel.open
+    #   (结构→验 MAC→解密→验 seq,见 auth/channel.py)→ 明文 bytes。
+    # 返回 None = FrameError(伪造/重放/损坏)或会话过期:log.warning(只 reason,不含明文/密钥,脱敏红线)
+    # + 关 ws + 让上层 break 关连接。
     if conn.channel is None:
         return await conn.ws.receive_text()  # 让出点
     frame = await conn.ws.receive_bytes()  # 让出点
+    if conn.session is not None and time.time() >= conn.session.expires_at:
+        # 会话 exp 兜底(auth.md):过期密钥的报文一律拒服务——正常客户端已提前无感轮换,撞到 = 未按时换钥。
+        log.warning("frame rejected nick=%s reason=session_expired", conn.nick)
+        try:
+            await conn.ws.close(code=4401)  # 同握手拒码:须重新登录换会话
+        except Exception:
+            pass
+        return None
     try:
         return conn.channel.open(frame)
     except FrameError as e:

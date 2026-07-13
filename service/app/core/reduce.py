@@ -666,7 +666,8 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
 
 
 def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
-    # ws 断开:在房则标 OFFLINE 保座(timer.md「断开 ≠ 离场」,清理等 Cleanup);在大厅则无 world 变化。
+    # ws 断开:**观战者即时离场**(0070:无座无筹码,重进零成本;OFFLINE 幽灵观战者会拖住空房销毁),
+    # 在座者标 OFFLINE 保座(timer.md「断开 ≠ 离场」,清理等 Cleanup);在大厅则无 world 变化。
     # 在局者仍是 Player,轮到他时由行动倒计时 _timeout 自动 fold(牌局不卡)。
     room = work.room
     if room is None or cmd.nick not in room.users_in_room:
@@ -674,6 +675,9 @@ def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
     current = room.users_in_room[cmd.nick]
     if current is UserStatus.OFFLINE:
         return [], None  # 已离线(顶替/重复 Disconnect)→ 幂等忽略
+    if current is UserStatus.WATCHING:
+        # 观战者必不在手 → _begin_leave 走即时 _evict(退场广播 + 投票重算);末人离房由顶层空房归一销毁。
+        return _begin_leave(work, room, cmd.nick), None
     if not current.can_change_to(UserStatus.OFFLINE):
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{cmd.nick} {current}→OFFLINE 非法")
     room.users_in_room[cmd.nick] = UserStatus.OFFLINE

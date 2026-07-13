@@ -9,6 +9,7 @@ from typing import Any
 
 from app import gameconfig
 from app.auth.channel import SecureChannel
+from app.auth.session import Session
 from app.shell.ratelimit import TokenBucket
 
 log = logging.getLogger(__name__)
@@ -21,13 +22,21 @@ class Connection:
     ws: Any  # 物理 ws(FastAPI WebSocket 或测试 fake)
     outbound: "asyncio.Queue[Any]"  # 有界;装明文 ServerMessage,满 = 慢客户端(见 dispatch._enqueue)
     channel: SecureChannel | None = None  # 逐会话安全信道(引用会话的 SecureChannel);None=明文 dev 帧、非 None=加密帧(Sender seal / Receiver open,见 changes/0061)
+    session: Session | None = None  # 所属会话引用(exp 兜底强制到活连接:收/发帧前比对 expires_at,0070);dev 明文为 None
     sender_task: asyncio.Task | None = None  # 本连接 Sender 协程句柄;起 Sender 前为 None,退出/顶替时 cancel
     chat_bucket: TokenBucket | None = None  # 房聊发件人维度令牌桶(每连接,见 messaging.md / ratelimit);create 时建满桶
     dm_bucket: TokenBucket | None = None  # 私信发件人维度令牌桶(每连接,见 messaging.md §私信);与房聊各一桶
     # 注:用户在哪个房间是 world.users[nick].room,不是连接字段(连接绑 nick、不绑房)。
 
     @classmethod
-    def create(cls, nick: str, session_id: str, ws: Any, channel: SecureChannel | None = None) -> "Connection":
+    def create(
+        cls,
+        nick: str,
+        session_id: str,
+        ws: Any,
+        channel: SecureChannel | None = None,
+        session: Session | None = None,
+    ) -> "Connection":
         now = time.monotonic()
         return cls(
             nick=nick,
@@ -35,6 +44,7 @@ class Connection:
             ws=ws,
             outbound=asyncio.Queue(maxsize=gameconfig.OUTBOUND_MAX),
             channel=channel,  # None = 明文 dev(?nick=);非 None = 加密会话信道(?sid=)
+            session=session,  # 加密路传会话引用(exp 逐帧兜底,0070);dev 明文 None
             chat_bucket=TokenBucket.create(
                 gameconfig.ROOM_CHAT_RATE_BURST, gameconfig.ROOM_CHAT_RATE_PER_SEC, now
             ),

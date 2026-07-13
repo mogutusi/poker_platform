@@ -91,6 +91,7 @@ class Dispatcher:
         # 慢客户端:停路由到它(unregister)+ 投 Disconnect 标 OFFLINE;客户端重连靠 StateSnapshot 补回。
         # ws 物理关闭由其 Sender/Receiver 下次错误兜(dispatch 不 await,不在此 close)。
         self.conns.unregister(conn)
+        self.timer.arm_cleanup(conn.nick)  # 断线装表(0070:凡投 Disconnect 处必 arm,占座窗口自此起算)
         try:
             self.inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))
         except asyncio.QueueFull:

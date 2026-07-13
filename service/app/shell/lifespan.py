@@ -236,7 +236,7 @@ def create_app() -> FastAPI:
             await ws.close(code=4401)  # 未认证 / 过期 / 未知 sid:拒
             return
         conn = Connection.create(
-            nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session)
+            nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session), session=session
         )
         await run_receiver(
             conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.history, shell.persist

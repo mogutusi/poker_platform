@@ -52,7 +52,7 @@ core 看到的是 `world`,与 wire DTO 分离(治理见 [wire.md](wire.md))。**
 | `OpenFreeEntryVote()` | nick | wire | 有 `new_here` 时开一次免盲投票(见 [rules.md](rules.md)) |
 | `VoteFreeEntry(approve)` | nick | wire | 对免盲投票表态;已入局玩家全票 `approve` 则新玩家免费入局 |
 | `Connect(nick)` | None | shell | 握手后接入**大厅**(不带 room/积分)。按 world 分三类:nick 在房且 `OFFLINE`→重连恢复 + 广播 + 私发 `Personal(StateSnapshot)`;在房且在线→顶替再连,只私发快照对齐(状态不变、不广播);不在 `world.users`→纯大厅,core 无事(见 [connection.md](connection.md)) |
-| `Disconnect(nick)` | None | shell | ws 断开;在房则标 `OFFLINE` 保座,在大厅则无 world 变化 |
+| `Disconnect(nick)` | None | shell | ws 断开;**观战者即时离场**(末人离房销房,0070)、在座者标 `OFFLINE` 保座,在大厅则无 world 变化 |
 | `Timeout(nick, epoch)` | None | Timer | 行动超时(目标房由 `world.users[nick].room` 定) |
 | `Cleanup(nick)` | None | Timer | 占座到期清理 |
 

@@ -34,6 +34,9 @@ class SessionStore:
     def create(self, name: str, nickname: str, now: float) -> tuple[str, Session]:
         # 铸新会话:公开 session_id + 秘密 32B token,登记带 exp=now+ttl。返回 (session_id, Session)。
         # id/token 独立随机;不强制每用户单会话(轮换靠新登录 + 连接层顶替,会话层可并存新旧)。
+        # 先扫过期(0070):被静默轮换抛弃的旧会话永远不会再被 lookup,惰性删够不着 → 每次登录
+        # 主动清一遍(清扫频率 = 登录频率,零额外接线;过期密钥不常驻内存)。
+        self.prune(now)
         session_id = secrets.token_urlsafe(_SESSION_ID_BYTES)
         token = secrets.token_bytes(_SESSION_TOKEN_BYTES)
         session = Session(name=name, nickname=nickname, token=token, expires_at=now + self._ttl)

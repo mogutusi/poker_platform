@@ -74,11 +74,22 @@ def test_revoke_removes_and_is_idempotent():
 def test_prune_clears_expired_only():
     store = _store()
     old_sid, _ = store.create("n", "nick", _T0)  # exp = _T0 + _TTL
-    fresh_sid, _ = store.create("n", "nick", _T0 + _TTL)  # exp = _T0 + 2*_TTL
+    fresh_sid, _ = store.create("n", "nick", _T0 + _TTL - 1)  # old 尚未过期,create 的预扫(0070)不清它
     cleared = store.prune(_T0 + _TTL)  # now >= old.exp,< fresh.exp
     assert cleared == 1  # 只清过期的那条
     assert store.lookup(old_sid, _T0 + _TTL) is None
     assert store.lookup(fresh_sid, _T0 + _TTL) is not None
+    assert len(store) == 1
+
+
+def test_create_prunes_expired_sessions():
+    # 0070:静默轮换抛弃的旧会话不会再被 lookup(惰性删够不着)→ create 预扫——
+    # 每次登录清一遍过期会话,过期密钥不常驻内存(清扫频率 = 登录频率)。
+    store = _store()
+    store.create("n", "nick", _T0)
+    store.create("n", "nick", _T0)  # 两条都 exp = _T0 + _TTL
+    assert len(store) == 2
+    store.create("n", "nick", _T0 + _TTL)  # 新登录:预扫清掉两条过期的
     assert len(store) == 1
 
 

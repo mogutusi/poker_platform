@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import time
 
 from app.shell.connection import Connection
 
@@ -15,6 +16,15 @@ async def sender_loop(conn: Connection) -> None:
     try:
         while True:
             msg = await conn.outbound.get()  # 让出点:队列空则等
+            if conn.session is not None and time.time() >= conn.session.expires_at:
+                # 会话 exp 兜底的出站半边(0070):不给过期密钥再封任何密文——收帧侧检查覆盖不了
+                # 「只收不发的过期连接」,此处补上;关连接后 Receiver 的 receive 报错 → finally 清理。
+                log.warning("sender closing nick=%s reason=session_expired", conn.nick)
+                try:
+                    await conn.ws.close(code=4401)  # 同握手拒码:须重新登录换会话
+                except Exception:
+                    pass
+                return
             payload = msg.model_dump_json()  # 明文 JSON(隐私由结构缺位保证,见 wire.md)
             if conn.channel is None:
                 await conn.ws.send_text(payload)  # 明文 dev 帧;让出点:慢客户端卡这里(只影响本连接)

@@ -1,4 +1,5 @@
 # Timer:shell 协程,两张「到期时刻」表 → 周期扫描 → 过期项变 Command 投 inbox(见 timer.md)。
+# 行动倒计时按 room 键(reduce 经 TurnChanged 驱动);断线占座窗口按 nick 键(断线装表/重连拆表,0070)。
 # 绝不直接改 world、绝不 ws.send;决策时刻只活在 shell(单调时钟,不读墙钟);取消=隐式(staleness 由 reduce 兜)。
 
 import asyncio
@@ -27,7 +28,7 @@ class Timer:
     def __init__(self, inbox: "asyncio.Queue[Command]") -> None:
         self._inbox = inbox
         self._action: dict[str, _ActionDeadline] = {}  # room → 当前行动倒计时(每房至多一人行动)
-        self._liveness: dict[str, float] = {}  # nick → 保活到期时刻(按 nick 单键:Receiver 只知 nick)
+        self._liveness: dict[str, float] = {}  # nick → **断线占座窗口**到期时刻(条目只在离线期存在,0070)
 
     # ── 游戏层:GameLoop.dispatch 调(reduce 产 TurnChanged / ClearAction)──
     def on_turn_changed(self, room: str, nick: str, epoch: int, timeout_s: float | None = None) -> None:
@@ -37,12 +38,14 @@ class Timer:
     def clear_action(self, room: str) -> None:
         self._action.pop(room, None)  # 手结束:停该房行动倒计时
 
-    # ── 连接层:Receiver 调(只知 nick、不读 world)──
-    def heartbeat(self, nick: str) -> None:
-        self._liveness[nick] = now() + gameconfig.LIVENESS_TIMEOUT  # 收到任意帧续命
+    # ── 连接层:断线装表、重连拆表(0070 重设计;凡投 Disconnect 处必 arm)──
+    # 掉线检测不在这里:传输层(uvicorn 默认 20s 协议 ping)负责发现死连接并令 Receiver 退出;
+    # 本表只回答「已断线的人,座位再留多久」。在线用户不进表 ⇒ 无空触发、无「触发即删后断线漏清」坑。
+    def arm_cleanup(self, nick: str) -> None:
+        self._liveness[nick] = now() + gameconfig.LIVENESS_TIMEOUT  # 断线时刻起算占座窗口
 
-    def drop_liveness(self, nick: str) -> None:
-        self._liveness.pop(nick, None)
+    def cancel_cleanup(self, nick: str) -> None:
+        self._liveness.pop(nick, None)  # 窗口内重连/顶替:拆表;竞态漏拆由 reduce 的 OFFLINE staleness 兜底
 
     # ── 扫描 ──
     async def run(self) -> None:

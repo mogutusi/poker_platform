@@ -70,8 +70,8 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
    - `nick` **不在** `work.users` → 用 `uid`/`loaded` 安装 `UserState(uid, nickname=nick, points=loaded, room=cmd.room)`,加入房间为 `WATCHING`,私发 `Personal(StateSnapshot)`。
    - `nick` **已在** `work.users` → **拒绝**:`return [], Err(ALREADY_IN_ROOM)`,已在别房,要先 `LeaveRoom`(单房间约束)。
    > 重连(`Connect`)不在此载入:它只恢复已在 `world.users`、之前 `OFFLINE` 的用户(内存比 DB 新,绝不用 DB 覆盖),见 [connection.md](connection.md)。
-3. **驱逐**:用户离场(`LeaveRoom` / `Cleanup` 退完分)时,reduce 产出**最后一笔退分 `Persist` 后**,再 `del work.users[nick]`,用户回大厅。因一个用户只在一个房间,这条就是它的彻底离场,**驱逐无歧义**。
-   > 断线**不立即驱逐**:`OFFLINE` 期间座位筹码、`UserState` 都保留;等 `LIVENESS_TIMEOUT` 到期投 `Cleanup` 才真正退分 + 驱逐。重连落在窗口内则 `UserState` 安然无恙(见 [timer.md](timer.md))。
+3. **驱逐**:用户离场(`LeaveRoom` / `Cleanup` 退完分 / **观战者 `Disconnect`**,0070)时,reduce 产出**最后一笔退分 `Persist` 后**(观战者无座无分,直接驱逐),再 `del work.users[nick]`,用户回大厅。因一个用户只在一个房间,这条就是它的彻底离场,**驱逐无歧义**。
+   > **在座者**断线不立即驱逐:`OFFLINE` 期间座位筹码、`UserState` 都保留;断线起 `LIVENESS_TIMEOUT` 满投 `Cleanup` 才真正退分 + 驱逐,重连落在窗口内则 `UserState` 安然无恙(见 [timer.md](timer.md))。**观战者**断线即时驱逐(无可保留之物,0070)。
 
 ## 出入口窄:只在买入 / 腾座动全局积分
 
@@ -84,7 +84,7 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 所以**规定:一个用户同一时刻只在一个房间**,落在 `UserState.room`:
 
 - `JoinRoom` 到已在 `world.users`(即已在某房)的用户 → reduce 直接拒(`ALREADY_IN_ROOM`),前端先 `LeaveRoom` 再进下一个。`Connect` 不带 room、不参与此判定(它只接入大厅 / 重连恢复,见 [connection.md](connection.md))。
-- 于是该用户的彻底离场**只有一个来源**(它所在房间的 `Cleanup`/`LeaveRoom`),驱逐 `del work.users[nick]` 无歧义,也不必引用计数。
+- 于是该用户的彻底离场**只来自它所在的那一个房间**(其 `Cleanup`/`LeaveRoom`/观战者 `Disconnect`),驱逐 `del work.users[nick]` 无歧义,也不必引用计数。
 
 > 这条约束是当前规模下的简化(对应 [architecture.md](architecture.md) 不变量 9)。日后真要支持"一人多房"再改成 refcount 驱逐,但本规模无必要。
 

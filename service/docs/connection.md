@@ -141,13 +141,13 @@ class Dispatcher:                                        # 持 world(只读)/con
    - **在房 + 在线**(状态非 `OFFLINE`)→ **顶替再连**:新 ws 接管旧连接,旧连接被静默关闭、**未投 `Disconnect`**(见下「顶替语义」),故 `world` 仍记其在线。此时只私发 `Personal(StateSnapshot)` 让**新连接**对齐桌面;状态未变 → **不改不广播**(对房内他人无信息变化,用户无感,见「会话过期与密钥轮换」)。这与下文 §会话轮换「顶替 → 私发 `StateSnapshot`」一致。
 
    > reduce **不感知「连接」**,无法区分「顶替再连」与「同一连接重复 `Connect`」;但 Receiver 每条连接只投一次 `Connect`(见下「收帧循环」前的 `Connect` 投递),对**已在房在线** nick 的第二次 `Connect` 必来自新 ws(= 顶替)。重发快照是只读、隐私逐收件人(见 [core.md](core.md) `StateSnapshot`)、幂等安全的——正确性不靠「证明这是顶替」,而靠「快照本身无害可重发」。**积分始终不在 `Connect` 载入**,等 `JoinRoom` 才载入(见 [lobby.md](lobby.md) / [user.md](user.md))。
-5. **收帧循环**:`while: 收帧 → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`LeaveRoom`/游戏动作/房聊在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room);**`JoinRoom` 例外**——报文只带 `room`,Receiver 按连接 nick **读 DB 富化 `uid`/`loaded`**(异步)再构 `JoinRoom(room, uid, loaded)`(身份/积分不信报文,见 [changes/0030](refactor/changes/0030-p4-per-join-wire-load.md))。每收一帧 `timer.heartbeat(nick)` 续命(见 [timer.md](timer.md))。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。
+5. **收帧循环**:`while: 收帧 → [会话 exp 检查(0070)] → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。`LeaveRoom`/游戏动作/房聊在这条循环里(房间由 `world.users[nick].room` 推定,命令不带 room);**`JoinRoom` 例外**——报文只带 `room`,Receiver 按连接 nick **读 DB 富化 `uid`/`loaded`**(异步)再构 `JoinRoom(room, uid, loaded)`(身份/积分不信报文,见 [changes/0030](refactor/changes/0030-p4-per-join-wire-load.md))。加密连接收/发帧前各比对一次会话 `expires_at`,过期关连接(4401,exp 兜底强制到活连接;dev 明文无会话不查)。协议/解析错误直接构造 `ErrorMessage` 投本连接 `outbound`。**不再每帧续命**——占座窗口改为断线装表(0070,见 [timer.md](timer.md))。
 6. **退出清理**(ws 断 / 异常):
    - `conns.unregister(conn)`(只删自己,顶替场景自动跳过)。
-   - **仅当 `is_current` 为真才投 `Disconnect(nick)`**:被顶替的旧连接 `is_current=False`,**静默退出**(否则会把刚重连上的人误标 OFFLINE)。reduce 收 `Disconnect`:若 nick 在某房则标 `OFFLINE` 保座,否则(大厅)只是没了 presence、无 world 变化。
-   - **不主动 `drop_liveness`**:断开后保活仍在走,到期触发 `Cleanup` 给占座窗口(见 [timer.md](timer.md))。
+   - **仅当 `is_current` 为真才 `arm_cleanup(nick)` + 投 `Disconnect(nick)`**(0070:凡投 `Disconnect` 处必装占座窗口表;`dispatch._drop_connection` 同):被顶替的旧连接 `is_current=False`,**静默退出**(否则会把刚重连上的人误标 OFFLINE)。reduce 收 `Disconnect`:**观战者即时离场**(无座无筹码,重进零成本,末人离房销房;0070),在座者标 `OFFLINE` 保座,大厅则无 world 变化。
+   - 新连接接入时 `cancel_cleanup(nick)` 拆表(步 1 后);竞态漏拆由 reduce 的 OFFLINE staleness 兜底。
 
-> **断开 ≠ 离场**:在房间里断开只标 `OFFLINE`、保留座位;真正退筹释座等 `LIVENESS_TIMEOUT` 的 `Cleanup`,或用户主动 `LeaveRoom`(见 [lobby.md](lobby.md))。
+> **断开 ≠ 离场(限在座者)**:在座者断开只标 `OFFLINE`、保留座位;真正退筹释座等断线起 `LIVENESS_TIMEOUT` 满的 `Cleanup`,或用户主动 `LeaveRoom`(见 [lobby.md](lobby.md))。**观战者断开即离场**(0070)——重连后在大厅,需重新 `join_room`。
 
 ## 顶替语义(同 nick 新连接顶掉旧的)
 
