@@ -83,7 +83,9 @@
 - **`k_cur_until` 是排程不是拒登时刻(0066 决策 2,偏离本文原「失效时刻」字面)**:若登录也拒过期 `k_cur`,轮换 cron 迟跑/挂掉会把运维故障放大成**全员锁死**;「泄露窗口 ≤ 一周」本就依赖轮换真的发生,不靠拒登兜底。轮换任务只轮 `k_cur_until <= now` 的账号(幂等,跑多勤都行);`k_cur_until` 为 **NULL = 不排程**(dev 种子行),只能 `rotate --name` 显式轮换。
 - `*_until` 存 **epoch 秒(float)**,与 auth 全链时基一致(`SessionStore.expires_at`/`now()`/blob.ts 都是 float;DateTime 列在 sqlite 读回丢 tz,鉴权比较不再引入 tz 补丁面)。
 
-**轮换任务 = 管理员 CLI [`scripts/kuser_admin.py`](../scripts/kuser_admin.py) + 系统 cron(每周跑)**:`rotate` 挑出到期账号,逐个——生成**全新随机** `K_user` → 单条 UPDATE 原子搬移(旧 `k_cur` 降为 `k_prev`、宽限 `KUSER_GRACE_DAYS` 天;新键上位 `k_cur`、版本 +1、重排 `k_cur_until = now + KUSER_ROTATION_DAYS`)→ 新钥打到**管理员终端 stdout**。**不做进程内调度**(决定性理由):新钥必须带外下发,进程内轮换产出的新钥无处可去——打进服务器日志违反脱敏红线;CLI stdout 正是带外通道的起点,服务器进程全程不见新钥。CLI 另有 `list`(版本/排程记账,**不含键材料**)与 `issue`(首发/`--reset` 补发:生成高熵随机口令 + `K_user` v1 + 排程;补发即强制换代、清空 `k_prev` 不留宽限)。
+**轮换任务 = 管理员 CLI [`scripts/kuser_admin.py`](../scripts/kuser_admin.py) + 系统 cron(每周跑;crontab 示例见 [dev.md](dev.md)「K_user 管理」)**:`rotate` 挑出到期账号,逐个——生成**全新随机** `K_user` → 单条 UPDATE 原子搬移(旧 `k_cur` 降为 `k_prev`、宽限 `KUSER_GRACE_DAYS` 天;新键上位 `k_cur`、版本 +1、重排 `k_cur_until = now + KUSER_ROTATION_DAYS`)→ 新钥打到**管理员终端 stdout**。**不做进程内调度**(决定性理由):新钥必须带外下发,进程内轮换产出的新钥无处可去——打进服务器日志违反脱敏红线;CLI stdout 正是带外通道的起点,服务器进程全程不见新钥。CLI 另有 `list`(版本/排程记账,**不含键材料**)与 `issue`(首发/`--reset` 补发:生成高熵随机口令 + `K_user` v1 + 排程;补发即强制换代、清空 `k_prev` 不留宽限)。
+
+**一句话定性:换钥半自动、发钥永远手动(设计使然,不是没做完)**。cron 只完成「DB 里换上新钥」这一半;「新钥到用户手里」必须管理员看 stdout 后**带外私发**、用户手输——不能自动化,否则新钥要么经信道下发(被旧钥持有者链式解出,见下方决策)、要么进客户端存储(破坏「不在前端」属性),轮换就不再限制泄露窗口。忘跑 cron 也**不锁人**:`k_cur_until` 只是排程、登录不查它(见上)。
 
 **下发(带外)**:CLI 产出的新 `K_user` 由**管理员私下发给用户**(同首发那条带外通道,不走裸 ws/http),用户在宽限期内手输换上。`KUSER_GRACE_DAYS` 给的就是"还没来得及换的人仍能用旧钥登录"的缓冲。
 
