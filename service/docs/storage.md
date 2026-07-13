@@ -103,9 +103,9 @@ else:
 
 ## 鉴权列写路径(delayDB 之外的同步直写)
 
-**不是所有 DB 写都走 delayDB。** 上面的模型(内存权威 + delayDB 异步追平)只适用于**有内存副本的权威状态**(全局积分、手牌记录)。**鉴权列**(`hash_password`/`name`/`k_user`)**不进内存**(见 [user.md](user.md):不放 `UserState`)、**DB 即权威、无内存副本**——delayDB 的「内存先生效、崩溃丢窗口可接受」对它们不成立(密码改了却在崩溃窗内静默回退 = 用户拿新密码登不进,比丢几点积分严重)。故它们走**请求级 session 的同步 UPDATE、commit 后才回成功**([app/db/user_writes.py](../app/db/user_writes.py),首个消费者 = 改密码 `POST /user/password`,[changes/0064](refactor/changes/0064-p7-change-password.md))。
+**不是所有 DB 写都走 delayDB。** 上面的模型(内存权威 + delayDB 异步追平)只适用于**有内存副本的权威状态**(全局积分、手牌记录)。**鉴权列**(`hash_password`/`name`/`k_cur`/`k_prev`)**不进内存**(见 [user.md](user.md):不放 `UserState`)、**DB 即权威、无内存副本**——delayDB 的「内存先生效、崩溃丢窗口可接受」对它们不成立(密码改了却在崩溃窗内静默回退 = 用户拿新密码登不进,比丢几点积分严重)。故它们走**请求级 session 的同步 UPDATE、commit 后才回成功**([app/db/user_writes.py](../app/db/user_writes.py),首个消费者 = 改密码 `POST /user/password`,[changes/0064](refactor/changes/0064-p7-change-password.md))。
 
-**这不破「PersistWriter 是 delayDB 唯一写者」**:鉴权列写与 delayDB **正交**——不同的写路径、不同的数据(DB 权威 vs 内存权威)。**无锁前提靠列不相交**:PersistWriter 的状态写是**定向列 UPDATE**(`SET points`,[db.md](db.md)/0028),鉴权列写是 `SET hash_password`,两写**永不碰同一列** ⇒ 无 lost-update、无需 `FOR UPDATE`。改密码极低频(人工发起),dev sqlite 库级串行 / 生产 pg 行级 MVCC 足矣。
+**这不破「PersistWriter 是 delayDB 唯一写者」**:鉴权列写与 delayDB **正交**——不同的写路径、不同的数据(DB 权威 vs 内存权威)。**无锁前提靠列不相交**:PersistWriter 的状态写是**定向列 UPDATE**(`SET points`,[db.md](db.md)/0028),鉴权列写是 `SET hash_password`(0064 改密)/ `SET nickname`(0065 CAS 改名)/ `SET k_cur/k_prev/…`(0066 轮换,可跨进程 CLI),各写**永不碰 `points` 列** ⇒ 无 lost-update、无需 `FOR UPDATE`。这些写全部极低频(人工/每周 cron 发起),dev sqlite 库级串行 / 生产 pg 行级 MVCC 足矣。**唯一带 `points` 的鉴权路写是 `issue_login` 的建新行 INSERT**(0066 首发)——不破前提:尚未发行的用户必不在 `world.users`(无内存在场),PersistWriter 不可能对该行产写;复用既有行(pre-P5 login-enable)时则刻意不动 `points`。
 
 ## 崩溃语义
 

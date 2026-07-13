@@ -75,6 +75,8 @@ class GameConfig(BaseSettings):
     REST_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576)  # REST 加密信封字节上限;open_envelope 拒超大信封(防解析放大,见 changes/0062)
     REST_REPLAY_WINDOW: int = Field(ge=1, le=4096)  # REST 防重放滑动窗宽度(容忍多深的并发/乱序请求;更旧一律拒,见 changes/0062)
     LOGIN_REPLAY_WINDOW_SECONDS: int = Field(ge=1, le=3600)  # 登录包新鲜窗 W(秒):|now - blob.ts| 超 W 拒;nonce 去重条目 TTL = 2W(须盖住 ts 超前时的整个新鲜期,见 changes/0063)
+    KUSER_ROTATION_DAYS: int = Field(ge=1, le=90)  # K_user 轮换周期(天):issue/rotate 把 k_cur_until 排到 now+此值,轮换任务(scripts/kuser_admin.py rotate)挑到期者轮换
+    KUSER_GRACE_DAYS: int = Field(ge=0, le=30)  # 旧钥宽限期(天):轮换后 k_prev 仍可登录这么久(附 rotate 提示),给还没手输新钥的人缓冲;0=立即失效
 
     # ── REST 查询(rest.md;changes/0050/0051）──
     LEADERBOARD_DEFAULT_LIMIT: int = Field(ge=1, le=1000)  # GET /leaderboard 不带 limit 时默认返回条数

@@ -12,25 +12,69 @@ from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, 
 
 
 class LoginUser(NamedTuple):
-    # 登录握手(auth.md)按 name 载入的账号鉴权投影(changes/0056)。name 命中 → 非 NULL;
-    # hash_password/k_user 可能 NULL(name 设了但未启用登录)→ 由 authenticate fail-closed。
+    # 登录握手(auth.md)按 name 载入的账号鉴权投影(changes/0056;双钥扩列 changes/0066)。name 命中 → 非 NULL;
+    # hash_password/k_cur 可能 NULL(name 设了但未启用登录)→ 由 authenticate fail-closed。
     uid: int  # 不可变账号主键(= User.id)
     name: str  # 登录账号(唯一,不可变)
     nickname: str  # 游戏昵称(握手后投 Connect)
     hash_password: str | None  # 密码哈希 "salt$rounds$digest"(0053);NULL = 未设密码
-    k_user: str | None  # SM4 密钥 hex;NULL = 未发密钥(未启用登录)
+    k_cur: str | None  # 当前 SM4 密钥 hex;NULL = 未发密钥(未启用登录)
+    k_prev: str | None  # 上一把 SM4 密钥 hex;宽限期内仍可登录(NULL = 无旧钥)
+    k_prev_until: float | None  # 旧钥宽限截止(epoch 秒);过期即拒(登录端点查)
 
 
 async def load_user_for_login(
     sessionmaker: async_sessionmaker[AsyncSession], name: str
 ) -> LoginUser | None:
     # 按登录账号 name 读鉴权字段供 /user/login(auth.md §登录握手)。无此行返回 None
-    # (name 唯一 + NULL 不匹配 → 未启用登录的历史行天然跳过)。秘密 hash_password/k_user 只回给 authenticate,不进日志。
+    # (name 唯一 + NULL 不匹配 → 未启用登录的历史行天然跳过)。秘密 hash_password/k_cur/k_prev 只回给 authenticate,不进日志。
     async with sessionmaker() as session:
         user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()
         if user is None:
             return None
-        return LoginUser(user.id, user.name, user.nickname, user.hash_password, user.k_user)
+        return LoginUser(
+            user.id, user.name, user.nickname, user.hash_password, user.k_cur, user.k_prev, user.k_prev_until
+        )
+
+
+class LoginUserMeta(NamedTuple):
+    # 管理员 CLI `list` 的记账投影(changes/0066):**不带任何键材料**(密钥只在 rotate/issue 生成时打一次 stdout,
+    # 之后除登录解密外不再导出——list 只看版本/排程,足够对账「谁该换、谁逾期」)。
+    uid: int  # 不可变账号主键
+    name: str  # 登录账号
+    nickname: str  # 游戏昵称
+    k_cur_ver: int | None  # 当前钥版本(NULL = 行有 name 但未发钥)
+    k_cur_until: float | None  # 当前钥到期应轮换时刻(epoch 秒;NULL = 不排程)
+    has_prev: bool  # 是否还挂着宽限中的旧钥
+    k_prev_until: float | None  # 旧钥宽限截止(epoch 秒)
+
+
+async def list_login_users(sessionmaker: async_sessionmaker[AsyncSession]) -> list[LoginUserMeta]:
+    # 全部已设 name 的账号的密钥记账视图(管理员 CLI list,changes/0066);按 name 定序稳定可读。
+    async with sessionmaker() as session:
+        rows = (
+            await session.execute(select(User).where(User.name.is_not(None)).order_by(User.name))
+        ).scalars()
+        return [
+            LoginUserMeta(
+                u.id, u.name, u.nickname, u.k_cur_ver, u.k_cur_until, u.k_prev is not None, u.k_prev_until
+            )
+            for u in rows
+        ]
+
+
+async def users_due_for_rotation(
+    sessionmaker: async_sessionmaker[AsyncSession], now: float
+) -> list[tuple[int, str]]:
+    # 到期应轮换的账号 (uid, name)(轮换任务用,changes/0066):有当前钥且 k_cur_until <= now。
+    # k_cur_until 为 NULL = 不排程(dev 种子行/手动管理行)→ 不选;显式 rotate --name 才轮它们。
+    async with sessionmaker() as session:
+        stmt = (
+            select(User.id, User.name)
+            .where(User.k_cur.is_not(None), User.k_cur_until.is_not(None), User.k_cur_until <= now)
+            .order_by(User.name)
+        )
+        return [(uid, name) for uid, name in (await session.execute(stmt)).all()]
 
 
 async def load_profile_by_name(
@@ -65,7 +109,7 @@ async def load_password_for_change(
     sessionmaker: async_sessionmaker[AsyncSession], name: str
 ) -> tuple[int, str | None] | None:
     # 按登录账号 name 读 (uid, hash_password) 供 POST /user/password 验旧密码(changes/0064)。
-    # 只取改密码所需两列(不带 k_user,最小化);无此行返回 None(会话在、行没了 = 内部不一致 → 端点 500);
+    # 只取改密码所需两列(不带 k_cur/k_prev,最小化);无此行返回 None(会话在、行没了 = 内部不一致 → 端点 500);
     # hash_password 可能 None(name 设了未启用密码)→ 端点判 403(无旧密码可验)。落库写按不可变 uid(db.md)。
     async with sessionmaker() as session:
         user = (await session.execute(select(User).where(User.name == name))).scalar_one_or_none()

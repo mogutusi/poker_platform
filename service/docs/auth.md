@@ -66,39 +66,42 @@
 ## 共享密钥(手输,不在前端)
 
 - 每个用户一把**对称密钥 `K_user`**(SM4 用,16 字节),由管理员**带外**(当面/私信)发放,登录时**用户手动输入**——它**不写进前端代码**,所以扒前端拿不到,这正是它和"前端内置 PSK"的关键区别。
-- 服务器存每用户的 `K_user`(与鉴权列同表:`User.k_user` hex,已随 [0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md) 落地**单把**)。**可轮换**("当前密钥"= 当下有效的那把),轮换缩小泄露窗口(每周一换,见下);双钥/版本/宽限(`k_cur`/`k_prev`/…)属「K_user 每周轮换」砖,届时扩列。
+- 服务器存每用户的 `K_user`(与鉴权列同表;0056 落单把 `k_user`,**[0066](refactor/changes/0066-p5-kuser-rotation.md) 扩成双钥**:`User.k_cur`(当前)+ `k_prev`(上一把,宽限期内仍可登录)+ 各自 `_ver`/`_until`,迁移 `b8ca88a687af`)。轮换缩小泄露窗口(每周一换,见下)。
 - 取舍:**推荐每用户一把**(挡内部人互相解密、限爆炸半径)。若图省事用**全局一把**,则任何内部人都能解别人流量——仅当全员互信时才接受。
 
-## K_user 每周轮换
+## K_user 每周轮换 —— 已落地([changes/0066](refactor/changes/0066-p5-kuser-rotation.md))
 
-**目标:把"一把 `K_user` 泄露还能用多久"压到一周。** 要让轮换真正有意义,新密钥必须**带外、全新随机**(不能由旧密钥派生/经信道下发,否则拿到旧密钥就顺着链拿到新的);这也保住 `K_user`"不在前端、手输"的根本属性(见上)。
+**目标:把"一把 `K_user` 泄露还能用多久"压到一周。** 要让轮换真正有意义,新密钥必须**带外、全新随机**(不能由旧密钥派生/经信道下发,否则拿到旧密钥就顺着链拿到新的);这也保住 `K_user`"不在前端、手输"的根本属性(见上)。轮换**不影响已建会话**(会话密钥派生自 `session_token`,与 `K_user` 无关)——只影响之后的登录。
 
-**存储**(每用户两把,带宽限期,避免切换时锁死):
+**存储**(每用户两把,带宽限期,避免切换时锁死;`User` 表扩列,迁移 `b8ca88a687af`):
 
 | 字段 | 含义 |
 |---|---|
-| `k_cur` + `k_cur_ver` + `k_cur_until` | 当前密钥 + 版本号 + 失效时刻 |
-| `k_prev` + `k_prev_ver` + `k_prev_until` | 上一把(宽限期内仍可登录) |
+| `k_cur` + `k_cur_ver` + `k_cur_until` | 当前密钥 + 版本号 + **到期应轮换时刻**(排程,登录不查它,见下) |
+| `k_prev` + `k_prev_ver` + `k_prev_until` | 上一把 + 版本号 + **宽限截止**(登录查它:过期即拒) |
 
-**轮换任务(每周,定时跑)**:对每个用户——生成**全新随机** `K_user` → 旧 `k_cur` 降为 `k_prev`(宽限 `KUSER_GRACE_DAYS` 天)→ 新键设为 `k_cur`(有效 `KUSER_ROTATION_DAYS` 天)。任务由管理员侧 cron 或进程内调度跑(实现选一,见 [dev.md](dev.md))。
+- **`k_cur_until` 是排程不是拒登时刻(0066 决策 2,偏离本文原「失效时刻」字面)**:若登录也拒过期 `k_cur`,轮换 cron 迟跑/挂掉会把运维故障放大成**全员锁死**;「泄露窗口 ≤ 一周」本就依赖轮换真的发生,不靠拒登兜底。轮换任务只轮 `k_cur_until <= now` 的账号(幂等,跑多勤都行);`k_cur_until` 为 **NULL = 不排程**(dev 种子行),只能 `rotate --name` 显式轮换。
+- `*_until` 存 **epoch 秒(float)**,与 auth 全链时基一致(`SessionStore.expires_at`/`now()`/blob.ts 都是 float;DateTime 列在 sqlite 读回丢 tz,鉴权比较不再引入 tz 补丁面)。
 
-**下发(带外)**:轮换任务产出的新 `K_user` 由**管理员私下发给用户**(同首发那条带外通道,不走裸 ws/http),用户在宽限期内手输换上。`KUSER_GRACE_DAYS` 给的就是"还没来得及换的人仍能用旧钥登录"的缓冲。
+**轮换任务 = 管理员 CLI [`scripts/kuser_admin.py`](../scripts/kuser_admin.py) + 系统 cron(每周跑)**:`rotate` 挑出到期账号,逐个——生成**全新随机** `K_user` → 单条 UPDATE 原子搬移(旧 `k_cur` 降为 `k_prev`、宽限 `KUSER_GRACE_DAYS` 天;新键上位 `k_cur`、版本 +1、重排 `k_cur_until = now + KUSER_ROTATION_DAYS`)→ 新钥打到**管理员终端 stdout**。**不做进程内调度**(决定性理由):新钥必须带外下发,进程内轮换产出的新钥无处可去——打进服务器日志违反脱敏红线;CLI stdout 正是带外通道的起点,服务器进程全程不见新钥。CLI 另有 `list`(版本/排程记账,**不含键材料**)与 `issue`(首发/`--reset` 补发:生成高熵随机口令 + `K_user` v1 + 排程;补发即强制换代、清空 `k_prev` 不留宽限)。
 
-**登录时选哪把**:登录请求带 `key_version`;服务器按版本取对应键解 `blob`:
+**下发(带外)**:CLI 产出的新 `K_user` 由**管理员私下发给用户**(同首发那条带外通道,不走裸 ws/http),用户在宽限期内手输换上。`KUSER_GRACE_DAYS` 给的就是"还没来得及换的人仍能用旧钥登录"的缓冲。
 
-- 命中 `k_cur` → 正常。
-- 命中 `k_prev` 且未过宽限 → **接受**,但在(被 `K_user` 加密的)登录响应里附 `rotate=true` 提示客户端尽快换新钥。
-- 两把都不匹配/已过期 → 拒登,要求带外补发。
+**登录时选哪把(0066 决策 1,偏离本文原「请求带 `key_version`」设计)**:登录请求**不带版本**(`{name, iv, blob}` 不变)——`K_user` 是用户手输的,用户无从知道也不该被要求记版本;服务器**先试 `k_cur`、败再试宽限内的 `k_prev`**(两次 `authenticate`;错钥路径在 SM4 解密/JSON 解析即败、不进昂贵的 `verify_password`,本规模代价可忽略)。版本列退为管理员记账(`list` 对账),不进协议:
 
-**首发 / 强制轮换(疑似泄露)**:走同一条带外路径,立即生成下发、缩短旧钥宽限。
+- `k_cur` 解开 → 正常,响应 `rotate=false`。
+- `k_prev` 解开且未过宽限(`now <= k_prev_until`;`k_prev_until` 为 NULL 的脏行 fail-closed 拒)→ **接受**,响应附 `rotate=true` 提示客户端尽快换新钥。**响应用匹配到的那把加密**(旧钥客户端解不开新钥密文)。
+- 两把都不行/旧钥过宽限 → 统一 401,要求带外补发(`issue --reset`)。
+
+**首发 / 强制轮换(疑似泄露)**:`issue --name X`(新账号/启用登录)/ `issue --name X --reset`(立即换代且旧钥零宽限)/ `rotate --name X`(无视排程立即轮换,旧钥留正常宽限)。
 
 > **决策(可改)· 别用"信道自动下发新钥"图省事**:把新 `K_user` 用旧钥加密经信道推给客户端、客户端存本地,虽免去手输,但①新钥进了客户端存储(破坏"不在前端"属性),②拿到旧钥就能解出新钥(链式,轮换不再限泄露窗口)。**仅在确实嫌每周手输烦、且接受削弱时才用**;默认带外手输。
 
-**配置**(照 [config.md](config.md)):
+**配置**(照 [config.md](config.md),已随 0066 进 `gameconfig` + `poker.env.example`):
 
 ```python
-KUSER_ROTATION_DAYS: int = Field(ge=1, le=90)    # 轮换周期(天),默认 7
-KUSER_GRACE_DAYS:    int = Field(ge=0, le=30)     # 旧钥宽限期(天),默认 3
+KUSER_ROTATION_DAYS: int = Field(ge=1, le=90)    # 轮换周期(天),基线 7
+KUSER_GRACE_DAYS:    int = Field(ge=0, le=30)     # 旧钥宽限期(天),基线 3(0 = 立即失效)
 ```
 
 ## 登录握手(HTTP,把账号密码护住)
@@ -110,15 +113,15 @@ token **绝不明文上线**:它只在被 `K_user` 加密的登录响应里出�
    body = { name,                                   # 明文(非秘密),供服务器选 K_user
             iv,                                      # 16B 随机
             blob = sm4_cbc_enc(K_user, iv, {password, client_nonce, ts}) }   # ts=客户端墙钟(0063 重放守卫)
-2. 服务器  按 name 取 K_user → 解 blob → 校验密码(SM3+盐)
+2. 服务器  按 name 取 K_user(先试 k_cur、败再试宽限内 k_prev,见 §K_user 每周轮换)→ 解 blob → 校验密码(SM3+盐)
            生成  session_id(公开句柄) + session_token(32B 秘密)
            内存会话表[session_id] = { name, nickname, token, exp }
-   响应 = sm4_cbc_enc(K_user, iv2, { session_id, session_token, exp })   # token 被 K_user 护住
+   响应 = sm4_cbc_enc(匹配到的 K_user, iv2, { session_id, session_token, exp, rotate })   # token 被 K_user 护住;rotate=true=在用旧钥、尽快换新(0066)
 3. 客户端  解出 session_id(公开)与 session_token(秘密,只留本地)
 ```
 
 - **登录包重放守卫已落地([changes/0063](refactor/changes/0063-p5-login-replay-guard.md))**:双守卫相与——① **freshness**:`|now − blob.ts| > LOGIN_REPLAY_WINDOW_SECONDS` 拒(绝对值容双向时钟偏斜);② **nonce 去重**:`(name, client_nonce)` 已见拒(`app/auth/nonce.py` `NonceCache`,活在 login router、惰性剪枝且**严格过期后才剪**)。**条目 TTL = 2×新鲜窗**——ts 可超前 now 至 W,blob 新鲜期最晚到 ts+W ≤ now+2W,条目必须盖住整个新鲜期,否则「条目先过期、blob 还新鲜」留重放缝(0063 自 review 抓修)。重放包要么 ts 过期、要么 nonce 撞库;检查在 `authenticate` 之后(伪造包灌不进缓存),失败仍统一 401。**已接受残余窗(记档)**:进程重启清空 nonce 缓存 → freshness 窗内旧包可复活一次(窗短 × 重启罕见,不持久化 nonce)。
-- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_user)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce, ts}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/缺 ts/ts 非数值/密码错一律 None、绝不崩;`client_nonce`/`ts` 透出供端点重放守卫,0063 起 ts 必填)。**登录端点已落地**([changes/0059](refactor/changes/0059-p5-login-endpoint.md)):`app/rest/login.py` `make_login_router` —— `{name,iv,blob}` → `load_user_for_login` → `authenticate` → `SessionStore.create` → `K_user` 加密下发 `{session_id, session_token, exp}`(**无 JWT**);**fail-closed 统一 401**(不泄未知账号/密码错/blob 坏之别);挂 `create_app` + `SessionStore` 进 DevShell。**dev 种子已 login-enable**([changes/0060](refactor/changes/0060-p5-dev-seed-login-enabled.md)):`seed_dev_users` 给 DEV_USERS 补 `name`=昵称 / 共享 `DEV_PASSWORD` 哈希 / 共享 `DEV_KUSER`(dev-only),故 DEV_USERS 可真登录(生产走每用户带外 K_user)。**ws 信道接线已落地**([changes/0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):登录拿到 `{session_id, session_token}` 后,客户端以 `/ws?sid=<session_id>` 连接,此后每帧走会话密钥信封(Receiver/Sender 接进 `SecureChannel`,见 §加密信道)。**REST 信封亦已落地**([changes/0062](refactor/changes/0062-p5-rest-envelope-user-me.md),信封助手 + 路由工厂,非 middleware);**重放守卫亦已落地**([changes/0063](refactor/changes/0063-p5-login-replay-guard.md),见上)。登录握手全链闭环;P5 仅余 K_user 每周轮换。
+- **第 2 步的凭证校验已落地**([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`app/db/queries.py` `load_user_for_login(name) -> LoginUser|None`(按 `name` 载 uid/nickname/hash_password/k_cur/k_prev/k_prev_until)+ `app/auth/credentials.py` `authenticate(hash_password, k_user_hex, iv, blob) -> LoginProof|None`(取 K_user 解 blob → `{password, client_nonce, ts}` → `verify_password`,**fail-closed**:缺列/解密坏/JSON 坏/缺 ts/ts 非数值/密码错一律 None、绝不崩;`client_nonce`/`ts` 透出供端点重放守卫,0063 起 ts 必填)。**登录端点已落地**([changes/0059](refactor/changes/0059-p5-login-endpoint.md)):`app/rest/login.py` `make_login_router` —— `{name,iv,blob}` → `load_user_for_login` → `authenticate` → `SessionStore.create` → `K_user` 加密下发 `{session_id, session_token, exp}`(**无 JWT**);**fail-closed 统一 401**(不泄未知账号/密码错/blob 坏之别);挂 `create_app` + `SessionStore` 进 DevShell。**dev 种子已 login-enable**([changes/0060](refactor/changes/0060-p5-dev-seed-login-enabled.md)):`seed_dev_users` 给 DEV_USERS 补 `name`=昵称 / 共享 `DEV_PASSWORD` 哈希 / 共享 `DEV_KUSER`(dev-only),故 DEV_USERS 可真登录(生产走每用户带外 K_user)。**ws 信道接线已落地**([changes/0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)):登录拿到 `{session_id, session_token}` 后,客户端以 `/ws?sid=<session_id>` 连接,此后每帧走会话密钥信封(Receiver/Sender 接进 `SecureChannel`,见 §加密信道)。**REST 信封亦已落地**([changes/0062](refactor/changes/0062-p5-rest-envelope-user-me.md),信封助手 + 路由工厂,非 middleware);**重放守卫亦已落地**([changes/0063](refactor/changes/0063-p5-login-replay-guard.md),见上);**K_user 双钥轮换亦已落地**([changes/0066](refactor/changes/0066-p5-kuser-rotation.md),双钥两次尝试 + `rotate` 提示 + 管理员 CLI,见 §K_user 每周轮换)。登录握手全链闭环,**P5 全部落地**。
 - 会话表是**内存 shell 状态**(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效→重新登录,可接受。**已落地** [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):`SessionStore`(`create(name,nickname,now)->(session_id, Session)` / `lookup(sid,now)`(过期删返 None)/ `revoke` / `prune(now)`)+ `Session{name,nickname,token,expires_at}`;`session_id=token_urlsafe`(公开句柄)、`token=token_bytes(32)`(秘密,派生逐帧密钥见 [channel.py](../app/auth/channel.py))。时钟外移(`now` 显式传,同 timer.md)、`exp=now+SESSION_TTL_SECONDS` 服务器兜底。`/user/login` 铸会话(0059)+ ws 握手 `?sid=` 查表(0061)均已落地。
 - **登录只返回会话凭证(无 JWT)**:响应(被 `K_user` 加密)含 `{session_id, session_token, exp}`。`session_id` 公开、当报文 `selector`;`session_token` 只留客户端本地、派生 enc/mac 密钥。之后 ws 与 REST 都用会话密钥加密(见 §加密信道 / [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 
@@ -151,7 +154,7 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # ws HMAC-SM3
 
 **`hmac_sm3` 是带密钥的 MAC(两输入)**:`hmac_sm3(mac_key, msg)` —— key 证明持钥(=认证)、msg 防篡改;裸 `sm3(msg)` 无 key 谁都能算,故用 HMAC(标准 ipad/opad 构造,兼避裸 SM3 长度扩展)。**逐帧加解密原语**(`hmac_sm3`/`derive_keys(session_token)`/`SecureChannel`(`derive(token,max)`/`seal`/`open`))已随 [0054](refactor/changes/0054-p5-secure-frame-channel.md) 起、**并随 [0058](refactor/changes/0058-p5-session-channel-rework.md) 改造到本信封/顺序**(逐会话密钥[去 `server_nonce`] + seq 入 ct + `MAC→decrypt→seq` + mac 盖 `iv‖ct`)。
 
-**ws 接线已落地([0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))**:`/ws?sid=` 握手查会话 → get-or-derive **挂 Session 的** `SecureChannel`(逐会话、跨重连复用 → seq 连续)→ `Connection.channel` 引用之;Receiver 收二进制帧 `open`(验 MAC→解密→验 seq)、Sender `seal` 出站,**core/reduce 全程不知有加密**。**ws 的 selector 落在握手 URL(`?sid=`)、逐帧省略**(连接已绑会话,`open` 收 `iv‖ct‖mac`);**REST 无连接上下文才逐请求带 selector**——落地形是 JSON `{sid, frame}`(`sid` 即 selector、`frame`=hex(iv‖ct‖mac),见「REST 信封已落地」),上面「报文=selector‖iv‖ct‖mac」是其概念形,ws 帧不含 selector。**客户端契约**:同一会话跨重连须**保留 ws seq**(仅新登录换会话才重置),否则重连首帧 seq 回退被 `stale_seq` 拒。**余(后续砖)**:K_user 每周轮换;dev 明文 `?nick=` 端点并存,前端切加密后退役。
+**ws 接线已落地([0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md))**:`/ws?sid=` 握手查会话 → get-or-derive **挂 Session 的** `SecureChannel`(逐会话、跨重连复用 → seq 连续)→ `Connection.channel` 引用之;Receiver 收二进制帧 `open`(验 MAC→解密→验 seq)、Sender `seal` 出站,**core/reduce 全程不知有加密**。**ws 的 selector 落在握手 URL(`?sid=`)、逐帧省略**(连接已绑会话,`open` 收 `iv‖ct‖mac`);**REST 无连接上下文才逐请求带 selector**——落地形是 JSON `{sid, frame}`(`sid` 即 selector、`frame`=hex(iv‖ct‖mac),见「REST 信封已落地」),上面「报文=selector‖iv‖ct‖mac」是其概念形,ws 帧不含 selector。**客户端契约**:同一会话跨重连须**保留 ws seq**(仅新登录换会话才重置),否则重连首帧 seq 回退被 `stale_seq` 拒。**余**:dev 明文 `?nick=` 端点并存,前端切加密后退役(K_user 每周轮换已落地 [0066](refactor/changes/0066-p5-kuser-rotation.md))。
 
 **REST 信封已落地([0062](refactor/changes/0062-p5-rest-envelope-user-me.md))**,与 ws 半边四点分化:
 
@@ -190,6 +193,8 @@ class GameConfig(BaseSettings):
     REST_FRAME_MAX_BYTES: int = Field(ge=256, le=1048576) # REST 信封上限(已落地 0062)
     REST_REPLAY_WINDOW: int   = Field(ge=1, le=4096)      # REST 防重放滑动窗宽度(已落地 0062)
     LOGIN_REPLAY_WINDOW_SECONDS: int = Field(ge=1, le=3600) # 登录包新鲜窗 W;nonce 条目 TTL=2W(已落地 0063)
+    KUSER_ROTATION_DAYS: int  = Field(ge=1, le=90)        # K_user 轮换周期(天;已落地 0066)
+    KUSER_GRACE_DAYS: int     = Field(ge=0, le=30)        # 旧钥宽限期(天;已落地 0066)
     # K_user / 盐 等秘密存 DB,不进 env
 ```
 
@@ -197,7 +202,7 @@ class GameConfig(BaseSettings):
 
 ## 待办 / 可选升级
 
-- **每用户密钥的下发与轮换工具**(管理员侧):轮换机制已定(见「K_user 每周轮换」),具体的管理员 CLI(生成/导出/导入下发)随实现补。
+- ~~**每用户密钥的下发与轮换工具**(管理员侧)~~:**已落地 [0066](refactor/changes/0066-p5-kuser-rotation.md)** —— [`scripts/kuser_admin.py`](../scripts/kuser_admin.py) `issue`(首发/补发)/ `rotate`(cron 轮换/强制)/ `list`(记账);见「K_user 每周轮换」。
 - **REST 也走加密信封**(不再裸奔):查手牌/余额/排行的请求响应体套 §加密信道 的 `selector‖iv‖ct‖mac`,与 ws 同一把会话密钥(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。
 - **SM2 升级路径(可选)**:若想连"手输密钥"都省掉,可改用 SM2 做密钥交换(服务器持私钥、前端内置公钥)协商会话密钥;能去掉带外分发,但多一套握手。当前手输密钥方案已够本规模。
 - **wss 才是终局**:若日后能上反代(Caddy 自动证书几乎零配置),则本文的应用层加密**整套可拆除**,登录走 HTTPS、ws 用标准 JWT 即可。

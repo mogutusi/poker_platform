@@ -14,12 +14,19 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)  # uid;自增主键
     nickname: str = Field(max_length=50, unique=True, index=True)  # 可变显示名(仅大厅可改)
     points: int = Field(default=0)  # 全局积分余额;delayDB PointsWrite 状态写按 uid UPSERT 覆盖此列
-    # 国密鉴权列(P5,changes/0056)。均可空:本平台无历史用户数据,加可空列是最安全的增量迁移
-    # (既有行记 NULL = 未启用登录;name 唯一 → 不能给常量 server_default 回填,故走可空)。这三列纯 DB/shell
-    # 鉴权字段,不进 world/UserState(auth.md/user.md 红线);脱敏红线:hash_password/k_user 不进日志。
+    # 国密鉴权列(P5,changes/0056;双钥轮换扩列 changes/0066)。均可空:既有行记 NULL = 未启用登录
+    # (name 唯一 → 不能给常量 server_default 回填,故走可空)。这些列纯 DB/shell 鉴权字段,不进
+    # world/UserState(auth.md/user.md 红线);脱敏红线:hash_password/k_cur/k_prev 不进日志。
     name: Optional[str] = Field(default=None, max_length=15, unique=True, index=True)  # 登录账号(不可变,唯一;登录按它查 + 选 K_user)
     hash_password: Optional[str] = Field(default=None, max_length=128)  # 密码哈希 "salt$rounds$digest"(0053 格式;salt/轮数已内嵌,无需另列)
-    k_user: Optional[str] = Field(default=None, max_length=64)  # 该用户 SM4 密钥(hex,16B=32hex;解登录 blob 用)。轮换双钥/版本随 K_user 轮换砖
+    # K_user 双钥(auth.md §K_user 每周轮换):当前钥 + 上一把(宽限期内仍可登录);登录先试 k_cur 再试 k_prev。
+    # *_until 一律 epoch 秒(float)——auth 全链时基是 float(SessionStore/now()/blob.ts),免 DateTime 在 sqlite 丢 tz 之坑。
+    k_cur: Optional[str] = Field(default=None, max_length=64)  # 当前 SM4 密钥(hex,16B=32hex;解登录 blob 用;0056 的 k_user 重命名而来)
+    k_cur_ver: Optional[int] = Field(default=None)  # 当前钥版本号(首发=1,轮换 +1);管理员记账用,不进登录协议(changes/0066 决策 1)
+    k_cur_until: Optional[float] = Field(default=None)  # 当前钥「到期应轮换」时刻(epoch 秒);轮换任务挑 <=now 的轮换;NULL=不排程(dev 种子行);登录不查它(免 cron 迟跑锁死全员,changes/0066 决策 2)
+    k_prev: Optional[str] = Field(default=None, max_length=64)  # 上一把 SM4 密钥(hex);宽限期内仍可登录(附 rotate 提示),给「还没换新钥的人」缓冲
+    k_prev_ver: Optional[int] = Field(default=None)  # 上一把的版本号(= 轮换前的 k_cur_ver)
+    k_prev_until: Optional[float] = Field(default=None)  # 旧钥宽限截止(epoch 秒);登录查它:过期即拒(这是真正的安全边界)
 
 
 class HandRecord(SQLModel, table=True):

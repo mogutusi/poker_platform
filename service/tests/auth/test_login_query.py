@@ -1,5 +1,5 @@
-# load_user_for_login 查询穷举(P5,见 docs/auth.md §登录握手 / changes/0056)。
-# 内存 sqlite(StaticPool 跨连接存活)+ create_all 建表(含 0056 鉴权列)+ 种子 user;验按 name 载入鉴权投影。
+# load_user_for_login 查询穷举(P5,见 docs/auth.md §登录握手 / changes/0056;双钥投影 0066)。
+# 内存 sqlite(StaticPool 跨连接存活)+ create_all 建表(含鉴权列)+ 种子 user;验按 name 载入鉴权投影。
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -10,7 +10,7 @@ from app.db.queries import LoginUser, load_user_for_login
 
 
 async def _setup():
-    # 三类 user:登录已启用(name+hash+k_user)、仅设 name 未设密钥、老行(name=NULL 未启用)。
+    # 三类 user:登录已启用(name+hash+k_cur,带宽限中旧钥)、仅设 name 未设密钥、老行(name=NULL 未启用)。
     engine = make_engine(
         "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
@@ -18,16 +18,18 @@ async def _setup():
     sm = make_sessionmaker(engine)
     async with sm() as s:
         async with s.begin():
-            s.add(User(id=1, nickname="Alice", points=1000, name="alice", hash_password="h$1$d", k_user="ab" * 16))
-            s.add(User(id=2, nickname="Bob", points=500, name="bob"))  # name 设了但 hash/k_user NULL
-            s.add(User(id=3, nickname="Legacy", points=200))  # 老行:name/hash/k_user 全 NULL
+            s.add(User(id=1, nickname="Alice", points=1000, name="alice", hash_password="h$1$d",
+                       k_cur="ab" * 16, k_cur_ver=2, k_prev="cd" * 16, k_prev_ver=1, k_prev_until=999.0))
+            s.add(User(id=2, nickname="Bob", points=500, name="bob"))  # name 设了但 hash/k_cur NULL
+            s.add(User(id=3, nickname="Legacy", points=200))  # 老行:name/hash/k_cur 全 NULL
     return sm
 
 
 async def test_load_enabled_user_returns_full_projection():
     sm = await _setup()
     row = await load_user_for_login(sm, "alice")
-    assert row == LoginUser(uid=1, name="alice", nickname="Alice", hash_password="h$1$d", k_user="ab" * 16)
+    assert row == LoginUser(uid=1, name="alice", nickname="Alice", hash_password="h$1$d",
+                            k_cur="ab" * 16, k_prev="cd" * 16, k_prev_until=999.0)
 
 
 async def test_load_returns_named_fields():
@@ -38,10 +40,10 @@ async def test_load_returns_named_fields():
 
 
 async def test_load_name_set_but_secrets_null():
-    # name 设了、hash/k_user 未设 → 载入成功但秘密为 None(authenticate 会据此判未启用)。
+    # name 设了、hash/k_cur 未设 → 载入成功但秘密为 None(authenticate 会据此判未启用;k_prev 亦 None)。
     sm = await _setup()
     row = await load_user_for_login(sm, "bob")
-    assert row is not None and row.hash_password is None and row.k_user is None
+    assert row is not None and row.hash_password is None and row.k_cur is None and row.k_prev is None
 
 
 async def test_load_unknown_name_returns_none():

@@ -36,6 +36,7 @@ poetry env activate                          # 或先激活、再裸跑命令
 - **裸 `python`/`pytest` 多半不存在或缺依赖**(系统环境既无项目依赖、也不在 venv 里,常见 `command not found`)——所有命令(`python`、`pytest`、`alembic`)一律走 `poetry run <cmd>`、先 `poetry env activate`,或直接调 `service/.venv/bin/<cmd>`。
 - **`poetry.lock` 要提交**:别人 `poetry install` 复现同样版本。改了依赖记得连 lock 一起提交。
 - **dev 登录(P5,changes/0060/0063)**:dev 用户已 login-enable —— `POST /user/login`,body `{name, iv, blob}`(`name`=昵称、`blob`=`SM4(DEV_KUSER, iv, {password: DEV_PASSWORD, client_nonce, ts})` 的 hex;`ts`=当前 epoch 秒,须落在 `LOGIN_REPLAY_WINDOW_SECONDS` 窗内、`client_nonce` 每次新随机——0063 重放守卫),响应用 `DEV_KUSER` 解密得会话。`DEV_PASSWORD`/`DEV_KUSER` 在 `poker.env`(dev-only,非生产密钥)。**ws 双端点并存(0061)**:`?sid=` 加密(登录后)/ `?nick=` 明文(dev 脚手架,前端切加密后退役)。
+- **K_user 管理(P5,changes/0066)**:生产用户的密钥首发/每周轮换走管理员 CLI `.venv/bin/python scripts/kuser_admin.py issue|rotate|list`(直连 `DATABASE_URL` 指的库;`rotate` 挂系统 cron 每周跑,幂等——只轮到期账号)。新钥/新口令只打到管理员终端 stdout,**带外**私发给用户;勿重定向进会入 git/日志采集的文件(秘密零容忍)。dev 种子钥不排程,cron 不会轮走 `DEV_KUSER`。详见 [auth.md](auth.md) §K_user 每周轮换。
 
 ## Alembic
 

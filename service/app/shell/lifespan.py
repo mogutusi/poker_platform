@@ -55,7 +55,8 @@ def _dev_password_hash() -> str:
 async def seed_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     # 幂等种子:dev 用户进 DB(id=序号+1 / nickname / points / 鉴权列)。新用户 INSERT;pre-P5 已存在但 name=NULL 的
     # dev 行**回填**鉴权列(login-enable,不重置 points/nickname——承接 OrmPersister 落库积分);已启用(name 非 NULL)则跳过。
-    # 鉴权列 = dev 脚手架:name=昵称、口令=DEV_PASSWORD(共享哈希)、k_user=DEV_KUSER(共享,dev-only,见 changes/0060)。
+    # 鉴权列 = dev 脚手架:name=昵称、口令=DEV_PASSWORD(共享哈希)、k_cur=DEV_KUSER(共享,dev-only,见 changes/0060)。
+    # k_cur_until 留 NULL = 不排程(0066):dev 共享钥不被轮换 cron 轮走(轮走则 DEV_KUSER 登录失效);ver 记 1 对账。
     async with sessionmaker() as session:
         async with session.begin():
             for i, nick in enumerate(gameconfig.DEV_USERS):
@@ -64,12 +65,14 @@ async def seed_dev_users(sessionmaker: async_sessionmaker[AsyncSession]) -> None
                 if user is None:
                     session.add(User(
                         id=uid, nickname=nick, points=gameconfig.DEV_START_POINTS,
-                        name=nick, hash_password=_dev_password_hash(), k_user=gameconfig.DEV_KUSER,
+                        name=nick, hash_password=_dev_password_hash(),
+                        k_cur=gameconfig.DEV_KUSER, k_cur_ver=1,
                     ))
                 elif user.name is None:  # pre-P5 dev 行:补鉴权列 login-enable(不动 points/nickname)
                     user.name = nick
                     user.hash_password = _dev_password_hash()
-                    user.k_user = gameconfig.DEV_KUSER
+                    user.k_cur = gameconfig.DEV_KUSER
+                    user.k_cur_ver = 1
 
 
 def build_dev_world() -> World:

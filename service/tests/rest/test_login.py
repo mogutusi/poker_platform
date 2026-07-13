@@ -33,10 +33,10 @@ async def _setup():
     async with sm() as s:
         async with s.begin():
             s.add(User(id=1, nickname="Alice", points=1000, name="alice",
-                       hash_password=hash_password(_PW, _ROUNDS), k_user=_KUSER.hex()))
-            s.add(User(id=2, nickname="Legacy", points=0))  # name/hash/k_user NULL:未启用登录
+                       hash_password=hash_password(_PW, _ROUNDS), k_cur=_KUSER.hex(), k_cur_ver=1))
+            s.add(User(id=2, nickname="Legacy", points=0))  # name/hash/k_cur NULL:未启用登录
             s.add(User(id=3, nickname="Bob", points=500, name="bob",
-                       hash_password=hash_password(_PW, _ROUNDS), k_user=_KUSER.hex()))  # 第二个可登录用户(nonce 按 name 隔离测)
+                       hash_password=hash_password(_PW, _ROUNDS), k_cur=_KUSER.hex(), k_cur_ver=1))  # 第二个可登录用户(nonce 按 name 隔离测)
     return sm
 
 
@@ -64,8 +64,9 @@ async def test_happy_path_issues_k_user_encrypted_session():
     resp = await _login(store, sm, "alice", iv_hex, blob_hex)
     # 响应用 K_user 解密 → session data
     data = json.loads(sm4_cbc_dec(_KUSER, bytes.fromhex(resp.iv), bytes.fromhex(resp.blob)))
-    assert set(data) == {"session_id", "session_token", "exp"}
+    assert set(data) == {"session_id", "session_token", "exp", "rotate"}
     assert data["exp"] == _T0 + _TTL
+    assert data["rotate"] is False  # 当前钥登录 → 无换钥提示(0066)
     # 会话已登记、token/name/nickname 一致
     session = store.lookup(data["session_id"], _T0)
     assert session is not None
@@ -176,7 +177,8 @@ async def test_seed_backfills_pre_p5_dev_user():
         user = await s.get(User, uid)
         assert user.points == 777  # 回填不重置积分
         assert user.name == gameconfig.DEV_USERS[0]
-        assert user.k_user == gameconfig.DEV_KUSER and user.hash_password is not None
+        assert user.k_cur == gameconfig.DEV_KUSER and user.hash_password is not None
+        assert user.k_cur_ver == 1 and user.k_cur_until is None  # dev 钥不排程(0066:cron 不轮 dev 共享钥)
 
 
 def test_create_app_registers_login_route():
@@ -284,3 +286,109 @@ async def test_nonce_isolated_per_account_name():
         iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-shared"})
         await _endpoint(router)(LoginRequest(name=name, iv=iv_hex, blob=blob_hex))
     assert len(store) == 2
+
+
+# ── K_user 双钥轮换(0066):旧钥宽限登录 + rotate 提示 ──
+
+_NEW_KUSER = secrets.token_bytes(16)  # 轮换后的当前钥(_KUSER 充旧钥 k_prev)
+
+
+async def _setup_rotated(prev_until: float):
+    # 已轮换过一次的账号:k_cur=_NEW_KUSER(v2)、k_prev=_KUSER(v1,宽限至 prev_until)。
+    engine = make_engine(
+        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    await create_all(engine)
+    sm = make_sessionmaker(engine)
+    async with sm() as s:
+        async with s.begin():
+            s.add(User(id=1, nickname="Alice", points=1000, name="alice",
+                       hash_password=hash_password(_PW, _ROUNDS),
+                       k_cur=_NEW_KUSER.hex(), k_cur_ver=2, k_cur_until=_T0 + 7 * 86400,  # 下轮排程(登录不查它)
+                       k_prev=_KUSER.hex(), k_prev_ver=1, k_prev_until=prev_until))
+    return sm
+
+
+async def test_old_key_within_grace_logs_in_with_rotate_hint():
+    # 旧钥(k_prev)在宽限内登录成功;响应用**旧钥**加密(客户端手里只有旧钥)且 rotate=true 提示换新。
+    # prev_until 恰取 now(=_T0):钉「宽限含端点」(now <= k_prev_until)——写成 < 这里必红。
+    sm = await _setup_rotated(prev_until=_T0)
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-old-key"})  # 旧钥 _KUSER 封 blob
+    resp = await _login(store, sm, "alice", iv_hex, blob_hex)
+    data = json.loads(sm4_cbc_dec(_KUSER, bytes.fromhex(resp.iv), bytes.fromhex(resp.blob)))  # 旧钥可解
+    assert data["rotate"] is True
+    assert store.lookup(data["session_id"], _T0) is not None  # 会话照铸(宽限登录是正常登录)
+
+
+async def test_overdue_k_cur_still_logs_in():
+    # 0066 决策 2 的钉子:k_cur_until 是**排程**不是拒登时刻——轮换 cron 迟跑(until 已过期)时,
+    # 当前钥登录必须照常成功,否则运维故障放大成全员锁死。若有人把「过期拒登」写进登录路径,这里必红。
+    sm = await _setup()
+    async with sm() as s:
+        async with s.begin():
+            user = await s.get(User, 1)
+            user.k_cur_until = _T0 - 1  # 早该轮换而 cron 没跑
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-overdue"})
+    resp = await _login(store, sm, "alice", iv_hex, blob_hex)
+    data = json.loads(sm4_cbc_dec(_KUSER, bytes.fromhex(resp.iv), bytes.fromhex(resp.blob)))
+    assert data["rotate"] is False and len(store) == 1
+
+
+async def test_replayed_old_key_blob_rejected():
+    # 重放守卫 × 双钥:旧钥首登成功后,同一 blob 原包重投必 401(nonce 去重在**匹配任一把**之后统一生效;
+    # 若有人把守卫挪进 k_cur 单臂,这里必红)。
+    sm = await _setup_rotated(prev_until=_T0 + 1)
+    store = SessionStore(_TTL)
+    router = make_login_router(lambda: sm, store, now=lambda: _T0)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-old-replay"})  # 旧钥封
+    await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 首投成功(宽限)
+    with pytest.raises(HTTPException) as ei:
+        await _endpoint(router)(LoginRequest(name="alice", iv=iv_hex, blob=blob_hex))  # 原包重放
+    assert ei.value.status_code == 401
+    assert len(store) == 1  # 未再铸会话
+
+
+async def test_new_key_after_rotation_logs_in_no_hint():
+    # 新钥(k_cur)登录:rotate=false;响应用新钥加密。
+    sm = await _setup_rotated(prev_until=_T0 + 1)
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-new-key"}, key=_NEW_KUSER)
+    resp = await _login(store, sm, "alice", iv_hex, blob_hex)
+    data = json.loads(sm4_cbc_dec(_NEW_KUSER, bytes.fromhex(resp.iv), bytes.fromhex(resp.blob)))
+    assert data["rotate"] is False
+
+
+async def test_old_key_past_grace_rejected_401():
+    # 旧钥过宽限(now > k_prev_until)→ 401(这是轮换的安全边界:泄露的旧钥最多活到宽限尾)。
+    sm = await _setup_rotated(prev_until=_T0 - 1)
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-expired"})
+    with pytest.raises(HTTPException) as ei:
+        await _login(store, sm, "alice", iv_hex, blob_hex)
+    assert ei.value.status_code == 401 and len(store) == 0
+
+
+async def test_old_key_null_prev_until_rejected_401():
+    # k_prev 在、k_prev_until 缺(脏行)→ fail-closed 拒(轮换总成对盖 prev+until,缺 until 不放行)。
+    sm = await _setup_rotated(prev_until=_T0 + 1)
+    async with sm() as s:
+        async with s.begin():
+            user = await s.get(User, 1)
+            user.k_prev_until = None
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-dirty"})
+    with pytest.raises(HTTPException) as ei:
+        await _login(store, sm, "alice", iv_hex, blob_hex)
+    assert ei.value.status_code == 401
+
+
+async def test_retired_key_before_rotation_never_worked():
+    # 无 k_prev 的账号(未轮换过)拿任意别的钥登录必 401——两次尝试不放大攻击面(第二把只在 prev 存在且宽限内才试)。
+    sm = await _setup()  # alice 只有 k_cur=_KUSER
+    store = SessionStore(_TTL)
+    iv_hex, blob_hex = _make_blob({"password": _PW, "client_nonce": "n-x"}, key=_NEW_KUSER)  # 非登记钥
+    with pytest.raises(HTTPException) as ei:
+        await _login(store, sm, "alice", iv_hex, blob_hex)
+    assert ei.value.status_code == 401
