@@ -178,7 +178,7 @@ REST 的请求/响应类型**没有**自动生成(和 ws 不同),按上表和后
 
 ## 7. 本地联调
 
-从零把后端跑起来(含新机器 pull 后的完整步骤)见仓库根的 [QUICKSTART.md](../QUICKSTART.md);已配好环境的话一条命令:
+从零把后端跑起来(含新机器 pull 后的完整步骤、连 PostgreSQL)见 [service/QUICKSTART.md](../service/QUICKSTART.md);已配好环境的话一条命令:
 
 ```bash
 cd service

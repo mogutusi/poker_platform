@@ -27,3 +27,7 @@
 - **⑥ 测试**:4 新测中「真 `open_envelope` 往返」是关键——向量若与服务器成帧规则漂移必红;`--check` 进 pytest 覆盖(同 codegen)。
 - **⑦ 账本**:本记录;TODO 无涉(教程/向量是持续项「协议增量交付」的配套,不新开砖)。
 - **对抗自问**:「向量会不会本身生成错了还守门成'正确'?」——已用两道独立锚破解:国标 "abc" 已知答案(外部锚)+ 服务器 `open_envelope` 往返(实现锚);两锚都过,向量与后端与国标三方一致。0 未处置发现。
+
+## 问答补记(2026-07-14)
+
+**问**:QUICKSTART 写"缺省 SQLite、要连 Postgres 才需要建 .env"——我的设计是 pgsql,设计被改了吗?——**答:没有**。生产目标库一直是 PostgreSQL(architecture.md 技术栈固定,psycopg3 是一等依赖);SQLite 缺省是 **0045** 定的**开发便利**("安全 dev 默认",零配置可跑测试/快速联调),不是设计变更。问题在本篇初版把叙述重心放错:sqlite 写成主路径、pg 写成附注,读起来像换了库。→ **QUICKSTART 修正**:§1 补"数据库定位别误会"注;新增 §2「用 PostgreSQL 跑」一等章节(建库 → `.env` → **先** `alembic upgrade head` **再**起服务[空 pg 库先起服务会让 create_all 建出无迁移历史的表,与 Alembic 混用撞表]→ uvicorn;URL 同步/异步双栖);§4 pull 后表补 pg 行(alembic 是正道,"删库重来"仅限本地 sqlite);§5 基础设施行改口径。另:用户已将 QUICKSTART.md 移入 `service/`(根目录 → service/),相对链接随新位置全部修正,BACKEND_GUIDE §7 的回链同步。
