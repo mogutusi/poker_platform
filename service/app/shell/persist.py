@@ -134,13 +134,47 @@ class PersistWriter:
         self._retention = gameconfig.DM_READ_RETENTION_SECONDS if retention_s is None else retention_s
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._last_cleanup = time.monotonic()  # 启动后等一个周期再首清(monotonic 任何时刻可读、无需 loop)
+        # 运行期落库屏障(0073):barrier 登记等待者 + set 唤醒事件,run 提前醒来立即 flush;
+        # 等待者在 flush_once「swap 前」被取走,本批 commit 成功即 resolve(登记时刻的待写必在本批或更早)。
+        self._wake = asyncio.Event()  # barrier → run 的提前唤醒信号
+        self._waiters: list["asyncio.Future[bool]"] = []  # 待「登记后首轮成功 flush」的屏障等待者
+        self._in_flight = False  # 一批已 swap 出、commit 未落的在飞窗口(barrier 快路径须看它,缓冲空≠已持久)
 
     async def run(self) -> None:
-        # 主循环:唯一让出点 = sleep + flush/cleanup 内 await。绝不在此直改 world / 旁路 ws。
-        while True:
-            await asyncio.sleep(self._interval)
-            await self.flush_once()
-            await self.maybe_cleanup()  # 周期附带私信保留清理(db.md:DELETE 归唯一写者,不另起协程)
+        # 主循环:唯一让出点 = 等待(可被 barrier 提前唤醒)+ flush/cleanup 内 await。绝不在此直改 world / 旁路 ws。
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=self._interval)  # barrier 唤醒或到周期
+                except TimeoutError:
+                    pass  # 自然周期到点
+                self._wake.clear()
+                await self.flush_once()
+                await self.maybe_cleanup()  # 周期附带私信保留清理(db.md:DELETE 归唯一写者,不另起协程)
+        finally:
+            # 写者停止(关闭 cancel):挂着的屏障统一 resolve False,免 Receiver 悬死在 barrier 上
+            # (其后的落库由 lifespan.stop 的 drain 兜,但对等待者而言「运行期保证」已不成立,fail-closed)。
+            for fut in self._waiters:
+                if not fut.done():
+                    fut.set_result(False)
+            self._waiters = []
+
+    async def barrier(self, timeout_s: float | None = None) -> bool:
+        # 运行期落库屏障(0073,见 db.md):等「调用时刻已在缓冲/在飞的写」全部落库。
+        # True = 已落或本就无待写;False = 超时 / 毒丸丢批 / 写者停止——调用方 fail-closed
+        # (如 JoinRoom 载入回 INTERNAL),绝不拿可能陈旧的 DB 值继续。缺省超时与 drain 共用
+        # DB_DRAIN_TIMEOUT_MS(同为「等落库上限」;正常路径 ≤1 个 commit,超时仅 DB 异常时触发)。
+        if self._buf.is_empty() and not self._in_flight:
+            return True  # 无待写且无在飞批:DB 已追平
+        fut: "asyncio.Future[bool]" = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        self._wake.set()  # 提前唤醒写者,不等自然周期
+        limit = self._drain_timeout if timeout_s is None else timeout_s
+        try:
+            return await asyncio.wait_for(fut, timeout=limit)
+        except TimeoutError:
+            self._waiters = [f for f in self._waiters if f is not fut]  # 摘除失效等待者(若仍挂着)
+            return False
 
     async def maybe_cleanup(self) -> None:
         # 周期(DM_CLEANUP_INTERVAL_SECONDS)跑一趟私信保留清理:删「已读且 created_at < now-保留期」的私信(db.md)。
@@ -161,33 +195,58 @@ class PersistWriter:
     async def flush_once(self) -> bool:
         # 取走一批落库(先 swap 同步取走清空、再 await,绝不持缓冲跨 await,守 db.md 双缓冲)。
         # 成功清失败计数;失败整批回灌(更新者优先)+ 失败计数 +1,达 max_retry 丢批(毒丸)。返回是否处理了非空批。
+        # 屏障等待者(0073)在 swap **前**取走:其登记时刻的待写必在本批或更早 → 本批 commit 成功即达成;
+        # 缓冲空 = 无待写即达成;失败回灌 = 放回继续等重试;毒丸 = 批已灭,resolve False(fail-closed)。
+        waiters, self._waiters = self._waiters, []
         if self._buf.is_empty():
+            self._resolve(waiters, True)  # 无待写:屏障即达成(单协程写者 ⇒ 此刻必无在飞批)
             return False
         dirty, appends = self._buf.swap()
+        self._in_flight = True  # 在飞窗口:缓冲已空但未持久,barrier 快路径据此不放行
         try:
             await self._persister.flush(dirty, appends)
         except asyncio.CancelledError:
             # 关闭取消落在 flush 半途(批已 swap 出、未落库):先回灌再 re-raise,使后续 drain 能补落,
             # 否则这批「已对玩家生效、未落库」的写静默丢失(db.md drain 红线)。drain 在写者 task 收割后单线
             # 跑 flush,无并发竞 swap;重落幂等(状态写 UPSERT 覆盖、事件写 dedupe_key ON CONFLICT)故安全。
+            # 等待者交还队首:run 的 finally 统一 resolve False(写者停止,运行期保证不再成立)。
             self._buf.requeue(dirty, appends)
+            self._waiters = waiters + self._waiters
             raise
         except Exception:
             self._fail_streak += 1
             if self._fail_streak >= self._max_retry:
-                # 毒丸:同批连续失败超阈值 → 丢批 + CRITICAL,别卡死后续(留人工介入);清计数继续下批
+                # 毒丸:同批连续失败超阈值 → 丢批 + CRITICAL,别卡死后续(留人工介入);清计数继续下批。
+                # 等待者 resolve False:其等的数据已随批丢弃,继续等永不可达——如实报失败(0073)。
+                # 须连同 self._waiters(**在飞期间**经 barrier 慢路径新登记者)一并 False:否则它们
+                # 会被下一轮空缓冲 flush 误 resolve True(数据已灭而 DB 未追平,复活 N1 陈旧读);
+                # 过杀安全——若其目标写恰在毒丸后的新缓冲,fail-closed 只多一次 INTERNAL 重试(0073 复审抓修)。
                 log.critical(
                     "delayDB poison batch: %d state writes + %d event writes failed %d times in a row, dropped",
                     len(dirty), len(appends), self._fail_streak,
                 )
                 self._fail_streak = 0
+                in_flight_waiters, self._waiters = self._waiters, []
+                self._resolve(waiters, False)
+                self._resolve(in_flight_waiters, False)
             else:
                 self._buf.requeue(dirty, appends)  # 整批回灌,下周期重试
+                self._waiters = waiters + self._waiters  # 等待者随批继续等下一轮
                 log.error("delayDB flush failed, batch requeued (streak=%d)", self._fail_streak, exc_info=True)
             return True
+        finally:
+            self._in_flight = False
         self._fail_streak = 0
+        self._resolve(waiters, True)  # 本批已 commit:登记早于本批 swap 的屏障全部达成
         log.debug("delayDB flushed %d state writes + %d event writes", len(dirty), len(appends))
         return True
+
+    @staticmethod
+    def _resolve(waiters: list["asyncio.Future[bool]"], ok: bool) -> None:
+        # 唤醒一组屏障等待者;超时侧可能已 cancel 其 future,done 的跳过(0073)。
+        for fut in waiters:
+            if not fut.done():
+                fut.set_result(ok)
 
     async def drain(self) -> None:
         # 优雅关闭终结 flush:循环 flush 直到缓冲空或超 DB_DRAIN_TIMEOUT_MS;超时 CRITICAL + 放弃(进程要退)。

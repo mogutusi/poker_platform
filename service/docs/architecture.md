@@ -37,9 +37,9 @@ core 不 import 任何 shell / FastAPI / SQLAlchemy 符号。两层只通过 `Co
 | 协程 | 数量 | 职责 | 让出点 |
 |---|---|---|---|
 | **GameLoop** | 1 | 唯一状态写者:`cmd = await inbox.get()` → 深拷贝工作副本 → `reduce` → 成功 commit 回 world 并 `put_nowait` 派发事件 | **仅** `await inbox.get()`;reduce + 派发全程无 `await` |
-| **Receiver** | 每连接 1 | `await ws.receive()`,解析为 `Command`,`inbox.put`。即 FastAPI 的 ws handler | `await ws.receive()` / `await inbox.put` |
+| **Receiver** | 每连接 1 | `await ws.receive()`,解析为 `Command`,`inbox.put`。即 FastAPI 的 ws handler | `await ws.receive()` / `await inbox.put`;`JoinRoom` 载入前另有 `inbox.join()` + `barrier()`(载入屏障,等 GameLoop 排空 + 落库,0073) |
 | **Sender** | 每连接 1 | 从该连接 outbound 队列取事件 `await ws.send()`;保证单连接**严格保序**、隔离慢客户端 | `await q.get()` / `await ws.send()` |
-| **PersistWriter** | 1 | delayDB:周期 flush 写缓冲落库(状态写覆盖、事件写追加,见 [db.md](db.md)) | `await asyncio.sleep`(flush 周期)/ `await commit()` |
+| **PersistWriter** | 1 | delayDB:周期 flush 写缓冲落库(状态写覆盖、事件写追加,见 [db.md](db.md)) | `await wait_for(_wake, flush 周期)`(可被 `barrier()` 提前唤醒,0073)/ `await commit()` |
 | **Timer** | 1 | 行动超时、掉线清理;到点只往 `inbox` 投命令,绝不直接改状态 | `await asyncio.sleep` |
 
 数据流:`Receiver → inbox → GameLoop → (outbound q → Sender) / (写缓冲 → PersistWriter)`。

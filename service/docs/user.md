@@ -65,7 +65,7 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 
 载入是 DB 读(IO),只能在 shell。沿用「外部数据外移进命令」。**模型 2 下载入发生在 `JoinRoom`(进房),不是连接握手**——大厅用户不进 `world.users`(见 [lobby.md](lobby.md)):
 
-1. **载入**:用户在大厅点某房 → Receiver 从 DB 读该 nick 的 `uid` + `points` → 装进 `JoinRoom(room, uid, loaded=points)` 投 `inbox`(`uid`/`points` 都是 shell 读 DB 得到、随命令外移进 core)。
+1. **载入**:用户在大厅点某房 → Receiver **先过载入屏障**(`inbox.join()` + `PersistWriter.barrier()`,令「刚离房的退分写」落库、DB 追平;失败回 `INTERNAL` 不进 reduce,0073)→ 从 DB 读该 nick 的 `uid` + `points` → 装进 `JoinRoom(room, uid, loaded=points)` 投 `inbox`(`uid`/`points` 都是 shell 读 DB 得到、随命令外移进 core)。
 2. **安装由 reduce 决定**(不在 shell 读 `world`,守不变量 2):
    - `nick` **不在** `work.users` → 用 `uid`/`loaded` 安装 `UserState(uid, nickname=nick, points=loaded, room=cmd.room)`,加入房间为 `WATCHING`,私发 `Personal(StateSnapshot)`。
    - `nick` **已在** `work.users` → **拒绝**:`return [], Err(ALREADY_IN_ROOM)`,已在别房,要先 `LeaveRoom`(单房间约束)。
@@ -107,6 +107,7 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 
 - **落库按 `uid` 不按 `nickname`**:`world.users` 用 nickname 当键(座位/路由都按它),但 nickname 可在大厅改;DB 主键必须用不可变的 `uid`(= `User.id`)。`PointsWrite`/手牌记录一律带 `uid`,所以大厅改名后落库行不会错位(见 [db.md](db.md))。
 - **重连不重载**:安装的前提永远是「`nick` 不在 `work.users`」,否则覆盖未落库的内存变更。
+- **驱逐后重进要过载入屏障**:「不重载」只护仍在内存的实体;驱逐(`_evict`)已把实体删出内存、退分写可能仍在缓冲——重进的载入若直读 DB 会拿到陈旧值(0072·N1)。屏障(0073)令缓冲先落库再读,见 [storage.md](storage.md)「载入屏障」。
 - **驱逐要等最后一笔 Persist 产出后**:先产出退分 `Persist` 再 `del`,顺序不能反。
 - **错误码**:积分不足用 `ErrorCode.INSUFFICIENT_POINTS`,`detail` 带 `have`/`need`,绝不裸字符串(见 [error.md](error.md))。
 - **可调参数进配置**:买入上下限、初始赠分一律走 [config.md](config.md) 的 settings,不写字面量。

@@ -30,7 +30,7 @@ from app.core.domain import World
 from app.db.queries import load_user_by_nick
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.messaging import deliver_dm_catch_up, route_direct_message, route_dm_mark_read
-from app.shell.persist import WriteBuffer
+from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.sender import sender_loop
 from app.shell.timer import Timer
 from app.wire import client as wire_client
@@ -47,6 +47,7 @@ async def run_receiver(
     sessionmaker: async_sessionmaker[AsyncSession],
     world: World,
     persist: WriteBuffer,
+    persistwriter: PersistWriter | None = None,  # 载入屏障(0073):生产必传;None=测试/dev 直驱,跳过屏障
 ) -> None:
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
     if old is not None:
@@ -63,7 +64,7 @@ async def run_receiver(
             payload = await _recv_frame(conn)  # 让出点:收帧 + 按 channel 解密/取明文
             if payload is None:
                 break  # FrameError/会话过期 = 安全信号:关连接(finally 清理),不进业务
-            cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, world)
+            cmd = await _frame_to_command(conn, payload, conns, persist, sessionmaker, world, inbox, persistwriter)
             if cmd is not None:
                 await inbox.put(cmd)  # 背压:inbox 满则在此等(只压住这条 Receiver,不拖 GameLoop)
     except Exception:
@@ -117,6 +118,8 @@ async def _frame_to_command(
     persist: WriteBuffer,
     sessionmaker: async_sessionmaker[AsyncSession],
     world: World,
+    inbox: "asyncio.Queue[Command]",
+    persistwriter: PersistWriter | None,
 ) -> Command | None:
     # 明文帧 → Command:解析失败(非法 JSON / 未知 type / 字段不合法)直接回发 ErrorMessage(error.md),不进 reduce。
     try:
@@ -126,7 +129,8 @@ async def _frame_to_command(
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INVALID_MESSAGE, detail)))
         return None
     if isinstance(msg, wire_client.JoinRoom):
-        return await _build_join(conn, msg, sessionmaker)  # JoinRoom 需读 DB 富化 uid/loaded(见 changes/0030)
+        # JoinRoom 需读 DB 富化 uid/loaded(0030)+ 读前过载入屏障(0073,封驱逐后重读陈旧 DB 的 N1 窗口)
+        return await _build_join(conn, msg, sessionmaker, inbox, persistwriter)
     if isinstance(msg, wire_client.RoomChat):
         return _guard_room_chat(conn, msg)  # 房聊进 reduce 前过文本防护 + 限速(见 changes/0033 / messaging.md)
     if isinstance(msg, (wire_client.SetSmallBlind, wire_client.SetBuyIn)):
@@ -200,9 +204,30 @@ def _serve_room_chat_history(conn: Connection, msg: wire_client.FetchRoomChat, w
 
 
 async def _build_join(
-    conn: Connection, msg: wire_client.JoinRoom, sessionmaker: async_sessionmaker[AsyncSession]
+    conn: Connection,
+    msg: wire_client.JoinRoom,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    inbox: "asyncio.Queue[Command]",
+    persistwriter: PersistWriter | None,
 ) -> Command | None:
     # 进房:按连接 nick 读 DB 取 uid/loaded(身份/积分不信报文,storage.md 载入一次)→ JoinRoom 命令。
+    # 载入屏障(0073,两步缺一不可,见 changes/0073):
+    #   ① inbox.join() —— 已入队命令(含同连接刚发的 LeaveRoom)处理完,其退分 Persist 才进缓冲;
+    #      单靠 flush 屏障堵不住「join 帧先于 LeaveRoom 被处理」的顺序洞。
+    #   ② barrier() —— 缓冲强制落库,DB 追平后才读。
+    # 任一步失败 → fail-closed 回 INTERNAL(绝不拿可能陈旧的 DB 值装内存权威);None=测试直驱跳过。
+    if persistwriter is not None:
+        limit = gameconfig.DB_DRAIN_TIMEOUT_MS / 1000  # 与 drain/barrier 共用「等落库上限」旋钮
+        try:
+            await asyncio.wait_for(inbox.join(), timeout=limit)
+        except TimeoutError:
+            log.error("join_room load barrier: inbox.join timed out nick=%s", conn.nick)
+            conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "进房载入屏障超时(命令队列)")))
+            return None
+        if not await persistwriter.barrier():
+            log.error("join_room load barrier: persist barrier failed nick=%s", conn.nick)
+            conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "进房载入屏障超时(落库)")))
+            return None
     try:
         row = await load_user_by_nick(sessionmaker, conn.nick)
     except Exception:

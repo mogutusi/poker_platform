@@ -45,7 +45,7 @@
 
 ## PersistWriter 主循环(0025 落地;精确实现见 [persist.py](../app/shell/persist.py))
 
-`run()` 是「`sleep` → `flush_once()`」的薄壳;落库后端抽象在 **`Persister` 协议**(`async flush(dirty, appends)`)之后,真实现(`to_orm` + session,P4 三 `OrmPersister`)与控制流解耦:
+`run()` 是「可唤醒等待(`wait_for(_wake, interval)`,0073)→ `flush_once()`」的薄壳;落库后端抽象在 **`Persister` 协议**(`async flush(dirty, appends)`)之后,真实现(`to_orm` + session,P4 三 `OrmPersister`)与控制流解耦:
 
 ```python
 async def flush_once(self) -> bool:          # 抽出供直测(同 timer.tick)
@@ -70,6 +70,15 @@ async def flush_once(self) -> bool:          # 抽出供直测(同 timer.tick)
 > **0028 落地(`OrmPersister` 写路径,已对齐代码)**:`to_orm` + `OrmPersister` + async engine/session 落在 **[app/db/](../app/db/)**(`orm_persister.py` / `engine.py`),**不在** `shell/persist.py`——保持 `persist.py` 纯 asyncio、SQLAlchemy-free(0025 抽 `Persister` 协议的初衷);`OrmPersister` 靠结构化协议满足 `Persister`,只 import `core.records`+`db.models`+sqlalchemy、**不 import shell**(见 [changes/0028](refactor/changes/0028-p4-orm-persister.md))。落库语义两处细化(对齐下文「失败与重试 / 事务分组」):**状态写=定向列 UPDATE**(`User` 有 `nickname` 等 `PointsWrite` 不拥有的列,整行 `merge` 会写 NULL ⇒ 只 `UPDATE ... SET points WHERE id=uid`;内存权威+载入一次保证行已存在);**事件写幂等=单写者下 `SELECT by dedupe_key` 再 INSERT**(唯一写者无并发竞争 ⇒ race-free 且跨方言,免 `ON CONFLICT` 的 sqlite/pg 二分;unique 索引兜底)。**dev/测试 async driver=`aiosqlite`**(`make_engine` 给 sqlite 装 `PRAGMA foreign_keys=ON` 使其与 postgres 一致强制 FK);postgres 走现有 `psycopg`。**`OrmPersister` 接进 lifespan 替 `NullPersister` + 种子/载入 dev 用户 = 0029**。
 
 **为什么周期而非「来一条写一条」**:给覆盖一个窗口。立即消费则窗口为零、覆盖退化成 FIFO。`DB_FLUSH_INTERVAL_MS` 是「同实体多次变更合并的时间窗」,也是「积分落库最多滞后多久 / 崩溃窗口」——积分非货币,可放宽。可选增强:条目超 `DB_FLUSH_MAX_BATCH` 提前 flush(0025 未做)。
+
+## 运行期落库屏障 `barrier()`(0073)
+
+**「强制等落库」的运行期形态**(关闭期形态即 drain,同一语义两个语境):`await persistwriter.barrier(timeout_s=None) -> bool`——等「调用时刻已在缓冲/在飞的写」全部落库。消费者:`JoinRoom` 载入前令 DB 追平(封 0072·N1「驱逐后重读陈旧 DB」窗口,见 [storage.md](storage.md)「载入屏障」)。
+
+- **True** = 已落库或本就无待写;**False** = 超时 / 毒丸丢批 / 写者停止——调用方 **fail-closed**(JoinRoom 回 `INTERNAL`),绝不拿可能陈旧的 DB 值继续。缺省超时与 drain 共用 `DB_DRAIN_TIMEOUT_MS`(**决策·可改**:同为「等落库上限」,不加第二旋钮;正常路径 ≤1 个 commit,超时仅 DB 异常时触发)。
+- **机制**:`run()` 的周期 sleep 改为「可被唤醒的等待」(`wait_for(_wake, interval)`);barrier 登记等待者 + set 唤醒 → 写者立即 flush。等待者在 `flush_once` **swap 前**取走(其登记时刻的待写必在本批或更早):本批 commit 成功 → True;缓冲空(无可 flush)→ 即达成;失败回灌 → 等待者放回随重试继续等;**毒丸丢批 → False**(数据已灭,等待永不可达);写者 cancel → `run()` 的 finally 统一 False(免调用方悬死)。
+- **在飞窗口**:快路径「缓冲空 **且** 无在飞批」才直接 True——批已 swap 出、commit 未落时缓冲虽空但未持久。
+- **屏障只保证「落库」,不保证「已入缓冲」**:调用方若依赖某条命令产生的写,须先确保该命令已被 GameLoop 处理(`inbox.join()`,GameLoop 每条命令 `finally: task_done()`)——两步缺一不可,见 [changes/0073](refactor/changes/0073-persist-barrier-join-load.md)。
 
 ## 失败与重试
 

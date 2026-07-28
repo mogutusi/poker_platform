@@ -161,6 +161,8 @@ class DevShell:
                     self.gameloop.handle(cmd)  # 同步;内部已兜 reduce 崩溃,这里再兜 checkout/commit 等
                 except Exception:  # 单条命令处理异常不得中断关闭(否则 dispose 被跳、连接池泄漏)——尽力 drain
                     log.exception("command %s crashed during shutdown drain", type(cmd).__name__)
+                finally:
+                    self.inbox.task_done()  # 与 GameLoop.run 对称计数(0073),免遗留 inbox.join() 等待者悬死
                 drained += 1
         if drained:
             log.info("drained %d in-flight commands before shutdown", drained)
@@ -220,7 +222,8 @@ def create_app() -> FastAPI:
             return
         conn = Connection.create(nick=nick, session_id=nick, ws=ws)  # channel=None → 明文帧
         await run_receiver(
-            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist,
+            persistwriter=shell.persistwriter,  # 载入屏障接线(0073):生产路必传
         )
 
     @app.websocket("/ws")
@@ -237,7 +240,8 @@ def create_app() -> FastAPI:
             nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session), session=session
         )
         await run_receiver(
-            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist
+            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist,
+            persistwriter=shell.persistwriter,  # 载入屏障接线(0073):生产路必传
         )
 
     return app

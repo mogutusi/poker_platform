@@ -34,7 +34,10 @@ class GameLoop:
     async def run(self) -> None:
         while True:
             cmd = await self.inbox.get()  # 唯一让出点
-            self.handle(cmd)
+            try:
+                self.handle(cmd)
+            finally:
+                self.inbox.task_done()  # 供 inbox.join() 屏障(0073):handle 异常也计数,免 join 悬死
 
     def handle(self, cmd: Command) -> None:
         # 一条命令的处理(同步,抽出供测试 / 关闭排空(lifespan.stop ②)直接驱动):checkout → reduce → commit/discard → dispatch。
