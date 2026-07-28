@@ -99,6 +99,26 @@
 
 ---
 
+## 审计跟进(0072,2026-07-14)— 台账见 [changes/0072](changes/0072-architecture-audit.md)
+
+- [~] **0072·R1** 手牌记录跨房间世代撞键(**用户定案暂缓,2026-07-28**:「先不修」;已确认未修非接受,方案两案留档 0072):`dedupe_key="room:seq"` 同名房销毁重建/进程重启后与旧世代撞键 → 幂等 INSERT 静默丢新记录;启动时须带「销房重建 + 重启两路径」回归测试
+- [ ] **0072·R2** Timeout staleness 跨手失效:epoch 每手归零,`Timeout` 补带 `hand.seq` 双键校验 + 构造交错的回归测试(可与 R1 同批)
+- [ ] **0072·D1-D5** 文档 truth-up 一批(仿 0047/0067):messaging.md §房聊历史 0071 残留旧段(D1)/ architecture.md 不变量 2 补「只读 committed world 豁免」判据(D2)/ connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
+- [ ] **0072·C2** codegen 守门兑现:补最小 pre-commit 配置,或把 architecture.md/wire.md「进 CI/pre-commit」口径改为如实(pytest 守门)——取向待定案
+- [ ] **0072·C3** `rest/lobby.py` 的 `big_blind=2*` 改引 `blinds.BIG_BLIND_MULTIPLE`(一行,可并入任意批)
+- 注:0072·C1(前端消费 wire.gen.ts)已有 W 段既有项,不重复登记
+
+**新增缺陷(第五次工作流 N 系列对抗验证坐实,均 medium;台账 0072「N 系列」节)**:
+- [x] **0072·N1** 离房→flush 窗口内快速重进房静默回退积分 — **0073 已修**:运行期落库屏障(`JoinRoom` 载入前 `inbox.join()` + `PersistWriter.barrier()`,fail-closed);N1 主钉 e2e(同连接 + 跨连接 Cleanup 驱逐两路)+ 关屏障必红反证 + 三视角复审抓修毒丸在飞洞,712 全绿
+- [ ] **0072·N2** 慢客户端 `dispatch._drop_connection` 只 unregister 不 close ws/不 cancel Sender-Receiver → 幽灵命令源 + 同 nick 双 Receiver(需非对称慢客户端:读慢写健)。对齐 receiver.py 退出清理路径:drop 时关 ws + cancel
+- [ ] **0072·N3** `GameLoop.run` 无兜底:handle 的 `except Exception` 只裹 reduce() 一行,commit/_audit_applied/dispatch 抛异常冒出杀唯一状态写者协程且无 watchdog,与 architecture.md「接住→继续下一条」不符。把 except 提到裹住 commit/dispatch,或给 run task 加 done-callback 重启/告警
+- [ ] **0072·N5** `SessionStore.revoke` 全仓零调用者——无登出端点/无管理员吊销通道,泄露应对(issue --reset)后已建会话仍活至 SESSION_TTL。补吊销通道(登出端点 或 name→sessions 索引供改密/reset 时撤销),或若确认 v1 不做则在 auth.md 显式记档「不吊销、靠 TTL+重启」
+- [ ] **0072·N9** StateSnapshot 不投影 `room.entry_vote` → 顶替/重连快照清空进行中免盲投票面板、重连的必需投票人不知有票。给 StateSnapshot 加投票公开态投影(或 reduce 重连臂补发 FreeEntryVoteUpdated)
+- [ ] **0072·N-e32** Broadcast 收件人取 commit 后成员表:LeaveRoom 触发 fold-to-one 终手时,离场者收不到同批 PlayerActed/HandShowDown/HandEnded(看不到自己参与底池的结算)。离场结算事件改 Personal 补发给离场者,或调整驱逐与结算广播的顺序
+- 注:**N4**(Timeout 跨房)并入 **R2** 修复——R2 的 (seq,epoch) 双键须扩为携带房间身份/世代,否则玩家换房后过期 Timeout 仍可落入新房
+- 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
+- [ ] **0072·N-低危设计边角**(low,择机):N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e26 `scripts/scripts.py` 原型孤儿脚本删除 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e36 profile.py 手抄 `_NICKNAME_MAX_LEN` 二份事实源 / N-e38·N-e40 演进面与快照 min-raise 记档
+
 ## 持续项(随时回看)
 
 - [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))
