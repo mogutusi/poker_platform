@@ -264,3 +264,37 @@ async def test_lobby_check_and_rekey_use_db_nickname_not_session(monkeypatch=Non
     conns2.register(conn)
     await _rename(store, sm, presence2, conns2, sid2, _seal_req(session2, 1, {"new_nickname": "Neo"}))
     assert conns2.get("Neo") is conn and conn.nick == "Neo"  # 按 DB 名捕获重挂,非按会话名 miss
+
+
+# ── 0074·C:窗内进房 → 复查 + 回滚 DB + 403(修复前四处身份永久发散)──
+async def test_join_room_during_await_window_reverts_and_403():
+    # 「不在房」检查(profile.py:122)读 committed world,其后 nickname_taken / update_nickname 两次 DB await
+    # 期间 GameLoop 完全可能提交该用户的 JoinRoom。修复前:照旧内存联动 → world 挂 old_nick 而 DB/会话/连接键
+    # 变 new_nick,四处永久发散(旧 nick 幽灵成员、用户一切命令 NOT_IN_ROOM 无法自救、可二次进房复制积分)。
+    # 修复后:窗后复查发现已在房 → 同款 CAS 把 DB 改回 → 403,四处仍一致为 old_nick。
+    sm = await _setup()
+    world = make_world(rooms={}, users={})  # 起初在大厅:窗前检查放行
+    store = SessionStore(_TTL)
+    presence, conns = _wiring(world)
+    sid, session = store.create("alice", "Alice", _T0)
+    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS())
+    conns.register(conn)
+
+    calls = {"n": 0}
+
+    def sm_getter():
+        calls["n"] += 1
+        if calls["n"] == 2:  # 第 2 次取 sm = nickname_taken 时,即窗前检查已过 → 此刻模拟 GameLoop 提交 JoinRoom
+            world.rooms["r1"] = room_with(users_in_room={"Alice": UserStatus.WATCHING})
+            world.users["Alice"] = UserState(uid=1, nickname="Alice", points=100, room="r1")
+        return sm
+
+    router = make_nickname_router(sm_getter, store, lambda: presence, conns, now=lambda: _T0)
+    with pytest.raises(HTTPException) as ei:
+        await _endpoint(router)(
+            SecureRequest(sid=sid, frame=_seal_req(session, 1, {"new_nickname": "Neo"}))
+        )
+    assert ei.value.status_code == 403  # 与「窗前就在房」同码
+    assert await _db_nick(sm, 1) == "Alice"  # DB 已回滚(修复前会停在 Neo)
+    assert session.nickname == "Alice"  # 会话表未动
+    assert conns.get("Alice") is conn and conn.nick == "Alice"  # 连接键未动 → 广播仍能按 world 的 old_nick 找到他

@@ -4,14 +4,14 @@
 全局积分守恒(转账两端等额)重点核。SB=1、BB=2。
 """
 
-from app.core.commands import BuyIn, PlayerAction, SetUserStatus, SitDown
+from app.core.commands import BuyIn, Disconnect, PlayerAction, SetUserStatus, SitDown, StartHand
 from app.core.domain import UserState
 from app.core.enums import HandStatus, PlayerStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, Persist
 from app.wire.server import PlayerBoughtIn, UserStatusChanged
 from app.core.records import PointsWrite
-from tests.builders import hand_world, make_table, make_world, player, room_with, run, seat
+from tests.builders import DECK, T0, hand_world, make_table, make_world, player, room_with, run, seat
 
 
 def _room(world, name="r1"):
@@ -163,3 +163,31 @@ def test_stand_up_while_playing_rejected():
     world, events, err = run(world, SetUserStatus(origin="A", status=UserStatus.WATCHING))
     assert err is not None and err.code is ErrorCode.INVALID_STATUS_TRANSITION and events == []
     assert _room(world).users_in_room["A"] is UserStatus.PLAYING and _room(world).seats[0] is not None
+
+
+# ── 0074·H:手内掉线者不得给已锁筹的座位加筹(判据是「是不是本手 Player」,不是 users_in_room 状态)──
+def test_buy_in_rejected_for_offline_player_still_in_hand():
+    # _disconnect 把在座者置 OFFLINE 但他仍留在 hand.players;若按状态判(is PLAYING)会放行买入,
+    # 而 _start_hand 早把 seat.points 锁进 in_game_points 并清零 → 手尾 final-initial 凭空多出买入额,
+    # 落库 HandRecord 与 REST /hands 的 net 全错。修复后:按 _player_in_hand 判,照样 HAND_IN_PROGRESS。
+    world = make_table(
+        {0: seat("alice", 100, new_here=False), 1: seat("bob", 100, new_here=False)}, room_name="r1"
+    )
+    r = world.rooms["r1"]
+    for n in ("alice", "bob"):
+        r.users_in_room[n] = UserStatus.READY_TO_PLAY
+    world.users["alice"].points = 500
+    world, _, err = run(world, StartHand(origin="alice", seat=0, started_at=T0, deck=list(DECK)))
+    assert err is None
+    world, _, err = run(world, Disconnect(origin=None, nick="alice"))  # 手内掉线 → OFFLINE,仍在 hand.players
+    assert err is None
+    r = world.rooms["r1"]
+    assert r.users_in_room["alice"] is UserStatus.OFFLINE
+    assert any(p.nickname == "alice" for p in r.hand.players)  # 前提:仍是本手 Player
+
+    world, ev, err = run(world, BuyIn(origin="alice", seat=0, amount=50))  # 修复前:放行
+    assert err is not None and err.code is ErrorCode.HAND_IN_PROGRESS
+    r = world.rooms["r1"]
+    assert r.seats[0].points == 0  # 座位仍是开局清零后的状态,未被加筹
+    assert r.seats[0].in_game_points == 100  # 本金快照未被污染
+    assert world.users["alice"].points == 500  # 全局积分未动

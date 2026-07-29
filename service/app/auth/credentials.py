@@ -43,9 +43,17 @@ def authenticate(
         return None  # 解密坏 / JSON 坏 / 缺字段 / payload 非 dict → 一律不放行
     if not isinstance(password, str) or not isinstance(client_nonce, str):
         return None  # 字段类型不符 → 拒
-    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
-        return None  # ts 须为**有限**数值:bool 是 int 子类显式拒;json 会解析非标 NaN/Infinity,
-        # 而 NaN 与任何数比较恒 False → |now-ts| > 窗 永不成立 → freshness 守卫形同虚设,故 fail-closed 拒
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return None  # bool 是 int 子类,显式拒;非数值拒
+    try:
+        ts_f = float(ts)  # 一次转换兼挡两坑:巨整数 int(json 解析 400 位字面量)→ OverflowError
+    except OverflowError:
+        # 巨整数 ts 若逃出本函数会冒成端点 500(login.py 对 authenticate 无 try),既破 fail-closed
+        # 铁律,又让「500 vs 401」成为 K_user 猜测正确性的预言机(错钥在 json 解析即败回 401)。
+        return None
+    if not math.isfinite(ts_f):
+        return None  # 须为**有限**数值:json 会解析非标 NaN/Infinity,而 NaN 与任何数比较恒 False
+        # → |now-ts| > 窗 永不成立 → freshness 守卫形同虚设,故 fail-closed 拒
     if not verify_password(password, hash_password):
         return None  # 密码错(verify_password 常量时间 + fail-closed)
-    return LoginProof(client_nonce=client_nonce, ts=float(ts))
+    return LoginProof(client_nonce=client_nonce, ts=ts_f)

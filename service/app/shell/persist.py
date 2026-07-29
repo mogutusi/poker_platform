@@ -253,10 +253,23 @@ class PersistWriter:
         # swap 一次取走整批 ⇒ 成功的 flush_once 一轮即清空;只有失败回灌才使缓冲仍非空、需重试。
         deadline = time.monotonic() + self._drain_timeout
         while not self._buf.is_empty():
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 log.critical("delayDB drain timed out, %d unwritten records dropped (process exiting)", len(self._buf))
                 return
-            await self.flush_once()
+            try:
+                # deadline 必须罩住 flush 本身(0074·D):只在循环顶部判时刻,遇「DB 无响应/锁等待致单次 commit
+                # 永不返回」时根本走不到下一次判断 → drain 无限挂 → DevShell.stop() 永不返回、进程无法优雅退出
+                # (db.md 承诺的「有界、超 DB_DRAIN_TIMEOUT_MS 放弃」形同虚设)。超时即放弃这批:wait_for 取消
+                # flush_once,其 CancelledError 臂已把批回灌(不静默丢),进程随后退出。
+                await asyncio.wait_for(self.flush_once(), timeout=remaining)
+            except TimeoutError:
+                log.critical(
+                    "delayDB drain timed out mid-flush, %d unwritten records dropped (process exiting)",
+                    len(self._buf),
+                )
+                return
             if not self._buf.is_empty():
-                # 仍非空 = 刚才落库失败回灌 → 按落库周期节流重试,防紧自旋 + 日志刷屏(deadline 兜底退出)
-                await asyncio.sleep(self._interval)
+                # 仍非空 = 刚才落库失败回灌 → 按落库周期节流重试,防紧自旋 + 日志刷屏;
+                # 节流也须受 deadline 约束,否则大 interval 会把总耗时拖过上限。
+                await asyncio.sleep(max(0.0, min(self._interval, deadline - time.monotonic())))

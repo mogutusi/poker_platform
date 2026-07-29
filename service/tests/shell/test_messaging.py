@@ -356,3 +356,28 @@ async def test_catch_up_db_failure_is_noop():
     alice = make_conn("alice")
     await deliver_dm_catch_up(alice, sessionmaker=sm)  # 不抛
     assert drain(alice) == []
+
+
+# ── 0074·G:改昵称(rekey)落在解析 uid 的 DB await 窗内 → 发件人 nick 被就地改写 ──
+async def test_rename_during_uid_lookup_does_not_lose_dm():
+    # 修复前:uids 用「旧 nick」建表,await 后却用被 rekey 就地改写的 conn.nick 查 → 必然 miss →
+    # 私信静默不落库 + 回发假 INTERNAL。修复后:发件人 nick 全程用进入路由时的快照,键与表天然一致。
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns, alice, bob, persist = _both_online()
+
+    real_sm = sm
+    def sm_with_rename():
+        # 取 session 的那一刻(即 load_uids_by_nicks 正要跑)模拟并发改昵称的 rekey:就地改写 conn.nick
+        conns.rekey(alice, "Neo")
+        return real_sm()
+
+    await route_direct_message(
+        alice, _dm("bob", "hey"), conns=conns, persist=persist, sessionmaker=sm_with_rename
+    )
+    assert alice.nick == "Neo"  # rekey 确已就地改写(窗口真实发生)
+    assert drain(alice) == []  # 修复前:这里会收到假 ErrorMessage(INTERNAL 无 DB 账号行)
+    snap = persist.snapshot()
+    assert len(snap) == 1 and isinstance(snap[0], DMWrite)
+    assert (snap[0].from_uid, snap[0].to_uid, snap[0].text) == (1, 2, "hey")  # 仍按发起时身份落库
+    out = drain(bob)
+    assert len(out) == 1 and out[0].from_nick == "alice"  # 实时投递也用快照,与落库同源

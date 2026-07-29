@@ -268,3 +268,22 @@ async def test_maybe_cleanup_swallows_persister_error():
 # ── NullPersister.cleanup_dms:无 DB → 返 0 ──
 async def test_null_persister_cleanup_returns_zero():
     assert await NullPersister().cleanup_dms(datetime(2026, 1, 1, tzinfo=timezone.utc)) == 0
+
+
+# ── 0074·D:drain 的 deadline 必须罩住 flush 本身——单次 commit 挂起时不得无限等 ──
+async def test_drain_bounded_when_flush_hangs():
+    # 修复前:deadline 只在循环顶部判,flush_once 内的 commit 永不返回 → drain 无限挂 → stop() 卡死、
+    # 进程无法优雅退出(db.md「有界、超 DB_DRAIN_TIMEOUT_MS 放弃」承诺失效)。
+    class _HangingPersister:
+        async def flush(self, dirty, appends) -> None:
+            await asyncio.Event().wait()  # 模拟 DB 无响应 / 锁等待
+
+        async def cleanup_dms(self, cutoff) -> int:
+            return 0
+
+    buf = WriteBuffer()
+    buf.put(_points(1, 100))
+    w = _writer(buf, _HangingPersister(), flush_interval_s=0.01, drain_timeout_s=0.1)
+    # 给足 10× 上限的宽限:修复前会耗尽它(挂死),修复后应在 ~0.1s 返回
+    await asyncio.wait_for(w.drain(), timeout=1.0)
+    assert not buf.is_empty()  # 挂起批已被 wait_for 取消并回灌(不静默丢),进程随后退出

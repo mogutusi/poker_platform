@@ -50,20 +50,24 @@ async def route_direct_message(
         return
 
     # 解析 from/to nick → 不可变 uid(收发边界 nick↔uid 转换;落库与游标按 uid 不按可变 nick,见 messaging.md)。
+    # **发件人 nick 必须快照**(0074·G):改昵称的 ConnectionManager.rekey 会**就地改写** conn.nick,
+    # 若下面 await 后再读 conn.nick,就会拿「改写后的新 nick」去查「用旧 nick 建的表」→ 必然 miss →
+    # 私信静默不落库 + 回发假 INTERNAL。全程用同一个快照,键与表天然一致。
+    sender_nick = conn.nick
     try:
-        uids = await load_uids_by_nicks(sessionmaker, (conn.nick, msg.to_nick))
+        uids = await load_uids_by_nicks(sessionmaker, (sender_nick, msg.to_nick))
     except Exception:
-        log.exception("direct_message DB read failed from=%s to=%s", conn.nick, msg.to_nick)
+        log.exception("direct_message DB read failed from=%s to=%s", sender_nick, msg.to_nick)
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "私信读 DB 失败")))
         return
     to_uid = uids.get(msg.to_nick)
     if to_uid is None:  # 对端根本不存在 = 硬错误回执(离线不算,见 messaging.md;离线只落库、登录补收 0040)
         conn.outbound.put_nowait(DMUndelivered(to_nick=msg.to_nick))
         return
-    from_uid = uids.get(conn.nick)
+    from_uid = uids.get(sender_nick)
     if from_uid is None:  # 鉴权说有发件人、DB 无行 = 内部不一致(同 _build_join;dev 握手已拒非种子 nick)
         conn.outbound.put_nowait(
-            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {conn.nick} 无 DB 账号行"))
+            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {sender_nick} 无 DB 账号行"))
         )
         return
 
@@ -74,8 +78,8 @@ async def route_direct_message(
     recipient = conns.get(msg.to_nick)  # 在线判断 = ConnectionManager nick 表(presence;离线 None)
     if recipient is not None:  # 在线 → 实时投递(尽力而为;离线仅落库,0040 登录补收)
         _try_deliver(
-            recipient, DMDelivered(msg_id=msg_id, from_nick=conn.nick, text=text, created_at=created_at)
-        )
+            recipient, DMDelivered(msg_id=msg_id, from_nick=sender_nick, text=text, created_at=created_at)
+        )  # from_nick 同用快照:与落库的 from_uid 同源,免「库里记旧身份、实时投递显新名」
 
 
 async def route_dm_mark_read(
@@ -89,13 +93,14 @@ async def route_dm_mark_read(
     # 标记已读(messaging.md §私信):reader=连接 nick(不信报文)、peer=msg.peer_nick、read_through=客户端回传。
     # 解析 uid → put(DMReadCursorWrite)(状态写,按 (reader,peer) 覆盖)→ peer 在线则 enqueue(DMRead) 回执。
     # v1 不限速:游标状态写幂等(同键覆盖,刷 N 次只落 1 次)、廉价,同 FetchRoomChat 免限速判据(背压兜洪泛)。
-    if msg.peer_nick == conn.nick:  # 无自己↔自己会话(对称 DM 禁自发)
+    reader_nick = conn.nick  # 快照:rekey 会就地改写 conn.nick,await 后再读会与建表键不一致(0074·G,同 route_direct_message)
+    if msg.peer_nick == reader_nick:  # 无自己↔自己会话(对称 DM 禁自发)
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.CANNOT_DM_SELF, "不能标记与自己的会话已读")))
         return
     try:
-        uids = await load_uids_by_nicks(sessionmaker, (conn.nick, msg.peer_nick))
+        uids = await load_uids_by_nicks(sessionmaker, (reader_nick, msg.peer_nick))
     except Exception:
-        log.exception("dm_mark_read DB read failed reader=%s peer=%s", conn.nick, msg.peer_nick)
+        log.exception("dm_mark_read DB read failed reader=%s peer=%s", reader_nick, msg.peer_nick)
         conn.outbound.put_nowait(ErrorMessage.from_err(Err(ErrorCode.INTERNAL, "标记已读读 DB 失败")))
         return
     peer_uid = uids.get(msg.peer_nick)
@@ -104,10 +109,10 @@ async def route_dm_mark_read(
             ErrorMessage.from_err(Err(ErrorCode.INVALID_MESSAGE, f"未知对端 {msg.peer_nick}"))
         )
         return
-    reader_uid = uids.get(conn.nick)
+    reader_uid = uids.get(reader_nick)
     if reader_uid is None:  # 鉴权说有读者、DB 无行 = 内部不一致(同 route_direct_message)
         conn.outbound.put_nowait(
-            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {conn.nick} 无 DB 账号行"))
+            ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {reader_nick} 无 DB 账号行"))
         )
         return
     persist.put(
@@ -115,7 +120,7 @@ async def route_dm_mark_read(
     )  # 状态写:按 (reader,peer) 覆盖只留最新进度
     peer = conns.get(msg.peer_nick)  # 发件人(对端)在线判断
     if peer is not None:  # 在线 → 实时回执(尽力而为,同 DMDelivered)
-        _try_deliver(peer, DMRead(reader_nick=conn.nick, read_through=msg.read_through))
+        _try_deliver(peer, DMRead(reader_nick=reader_nick, read_through=msg.read_through))  # 同用快照
 
 
 async def deliver_dm_catch_up(

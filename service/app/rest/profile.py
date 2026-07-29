@@ -136,6 +136,23 @@ def make_nickname_router(
         except Exception:
             log.exception("change_nickname: write failed")
             raise HTTPException(status_code=500, detail="internal")
+        # 窗后复查「是否已进房」(0074·C):122 行那次检查读的是 committed world,而其后 126/129 两次 DB
+        # await 期间 GameLoop 完全可能提交这个用户的 JoinRoom。此时 world 以 **old_nick** 为键,而 shell
+        # 不写 world(不变量 2)⇒ 照旧做内存联动会让「world / DB / 会话表 / 连接键」四处永久发散:旧 nick
+        # 成幽灵成员(广播查不到连接)、该用户一切命令按新 nick 解析不到房而 NOT_IN_ROOM(连 LeaveRoom 都发不出、
+        # 无法自救)、Disconnect 同样落空使座位筹码永不回收、且再次 JoinRoom 会绕过单房间约束复制一份积分。
+        # 故此处复查:已进房则把 DB 改回去(同款 CAS),四处回到一致的 old_nick,返 403(与窗前在房同码)。
+        if presence.current_room(old_nick) is not None:
+            try:
+                reverted = await update_nickname(get_sessionmaker(), uid, new_nick, old_nick)
+            except Exception:
+                log.exception("change_nickname: revert failed after mid-rename join uid=%s", uid)
+                reverted = False
+            if not reverted:
+                # 回滚没命中/抛错:DB 已是 new_nick 而 world 挂 old_nick,自动修复不了 → CRITICAL 留人工介入
+                log.critical("change_nickname: joined room mid-rename, DB revert missed uid=%s", uid)
+                raise HTTPException(status_code=500, detail="internal")
+            raise HTTPException(status_code=403, detail="cannot change nickname in room")
         # DB 已落定(CAS 赢家)→ 内存联动(纯同步、其间无 await ⇒ 原子):该账号全部会话 + 捕获的那个连接对象
         # (rekey 按对象 `is` 判定,不按键 pop——防 await 窗内键已被他人 rename 占走时误挂他人连接,0065 自 review)。
         session_store.rename_nickname(session.name, new_nick)

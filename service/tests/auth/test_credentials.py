@@ -145,6 +145,17 @@ def test_non_numeric_ts_rejected(bad_ts):
     assert authenticate(hp, key_hex, iv, blob) is None
 
 
+def test_huge_integer_ts_rejected_without_escaping():
+    # 0074:巨整数 ts(json 把 400 位字面量解析成 Python int)——float()/math.isfinite() 对它抛 OverflowError。
+    # 该异常若逃出 authenticate 会冒成端点 500(login.py 对 authenticate 无 try),既破 fail-closed 铁律,
+    # 又使「500 vs 401」成为 K_user 猜测正确性的预言机(错钥在 json 解析即败 → 401)。此处钉:必须返回 None、不抛。
+    key, key_hex = _key_hex()
+    hp = hash_password(_PASSWORD, _ROUNDS)
+    for huge in (int("9" * 400), -int("9" * 400)):
+        iv, blob = _seal_json(key, _payload(ts=huge))
+        assert authenticate(hp, key_hex, iv, blob) is None  # 修复前:OverflowError 逃逸
+
+
 def test_integer_ts_accepted_as_float():
     # JSON 整数 ts(客户端取整秒)合法,透出为 float。
     key, key_hex = _key_hex()

@@ -691,7 +691,9 @@ def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
     msg = UserStatusChanged(
         nickname=cmd.nick, status=UserStatus.OFFLINE, seat_position=_seat_of(room, cmd.nick)
     )
-    return [Broadcast(room=work.room_name, msg=msg)], None
+    # 转 OFFLINE 使其退出合格投票人集(_voters 要 READY_TO_PLAY)→ 与坐出/起身/离场同为「投票人减员」,
+    # 须同样重算免盲投票(rules.md ①.15),否则靠减员达成的全票永不通过、免盲被 StartHand 静默作废(0074)。
+    return [Broadcast(room=work.room_name, msg=msg), *_maybe_resolve_entry_vote(work, room)], None
 
 
 def _leave_room(work: Work, cmd: LeaveRoom) -> ReduceResult:
@@ -809,7 +811,11 @@ def _buy_in(work: Work, cmd: BuyIn) -> ReduceResult:
     seat = room.seats[cmd.seat]
     if seat is None or seat.nickname != nick:
         return [], Err(ErrorCode.NOT_YOUR_SEAT, f"座位 {cmd.seat} 不属于 {nick}")
-    if room.users_in_room[nick] is UserStatus.PLAYING:
+    if _player_in_hand(room.hand, nick) is not None:
+        # 判据是「是不是本手 Player」而非 users_in_room 状态(0074·H):二者在**手内掉线**时分叉——
+        # _disconnect 把在座者置 OFFLINE 但他仍留在 hand.players,按状态判会放行买入,而 _start_hand 早已
+        # 把 seat.points 锁进 in_game_points 快照并清零;此时加筹会让手尾 final-initial 凭空多出买入额,
+        # 落库 HandRecord 与 REST /hands 的 net 全错。真正要守的不变量就是「筹码已锁入本手」。
         return [], Err(ErrorCode.HAND_IN_PROGRESS, "手牌进行中不能买入(筹码已锁入本手)")
     if cmd.amount <= 0:
         return [], Err(ErrorCode.INVALID_BUY_IN, f"买入额须为正(amount={cmd.amount})")

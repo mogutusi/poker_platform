@@ -5,7 +5,7 @@
 任一 reject → 失败;投票人离场/坐出 → 重算(①.15)。投票不动积分/座位/底牌。SB=1、BB=2。
 """
 
-from app.core.commands import LeaveRoom, OpenFreeEntryVote, SetUserStatus, SitDown, StartHand, VoteFreeEntry
+from app.core.commands import Disconnect, LeaveRoom, OpenFreeEntryVote, SetUserStatus, SitDown, StartHand, VoteFreeEntry
 from app.core.domain import UserState
 from app.core.enums import UserStatus
 from app.core.errors import ErrorCode
@@ -158,6 +158,25 @@ def test_voter_sit_out_recomputes_and_passes():
     closed = _closed(ev)
     assert closed is not None and closed.passed is True and closed.waived == ("D",)
     assert _room(world).entry_vote is None and _room(world).waive_entry_for == {"D"}
+
+
+# ── ①.15 变体(0074):投票人**掉线**转 OFFLINE → 同为投票人减员,须重算 → 通过(_disconnect 挂钩)。
+#    修复前:_disconnect 只标 OFFLINE + 广播、不重算,靠减员达成的全票永远悬挂,免盲被 StartHand 静默作废。──
+def test_voter_disconnect_recomputes_and_passes():
+    world = _three_plus_newcomer()
+    world, _, err = run(world, OpenFreeEntryVote(origin="A"))
+    assert err is None
+    for v in ("A", "B"):
+        world, _, err = run(world, VoteFreeEntry(origin=v, approve=True))
+        assert err is None
+    assert _room(world).entry_vote is not None  # C 未投,尚未通过
+
+    world, ev, err = run(world, Disconnect(origin=None, nick="C"))  # C 掉线 → 退出投票人集(OFFLINE 非 READY)
+    assert err is None
+    closed = _closed(ev)
+    assert closed is not None and closed.passed is True and closed.waived == ("D",)
+    assert _room(world).entry_vote is None and _room(world).waive_entry_for == {"D"}
+    assert _room(world).users_in_room["C"] is UserStatus.OFFLINE  # 掉线者保座、仅状态转 OFFLINE
 
 
 # ── 候选自身可发起投票(开票者不必是投票人,决策 5)──
