@@ -121,10 +121,11 @@
 
 ## 缺陷猎杀(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
 
-> 第六轮**换靶**:不再查文档一致性(0072 已收敛),只打纯代码缺陷;专攻此前从未审的面(国密库内部/真扑克语义/reduce 崩溃点/codegen/迁移/CLI/前端)。验证纪律升级为「验证者须实跑 repro」。
+> 第六轮**换靶**:0072 已把文档一致性挖到收敛,故本轮的**搜索目标**改为纯代码缺陷,专攻此前从未审的面(国密库内部/真扑克语义/reduce 崩溃点/codegen/迁移/CLI/前端)。验证纪律升级为「验证者须实跑 repro」。
+> ⚠️ **换的只是「找什么」,不是「改代码前读什么」**:本轮把定位误表述为「不再查文档一致性」,直接导致 0074·B 把 rules.md 明写的设计决策当 bug 改掉(已回滚)。**凡动行为必先读该行为的设计文档**;「A/B/C 都做了 X 唯独 D 没做」时**先假设 D 是有意的**。教训详见 [changes/0074](changes/0074-code-defect-hunt.md)「反思」。
 
 - [x] **0074·A** `authenticate` 巨整数 ts → `math.isfinite`/`float` 抛 OverflowError 逃出 try(校验在 try 外)→ 端点 500 破 fail-closed + **「500 vs 401」成 K_user 猜测预言机** — **已修**(ts 校验改 `try: float() except OverflowError`)+ 变异验证
-- [x] **0074·B** `_disconnect` 令投票人转 OFFLINE(退出 `_voters`)却不调 `_maybe_resolve_entry_vote` → 靠减员达成的全票永不通过、免盲被 StartHand 静默作废(违 rules.md ①.15;与坐出/离场两路径行为分裂)— **已修**(一行,同既有挂钩点)+ 变异验证 + 对照实验
+- [~] ~~**0074·B**~~ `_disconnect` 不重算免盲投票 — **误报,已回滚**:rules.md ①.15 与实现同批(0020)明写「不为断线单独触发通过」,是**有意设计**(断线可逆、占座窗口内可重连,全票制下按减员结算等于剥夺其否决权;离场/坐出才不可逆)。已补**反向钉** `test_voter_disconnect_does_not_trigger_vote` 防再犯
 - 注:**裸库脆弱面记档**——`ttxsgm` 的 SM4 去填充无校验、非对齐密文抛异常(实跑复现),当前被各 app 入口守卫挡住(MAC 先行 / 长度预校验)故非缺陷;**日后新增任何直喂 `sm4_cbc_*` 的入口,必须自带同款长度守卫**
 - [x] **0074·C** 改昵称「仅大厅可改」检查与内存联动之间隔两次 DB await:窗内 JoinRoom → world 挂 old_nick 而 DB/会话/连接键变 new_nick,**四处永久发散**(幽灵成员收不到广播 / 用户一切命令 NOT_IN_ROOM 无法自救 / 座位筹码永不回收 / 可二次进房复制积分)— **已修**(窗后复查 + CAS 回滚 + 403)+ 变异验证
 - [x] **0074·D** `PersistWriter.drain()` 的 deadline 只在循环顶部判,罩不住 flush 本身 → DB 挂起时 drain 无限等、`stop()` 永不返回、进程无法优雅退出(非 0073 引入,0025 起就在)— **已修**(`wait_for(flush_once, remaining)` + 节流收进 deadline)+ 变异验证

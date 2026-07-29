@@ -691,9 +691,10 @@ def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
     msg = UserStatusChanged(
         nickname=cmd.nick, status=UserStatus.OFFLINE, seat_position=_seat_of(room, cmd.nick)
     )
-    # 转 OFFLINE 使其退出合格投票人集(_voters 要 READY_TO_PLAY)→ 与坐出/起身/离场同为「投票人减员」,
-    # 须同样重算免盲投票(rules.md ①.15),否则靠减员达成的全票永不通过、免盲被 StartHand 静默作废(0074)。
-    return [Broadcast(room=work.room_name, msg=msg), *_maybe_resolve_entry_vote(work, room)], None
+    # 断线**不**触发免盲投票重算(rules.md ①.15 明写「不为断线单独触发通过」,0020 定):断线可逆——
+    # 占座窗口内可重连、重连后仍是 READY_TO_PLAY 投票人,若此刻按「减员」结算等于剥夺其否决权(全票制);
+    # 而离场/坐出/起身是主动且不可逆的退出,故只有它们触发。真不回来则 Cleanup 走 _evict 时自然重算。
+    return [Broadcast(room=work.room_name, msg=msg)], None
 
 
 def _leave_room(work: Work, cmd: LeaveRoom) -> ReduceResult:

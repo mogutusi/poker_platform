@@ -160,23 +160,25 @@ def test_voter_sit_out_recomputes_and_passes():
     assert _room(world).entry_vote is None and _room(world).waive_entry_for == {"D"}
 
 
-# ── ①.15 变体(0074):投票人**掉线**转 OFFLINE → 同为投票人减员,须重算 → 通过(_disconnect 挂钩)。
-#    修复前:_disconnect 只标 OFFLINE + 广播、不重算,靠减员达成的全票永远悬挂,免盲被 StartHand 静默作废。──
-def test_voter_disconnect_recomputes_and_passes():
+# ── ①.15 设计钉(0020 决策,0074 复核确认):投票人**掉线**不单独触发重算 ──
+def test_voter_disconnect_does_not_trigger_vote():
+    # rules.md ①.15 明写「不为断线单独触发通过」:断线**可逆**——占座窗口内可重连、重连后仍是
+    # READY_TO_PLAY 投票人,此刻按「减员」结算等于剥夺其否决权(免盲是全票制);离场/坐出/起身
+    # 才是主动且不可逆的退出,故只有它们触发。断线者真不回来时,Cleanup 走 _evict 自然重算。
+    # 本测是**反向钉**:0074 曾把这条有意设计误当 bug「修」掉,此钉防再犯。
     world = _three_plus_newcomer()
     world, _, err = run(world, OpenFreeEntryVote(origin="A"))
     assert err is None
     for v in ("A", "B"):
         world, _, err = run(world, VoteFreeEntry(origin=v, approve=True))
         assert err is None
-    assert _room(world).entry_vote is not None  # C 未投,尚未通过
 
-    world, ev, err = run(world, Disconnect(origin=None, nick="C"))  # C 掉线 → 退出投票人集(OFFLINE 非 READY)
+    world, ev, err = run(world, Disconnect(origin=None, nick="C"))  # C 掉线(仅退出 voters,可重连)
     assert err is None
-    closed = _closed(ev)
-    assert closed is not None and closed.passed is True and closed.waived == ("D",)
-    assert _room(world).entry_vote is None and _room(world).waive_entry_for == {"D"}
-    assert _room(world).users_in_room["C"] is UserStatus.OFFLINE  # 掉线者保座、仅状态转 OFFLINE
+    assert _closed(ev) is None  # 不产 FreeEntryVoteClosed:不为断线单独结算
+    assert _room(world).entry_vote is not None  # 投票仍挂着,等 C 重连投票 / 或 Cleanup 时重算
+    assert _room(world).waive_entry_for == set()  # 未免盲
+    assert _room(world).users_in_room["C"] is UserStatus.OFFLINE  # 掉线者保座
 
 
 # ── 候选自身可发起投票(开票者不必是投票人,决策 5)──
