@@ -119,6 +119,21 @@
 - 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
 - [ ] **0072·N-低危设计边角**(low,择机):N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e26 `scripts/scripts.py` 原型孤儿脚本删除 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e36 profile.py 手抄 `_NICKNAME_MAX_LEN` 二份事实源 / N-e38·N-e40 演进面与快照 min-raise 记档
 
+## 缺陷猎杀(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
+
+> 第六轮**换靶**:不再查文档一致性(0072 已收敛),只打纯代码缺陷;专攻此前从未审的面(国密库内部/真扑克语义/reduce 崩溃点/codegen/迁移/CLI/前端)。验证纪律升级为「验证者须实跑 repro」。
+
+- [x] **0074·A** `authenticate` 巨整数 ts → `math.isfinite`/`float` 抛 OverflowError 逃出 try(校验在 try 外)→ 端点 500 破 fail-closed + **「500 vs 401」成 K_user 猜测预言机** — **已修**(ts 校验改 `try: float() except OverflowError`)+ 变异验证
+- [x] **0074·B** `_disconnect` 令投票人转 OFFLINE(退出 `_voters`)却不调 `_maybe_resolve_entry_vote` → 靠减员达成的全票永不通过、免盲被 StartHand 静默作废(违 rules.md ①.15;与坐出/离场两路径行为分裂)— **已修**(一行,同既有挂钩点)+ 变异验证 + 对照实验
+- 注:**裸库脆弱面记档**——`ttxsgm` 的 SM4 去填充无校验、非对齐密文抛异常(实跑复现),当前被各 app 入口守卫挡住(MAC 先行 / 长度预校验)故非缺陷;**日后新增任何直喂 `sm4_cbc_*` 的入口,必须自带同款长度守卫**
+- [x] **0074·C** 改昵称「仅大厅可改」检查与内存联动之间隔两次 DB await:窗内 JoinRoom → world 挂 old_nick 而 DB/会话/连接键变 new_nick,**四处永久发散**(幽灵成员收不到广播 / 用户一切命令 NOT_IN_ROOM 无法自救 / 座位筹码永不回收 / 可二次进房复制积分)— **已修**(窗后复查 + CAS 回滚 + 403)+ 变异验证
+- [x] **0074·D** `PersistWriter.drain()` 的 deadline 只在循环顶部判,罩不住 flush 本身 → DB 挂起时 drain 无限等、`stop()` 永不返回、进程无法优雅退出(非 0073 引入,0025 起就在)— **已修**(`wait_for(flush_once, remaining)` + 节流收进 deadline)+ 变异验证
+- [ ] **0074·E**(high)顶替链 A←B←C:B 在 `_displace(A)` 的 await 窗内被 C 顶掉,恢复后仍 `cancel_cleanup` + 投 `Connect` → 复活已 OFFLINE 用户 + 抹掉占座清理表 → 座位/筹码永久泄漏。修复须在 `_displace` 后复查 `is_current`
+- [ ] **0074·F**(medium)改昵称窗内 ws 顶替:119 行捕获的 `live_conn` 已被顶替,`rekey` 落 else 分支只改死对象 `.nick`,活连接永久挂旧键 → 用户在线却收不到消息。(0074·C 的复查不覆盖此路径)
+- [x] **0074·G** 改昵称落在 DM 路由 DB await 窗内:`uids` 用旧 nick 建表却用被 `rekey` 就地改写的 `conn.nick` 查 → 私信静默不落库 + 假 INTERNAL(`route_dm_mark_read` 同款)— **已修**(进路由即快照 nick,建表/查表/投递全程同源)+ 变异验证
+- [x] **0074·H** `_buy_in` 的「局中」判据用 `users_in_room is PLAYING` 而非 `_player_in_hand` → 手内掉线者可给已锁筹座位加筹,手牌记录 initial/final 凭空多筹码 — **已修**(判据换 `_player_in_hand`)+ 变异验证。**实跑推翻了「`_set_user_status` 同款错位」**:那处被 `userself_can_change_to` 挡住(OFFLINE 起身 → INVALID_STATUS_TRANSITION),不可达
+- [ ] **0074·I/J**(medium)`_cancel_and_await` 吞掉 `stop()` 自身的取消(优雅关闭超时失效);lifespan 的 `yield` 无 try/finally(关闭异常时 `stop()` 整体跳过 → 未落库积分全丢 + engine 泄漏)
+
 ## 持续项(随时回看)
 
 - [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))
