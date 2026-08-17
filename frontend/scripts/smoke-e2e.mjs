@@ -154,26 +154,72 @@ check(Array.isArray(holeA.cards) && holeA.cards.length === 2, `alice 收到自�
 const aliceSawBobHole = alice.events.some((m) => m.type === 'hole_cards' && m !== holeA)
 check(!aliceSawBobHole, 'alice 收不到别人的底牌')
 
-log('⑦ 打一手:轮流行动到手牌结束')
-const seatOf = { alice: 0, bob: 1 }
-let guard = 0
-while (guard++ < 40) {
-  const ended = alice.events.find((m) => m.type === 'hand_ended')
-  if (ended) break
-  // 谁该行动就让谁 fold/check,直到手牌结束
-  const acted = [...alice.events].reverse().find((m) => m.type === 'player_acted' || m.type === 'hand_started' || m.type === 'hand_status_changed')
-  const acting = acted && 'acting_position' in acted ? acted.acting_position : started.acting_position
-  if (acting === null || acting === undefined) { await new Promise((r) => setTimeout(r, 100)); continue }
-  const who = acting === seatOf.alice ? alice : bob
-  // preflop 小盲要跟注才能 check;这里直接 fold 结束一手,验证事件链走通
-  who.send({ type: 'player_action', action: 'fold' })
-  try {
-    await alice.wait((m) => m.type === 'hand_ended', '手牌结束', 3000)
+log('⑦ 打一手:跟注推进到摊牌(覆盖多街 + 比牌,不走 fold 捷径)')
+
+/**
+ * 谁该行动。**acting_position 是 players[] 的下标,不是座位号**
+ * (见 service/docs/wire-protocol-guide.md),要经 players 换算成座位。
+ * 这一点最初写错过,前端 store 里也错了同一处 —— 靠本冒烟才发现。
+ */
+let playersOrder = []
+function actingSeat() {
+  for (const m of [...alice.events].reverse()) {
+    if (m.type === 'hand_started') playersOrder = m.players
     break
-  } catch { /* 继续 */ }
+  }
+  const hs = [...alice.events].reverse().find((m) => m.type === 'hand_started')
+  if (hs) playersOrder = hs.players
+  const last = [...alice.events].reverse().find(
+    (m) => (m.type === 'player_acted' || m.type === 'hand_started') && 'acting_position' in m,
+  )
+  const idx = last ? last.acting_position : null
+  if (idx === null || idx === undefined) return null
+  return playersOrder[idx]?.seat_position ?? null
+}
+/** 本街需跟额:PlayerActed 带 last_bet;新街道归零。 */
+function currentBet() {
+  for (const m of [...alice.events].reverse()) {
+    if (m.type === 'hand_status_changed') return 0
+    if (m.type === 'player_acted') return m.last_bet
+    if (m.type === 'hand_started') return m.big_blind
+  }
+  return 0
+}
+/** 某座位本街已投入。 */
+function betOf(seat) {
+  for (const m of [...alice.events].reverse()) {
+    if (m.type === 'hand_status_changed') break
+    if (m.type === 'player_acted' && m.seat_position === seat) return m.bet_amount
+  }
+  const hs = [...alice.events].reverse().find((m) => m.type === 'hand_started')
+  return hs?.players.find((p) => p.seat_position === seat)?.bet_amount ?? 0
+}
+
+const streets = new Set()
+let guard = 0
+while (guard++ < 60) {
+  if (alice.events.some((m) => m.type === 'hand_ended')) break
+  for (const m of alice.events) if (m.type === 'hand_status_changed') streets.add(m.status)
+  const seat = actingSeat()
+  if (seat === null || seat === undefined) { await new Promise((r) => setTimeout(r, 120)); continue }
+  const who = seat === 0 ? alice : bob
+  const need = currentBet()
+  const mine = betOf(seat)
+  // 跟平就 check,否则跟注(bet_amount 是本街目标总额,不是增量)
+  who.send(need > mine
+    ? { type: 'player_action', action: 'bet', bet_amount: need }
+    : { type: 'player_action', action: 'check' })
+  await new Promise((r) => setTimeout(r, 180))
+}
+if (process.env.SMOKE_DEBUG) {
+  console.log('  --- 事件流 ---')
+  for (const m of alice.events) console.log('   ', JSON.stringify(m).slice(0, 150))
 }
 const ended = alice.events.find((m) => m.type === 'hand_ended')
-check(!!ended, ended ? `手牌结束(赢家 ${ended.winnings.map((w) => `${w.nickname}+${w.amount}`).join(', ')})` : '手牌未能结束')
+const showdown = alice.events.find((m) => m.type === 'hand_show_down')
+check(!!ended, ended ? `手牌结束(${ended.winnings.map((w) => `${w.nickname}+${w.amount}`).join(', ')})` : '手牌未能结束')
+check(streets.has('flop') && streets.has('turn') && streets.has('river'), `走完三条街道(${[...streets].join(' → ')})`)
+check(!!showdown && showdown.reveals.length === 2, showdown ? `摊牌亮 ${showdown.reveals.length} 家底牌、公共牌 ${showdown.board.length} 张` : '未到摊牌')
 
 log('⑧ 房间聊天')
 alice.send({ type: 'room_chat', text: 'gg' })

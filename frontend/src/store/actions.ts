@@ -2,6 +2,7 @@
 // 界面等服务器回事件再变,不抢先改本地状态(见 docs/architecture.md 不变量 1)。
 
 import { fetchProfile } from '@/transport/rest'
+import { decideJoinMessage } from './joinFlow'
 import { connect, disconnect, send, type ConnectionState } from '@/transport/ws'
 import { applyServerMessage, getRoomState, resetRoom, setConnection, setMe } from './room'
 
@@ -18,13 +19,42 @@ export async function enterRoom(
   const profile = await fetchProfile()
   setMe(profile.nickname)
 
+  // 「先退再进」只做一次。做不成就把错误交给界面显示,不要反复重试转圈。
+  let recovered = false
+
+  /**
+   * 处理「上一次会话的残留」。
+   *
+   * 上次在座时断线的用户,后端会保留他的座位(不变量 9:一个用户同时只在一个房间)。
+   * 于是这次新连接触发的是**重连**路径:服务器先私发**旧房间**的快照,随后我们的
+   * join_room 会被 ALREADY_IN_ROOM 拒。两种迹象都说明还挂在别处,先退掉再进。
+   */
+  function recoverFromStaleRoom(): void {
+    if (recovered) return
+    recovered = true
+    send({ type: 'leave_room' })
+    send({ type: 'join_room', room })
+  }
+
   connect({
-    onMessage: applyServerMessage,
+    onMessage: (msg) => {
+      const decision = decideJoinMessage(msg, room, recovered)
+      if (decision.kind === 'recover') {
+        recoverFromStaleRoom()
+        return
+      }
+      // 旧房间的快照不并进本地状态——那是要离开的房间。
+      if (decision.kind === 'ignore') return
+      applyServerMessage(msg)
+    },
     onStateChange: (s: ConnectionState) => {
       setConnection(s)
       // 每次连上(含重连)都要 join_room:重连后服务器会私发新的 StateSnapshot,
       // 本地状态整份被替换,不需要自己补。
-      if (s === 'open') send({ type: 'join_room', room })
+      if (s === 'open') {
+        recovered = false // 新连接重新给一次恢复机会
+        send({ type: 'join_room', room })
+      }
     },
     onAuthLost: () => {
       resetRoom()

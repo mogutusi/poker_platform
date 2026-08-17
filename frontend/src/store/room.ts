@@ -129,10 +129,22 @@ export function myPlayer(s: RoomState = state): PlayerView | null {
   return s.players.find((p) => p.nickname === s.me) ?? null
 }
 
+/**
+ * 当前该行动的玩家。
+ *
+ * **`acting_position` 是 `players[]` 的下标,不是座位号**(见 service/docs/wire-protocol-guide.md)。
+ * 两者只有在「每个人的座位号恰好等于其行动序下标」时才相等,一般情况下不等——
+ * players 按行动序排([0]=小盲),座位号是桌上的物理位置。
+ */
+export function actingPlayer(s: RoomState = state): PlayerView | null {
+  if (s.actingPosition === null) return null
+  return s.players[s.actingPosition] ?? null
+}
+
 /** 是否轮到我行动。判据只看服务器给的 acting_position,不自己推。 */
 export function isMyTurn(s: RoomState = state): boolean {
-  const me = myPlayer(s)
-  return me !== null && s.actingPosition !== null && me.seat_position === s.actingPosition
+  const acting = actingPlayer(s)
+  return acting !== null && acting.nickname === s.me
 }
 
 /**
