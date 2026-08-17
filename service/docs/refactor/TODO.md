@@ -153,7 +153,8 @@
 - [ ] **0078·D** 冒烟再扩:加注与 min-raise、多人边池、断线重连后 seq 继续累加
 - [x] **0078·C** 真实界面验证 — **0079 完成**:Playwright 4 个用例走通登录 → 大厅 → 进房观战。**一次抓出三个问题**:后端没配 CORS(浏览器连登录都发不出去)、空大厅没有进房入口(动态建房下是死路)、ws 在组件卸载时的竞态
 - [x] **0079·A** 浏览器里两人同桌 — **0080 完成**:入座 → 买入 → 准备 → 开局 → 弃牌 → 手牌结束。**又抓出三个缺陷**:空座位不渲染导致观战者无法入座、开局后 `playerHands[别人座位]` 为 undefined 致整页白屏、行动按钮在别人回合仍可点却静默无反应。顺带修了 `UserStatusChanged` 只处理三种情形之一(入座事件被整条吞掉)
-- [ ] **0080·A** 界面走完整牌局:跟注推进到摊牌,验公共牌与亮牌渲染(协议层已验,界面未验)
+- [x] **0080·A** 界面走完整牌局 — **已完成**:`e2e/showdown.spec.ts` 两人 Check/Call 推进到手牌结束,6 个浏览器用例全绿。顺带记录一个工具链坑:`npm run dev` 跑着时执行 `npm run build` 会冲掉 dev server 的 `.next` chunk,症状是页面 200 但 React 不水合
+- [ ] **0080·B** 界面上验加注与 min-raise(当前只走了 Check/Call);三人以上与边池的界面表现
 - [ ] **0079·B** 断线重连在浏览器里验:重连后 seq 继续累加、快照重新对齐;被顶替(4401)的处理
 - [ ] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途(`chips`/`phase` 与后端 enum 的漂移仍在;新合入的 `game/page.tsx` 还在用它)。这条即上文「前端消费 wire.gen.ts」的落地时机
 - [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
