@@ -123,6 +123,9 @@ export function send(msg: ClientMessage): void {
 
 export function disconnect(): void {
   closedByUs = true
+  // 连同回调一起清掉:组件卸载后,还没触发的 onopen/onclose 不该再回调到已经走人的调用方,
+  // 否则它会在一条已经关掉的连接上 send,抛 "ws not connected"。
+  handlers = null
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null

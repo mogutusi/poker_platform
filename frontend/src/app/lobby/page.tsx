@@ -37,6 +37,7 @@ export default function LobbyPage() {
   // 排行榜来自 GET /leaderboard(公开读,明文)。它排的是结算后的全局积分,不含桌上筹码。
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [rooms, setRooms] = useState<RoomMeta[]>([])
+  const [roomName, setRoomName] = useState("dev")
   const [loadError, setLoadError] = useState<string | null>(null)
 
   /**
@@ -139,6 +140,7 @@ export default function LobbyPage() {
               <div className="flex h-full w-full items-center justify-center text-2xl">
                 {playerName.slice(0, 1).toUpperCase()}
               </div>
+
             </div>
             <div className="flex flex-1 flex-col">
               <div className="flex items-center justify-between">
@@ -178,12 +180,32 @@ export default function LobbyPage() {
                   Main Table
                 </p>
                 <div className="mt-1 flex items-center justify-between">
-                  <p className="text-xl font-semibold text-primary">德州扑克主桌</p>
+                  <p className="text-xl font-semibold text-primary">{room ? room.id : "德州扑克主桌"}</p>
                   <span className="rounded-full bg-secondary/60 px-3 py-1 text-xs text-secondary-foreground">
-                    {currentPlayers} / 9 Players
+                    {room ? `${room.seated} / ${room.max_seats} Players` : "暂无房间"}
                   </span>
                 </div>
               </div>
+              {/*
+                房间是动态创建的:进一个不存在的房名,后端就地建房(见 service/docs/core.md 房间生命周期)。
+                所以大厅必须有这个入口——否则空大厅时用户点哪儿都进不去。
+              */}
+              <div className="flex w-full items-center gap-2">
+                <input
+                  aria-label="房间名"
+                  value={roomName}
+                  onChange={(e) => setRoomName(e.target.value)}
+                  placeholder="房间名"
+                  className="h-9 flex-1 rounded border border-primary/40 bg-black/30 px-3 text-sm"
+                />
+                <Button
+                  onClick={() => roomName.trim() && handleEnterRoom(roomName.trim())}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                >
+                  进入房间
+                </Button>
+              </div>
+
 
               {/* Oval poker table with seats */}
               <div className="relative flex w-full flex-1 items-center justify-center min-h-[500px] py-12">

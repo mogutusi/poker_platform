@@ -23,7 +23,8 @@ npm run build        # 生产构建(会跑 lint + 类型检查)
 npm run type-check   # 只跑 tsc --noEmit
 npm run lint         # eslint
 npm test             # vitest:加密向量 + 状态归并 + seq 纪律
-npm run smoke        # 端到端冒烟(需后端在跑,见下)
+npm run smoke        # 协议层端到端冒烟(需后端在跑,见下)
+npm run test:e2e     # 真实浏览器走用户旅程(需后端在跑)
 ```
 
 `npm run build` 是**提交前必须跑通的门槛**。它会一并做类型检查和预渲染,能抓到 `tsc` 单独跑不出来的问题(例如 `useSearchParams` 没包 Suspense,0077 就是这么抓到的)。
@@ -88,3 +89,11 @@ cd service && rm -f poker.db && .venv/bin/alembic upgrade head
 ```
 
 脚本每轮用独立房名,结束时 `leave_room` 退分,所以可以反复跑。它用的是 dev 种子用户和 dev 共享密钥,仅限本地。
+
+### 浏览器测试
+
+`npm run test:e2e` 用 Playwright 开真 Chromium 走一遍:登录页校验 → 密码错的提示 → 登录进大厅 → 进房看到观战提示 → 未登录直接开牌桌页被送回登录页。前端由 Playwright 自动起,后端要自己起。
+
+它补的是另外两层都盖不到的面:按钮点了有没有反应、页面会不会白屏、有没有未捕获的运行时错误。0079 就是靠它抓到 CORS 没配、空大厅没有进房入口、以及 ws 连接的一处竞态。
+
+**每个用例用不同的 dev 账号**——同一账号在两个用例间会互相顶替连接,也可能把上一轮的房间残留带过来。

@@ -12,11 +12,20 @@ import { applyServerMessage, getRoomState, resetRoom, setConnection, setMe } fro
  * 顺序:先取自己的昵称(要靠它判断哪个座位是我的),再连 ws,连上后发 join_room。
  * 房间不存在时后端会动态建房(见 service/docs/core.md 房间生命周期)。
  */
+/**
+ * 连上 ws 并进入房间。返回一个取消函数。
+ *
+ * 必须可取消:本函数要先 await 一次 REST 拿昵称,而组件可能在这期间就卸载了
+ * (React 严格模式下开发期 effect 会跑两遍,必然撞上)。不取消的话,await 回来后
+ * 仍会去连一条没人要的连接。
+ */
 export async function enterRoom(
   room: string,
   onAuthLost: () => void,
+  isCancelled: () => boolean = () => false,
 ): Promise<void> {
   const profile = await fetchProfile()
+  if (isCancelled()) return
   setMe(profile.nickname)
 
   // 「先退再进」只做一次。做不成就把错误交给界面显示,不要反复重试转圈。

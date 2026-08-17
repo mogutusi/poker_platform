@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # (同一本地 ./poker.db,免 .env 也能跑)。生产设 postgresql+psycopg://…(psycopg3 同步/异步同 URL)。
     DATABASE_URL: str | None = None
 
+    # 允许跨源访问的前端来源,逗号分隔。浏览器对 fetch 到别的 origin 会先发预检,
+    # 服务器不回 Access-Control-Allow-Origin 就整个请求被拦掉——0079 起前端跑在 3000 端口、
+    # 后端在 8000,不配这个连登录都发不出去(Node 里的冒烟不受此约束,所以一直没暴露)。
+    # 默认只放行本机前端的两种写法(localhost 与 127.0.0.1 是不同的 origin,要都列)。
+    # 生产同源部署(反代到同一域名)时留空即可,那时根本不需要 CORS。
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
 
 # 启动期单例:import 即建。DATABASE_URL 有默认 → 不会因缺 .env 崩(alembic 也安全 import,见上 headless 约束)。
 settings = Settings()

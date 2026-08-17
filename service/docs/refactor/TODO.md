@@ -151,7 +151,9 @@
 - [x] **0078·A** 「上次会话残留」自愈 — **已完成**:`store/joinFlow.ts` 的 `decideJoinMessage` 判「先退再进」且只做一次;`scripts/smoke-stale-room.mjs` 在真后端验过
 - [x] **0078·B** 冒烟扩展到完整摊牌 — **已完成**:preflop → flop → turn → river → 摊牌比牌 + 筹码守恒。**过程中抓到真 bug**:`acting_position` 是 `players[]` 下标不是座位号,我的 `isMyTurn` 拿它当座位号用了(单测夹具恰好让两者相等所以没抓到,已把夹具改成下标≠座位号)
 - [ ] **0078·D** 冒烟再扩:加注与 min-raise、多人边池、断线重连后 seq 继续累加
-- [ ] **0078·C** 手动过一遍真实界面(`npm run dev` + 后端):目前只验了协议层,**界面本身还没人真正点过**
+- [x] **0078·C** 真实界面验证 — **0079 完成**:Playwright 4 个用例走通登录 → 大厅 → 进房观战。**一次抓出三个问题**:后端没配 CORS(浏览器连登录都发不出去)、空大厅没有进房入口(动态建房下是死路)、ws 在组件卸载时的竞态
+- [ ] **0079·A** 浏览器用例走完整牌局:点入座 → 买入 → 准备 → 开局,最好开两个 context 模拟两个玩家。牌桌页那几个按钮目前仍只有构建保证
+- [ ] **0079·B** 断线重连在浏览器里验:重连后 seq 继续累加、快照重新对齐;被顶替(4401)的处理
 - [ ] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途(`chips`/`phase` 与后端 enum 的漂移仍在;新合入的 `game/page.tsx` 还在用它)。这条即上文「前端消费 wire.gen.ts」的落地时机
 - [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
 - [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改

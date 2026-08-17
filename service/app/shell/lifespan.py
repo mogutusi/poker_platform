@@ -11,11 +11,13 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import FastAPI, Query, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import gameconfig
 from app.auth.channel import SecureChannel
 from app.auth.passwords import hash_password
+from app.config import settings
 from app.core.commands import Command
 from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
@@ -192,6 +194,16 @@ def create_app() -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, title="poker dev shell (plaintext, dev-only)")
     app.state.shell = shell
+    # 跨源放行:前端在 3000、后端在 8000,浏览器会先发预检,不回 CORS 头就整个请求被拦。
+    # 来源白名单走 app/config(基础设施轨),不硬编码;留空表示同源部署、不需要 CORS。
+    origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,  # 明确列举,不用 "*":带凭据的请求下通配是无效的,也不该放任
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+        )
     # REST 大厅房间列表(唯一读 committed world 的 REST,见 app/rest/lobby.py);world 迟绑(setup() 后才建)。
     app.include_router(make_lobby_router(lambda: shell.world))
     # REST 排行榜(读 DB 结算积分,见 app/rest/leaderboard.py);sessionmaker 迟绑(setup() 前已在 __init__ 建好)。

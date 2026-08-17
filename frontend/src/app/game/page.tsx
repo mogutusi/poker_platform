@@ -61,8 +61,12 @@ function GameView() {
       router.replace("/")
       return
     }
-    void enterRoom(roomId, () => router.replace("/")).catch(() => router.replace("/"))
+    let cancelled = false
+    void enterRoom(roomId, () => router.replace("/"), () => cancelled).catch(() => {
+      if (!cancelled) router.replace("/")
+    })
     return () => {
+      cancelled = true
       closeRoom()
     }
   }, [roomId, router])
