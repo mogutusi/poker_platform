@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -26,7 +26,9 @@ interface Seat {
   isButton?: boolean
 }
 
-export default function GamePage() {
+// useSearchParams 让这棵子树只能在客户端渲染,Next 15 要求它落在 Suspense 边界内,
+// 否则整页预渲染报错。故拆成「内层用 searchParams + 外层给边界」两段。
+function GameView() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const seatNumber = parseInt(searchParams.get("seat") || "0")
@@ -97,8 +99,8 @@ export default function GamePage() {
       )
     )
 
-    // TODO: replace with real game state fetch when backend endpoint is ready
-    // apiClient.getGameState(gameId).then(...)
+    // TODO(0077):这一页还没接后端。改由 ws 的 join_room -> StateSnapshot 驱动,
+    // 并拆掉本文件里的本地 mock 发牌与街道推进(见 docs/state.md)。
   }, [router, points])
 
   const handleReady = async () => {
@@ -554,3 +556,11 @@ export default function GamePage() {
   )
 }
 
+
+export default function GamePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <GameView />
+    </Suspense>
+  )
+}

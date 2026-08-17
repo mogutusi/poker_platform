@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { apiClient } from "@/lib/api"
+import { fetchLeaderboard, fetchRooms, type LeaderboardEntry as ApiLeaderboardEntry, type RoomMeta } from "@/transport/rest"
+import { getSession, endSession } from "@/transport/session"
+import { disconnect } from "@/transport/ws"
 import TableSeat from "@/components/TableSeat"
 
 interface LeaderboardEntry {
@@ -32,34 +34,29 @@ export default function LobbyPage() {
   const [isJoining, setIsJoining] = useState(false)
   const [selectedSeat, setSelectedSeat] = useState<number | null>(null)
 
-  // Mock seat data - in real app, this would come from API
-  const [seats, setSeats] = useState<Seat[]>([
-    { number: 1, player: { id: "1", name: "HighRoller", points: 3250 } },
-    { number: 2, player: { id: "2", name: "RiverKing", points: 2812 } },
-    { number: 3 },
-    { number: 4, player: { id: "4", name: "AllInQueen", points: 2344 } },
-    { number: 5, isButton: true, player: { id: "5", name: "SlowPlay", points: 1980 } },
-    { number: 6 },
-    { number: 7, player: { id: "7", name: "ChipLeader", points: 1765 } },
-    { number: 8 },
-    { number: 9 },
-  ])
+  // 排行榜来自 GET /leaderboard(公开读,明文)。它排的是结算后的全局积分,不含桌上筹码。
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
+  const [rooms, setRooms] = useState<RoomMeta[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  /**
+   * 大厅只能知道「占了几个座」(RoomMeta.seated),知道不了「谁坐哪」——逐座位的详情要
+   * join_room 之后由 StateSnapshot 带来(见 docs/state.md)。所以这里渲染的是匿名占位,
+   * 不编造玩家名。
+   */
+  const room = rooms[0] ?? null
+  const seats = useMemo<Seat[]>(() => {
+    const total = room?.max_seats ?? 9
+    const taken = room?.seated ?? 0
+    return Array.from({ length: total }, (_, i) => ({
+      number: i + 1,
+      player: i < taken ? { id: `seat-${i + 1}`, name: "已入座" } : undefined,
+    }))
+  }, [room])
 
   const currentPlayers = useMemo(
     () => seats.filter((seat) => seat.player).length,
     [seats]
-  )
-
-  // Mock leaderboard data for now
-  const leaderboard: LeaderboardEntry[] = useMemo(
-    () => [
-      { name: "HighRoller_1", points: 32500 },
-      { name: "RiverKing", points: 28120 },
-      { name: "AllInQueen", points: 23440 },
-      { name: "SlowPlay", points: 19800 },
-      { name: "ChipLeader", points: 17650 },
-    ],
-    []
   )
 
   const maxPoints = useMemo(
@@ -68,59 +65,43 @@ export default function LobbyPage() {
   )
 
   useEffect(() => {
-    // Simple auth gate: if no token, back to login
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null
-    if (!token) {
+    // 会话只活在内存里(见 docs/transport.md §六),刷新页面就没了,回登录页重登。
+    const session = getSession()
+    if (!session) {
       router.replace("/")
       return
     }
 
-    // Use last login name from storage if available
-    const storedName =
-      (typeof window !== "undefined" && localStorage.getItem("player_name")) || "Player"
-    setPlayerName(storedName)
-
-    // TODO: replace with real profile fetch when backend endpoint is ready
-    // apiClient.getUserProfile().then(...)
+    let cancelled = false
+    Promise.all([fetchRooms(), fetchLeaderboard(10)])
+      .then(([roomList, board]) => {
+        if (cancelled) return
+        setRooms(roomList)
+        setLeaderboard(board.map((e: ApiLeaderboardEntry) => ({ name: e.nickname, points: e.points })))
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError("读取大厅数据失败,请确认后端已启动。")
+      })
+    return () => {
+      cancelled = true
+    }
   }, [router])
 
-  const handleSeatClick = async (seatNumber: number) => {
-    const seat = seats.find((s) => s.number === seatNumber)
-    if (!seat || seat.player) return // Seat is occupied
+  /** 进房走 ws 的 join_room;房不存在后端会动态建房。选座在牌桌页做(见 docs/state.md)。 */
+  const handleEnterRoom = (roomId: string) => {
+    router.push(`/game?room=${encodeURIComponent(roomId)}`)
+  }
 
+  const handleSeatClick = (seatNumber: number) => {
+    if (!room) return
     setIsJoining(true)
     setSelectedSeat(seatNumber)
-
-    try {
-      // Placeholder for real join-game call
-      // await apiClient.joinGame("default-table", { seatNumber })
-      
-      // Mock: Add current player to the seat
-      setTimeout(() => {
-        setSeats((prevSeats) =>
-          prevSeats.map((s) =>
-            s.number === seatNumber
-              ? { ...s, player: { id: "current", name: playerName, points: points } }
-              : s
-          )
-        )
-        setIsJoining(false)
-        setSelectedSeat(null)
-        // Navigate to game page
-        router.push(`/game?seat=${seatNumber}`)
-      }, 1000)
-    } catch (error) {
-      console.error("Failed to join seat:", error)
-      setIsJoining(false)
-      setSelectedSeat(null)
-    }
+    handleEnterRoom(room.id)
   }
 
   const handleLogout = () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("auth_token")
-      localStorage.removeItem("player_name")
-    }
+    disconnect()
+    endSession()
     router.replace("/")
   }
 

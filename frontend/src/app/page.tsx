@@ -1,59 +1,63 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { apiClient } from "@/lib/api"
+import { login, LoginError } from "@/transport/login"
+import { hasKUser, saveKUser } from "@/transport/session"
 import pokerRoomBg from "@/pics/poker-room.png"
 
 export default function PokerLoginPage() {
   const router = useRouter()
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
+  // K_user 是带外发放的每用户共享密钥,每周轮换。没有它就无法构造登录 blob,所以必须能填。
+  // 已缓存过就不再要求重填,只留一个「换一把钥匙」的入口。
+  const [kUser, setKUser] = useState("")
+  const [needKUser, setNeedKUser] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    setNeedKUser(!hasKUser())
+  }, [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    setNotice(null)
     setIsLoading(true)
 
     try {
-      // Mock login for testing: admin / 123456
-      const isMockLogin = username === "admin" && password === "123456"
-      
-      if (isMockLogin) {
-        // Simulate API delay
-        await new Promise(resolve => setTimeout(resolve, 500))
-        
-        // Mock successful response
-        const mockToken = `mock_token_${Date.now()}`
-        if (typeof window !== "undefined") {
-          localStorage.setItem("auth_token", mockToken)
-          localStorage.setItem("player_name", username)
-        }
-        router.push("/lobby")
-        return
+      if (needKUser || kUser.trim()) {
+        saveKUser(kUser)
       }
 
-      // Real API call for other credentials
-      const response = await apiClient.login(username, password)
-      // Store token and basic player info
-      if (response.token) {
-        if (typeof window !== "undefined") {
-          localStorage.setItem("auth_token", response.token)
-          localStorage.setItem("player_name", username)
-        }
-        router.push("/lobby")
+      const session = await login(username, password)
+      setNeedKUser(false)
+      if (session.rotateHint) {
+        // 服务器是用旧钥认出你的,宽限期过后这把就失效了。
+        setNotice("你在用旧的 K_user，请尽快向管理员换新钥匙。")
       }
+      router.push("/lobby")
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "登录失败，请检查用户名和密码"
-      setError(errorMessage)
-      console.error("Login error:", err)
+      if (err instanceof LoginError) {
+        setError(
+          err.kind === "no_key"
+            ? "请先填入管理员发给你的 K_user。"
+            : err.message,
+        )
+        if (err.kind === "no_key" || err.kind === "bad_response") setNeedKUser(true)
+      } else if (err instanceof Error) {
+        setError(err.message)
+      } else {
+        setError("登录失败")
+      }
     } finally {
       setIsLoading(false)
     }
@@ -165,6 +169,61 @@ export default function PokerLoginPage() {
                   }}
               />
             </div>
+
+            {/* K_user:管理员带外发给你的 16 字节密钥(32 个十六进制字符),每周轮换。
+                本地已缓存就不再要求填写,只留一个更换入口。 */}
+            {needKUser ? (
+              <div className="space-y-3">
+                <Label
+                  htmlFor="kuser"
+                  className="text-white font-bold text-lg tracking-wider uppercase"
+                  style={{
+                    textShadow: "0 0 10px rgba(212, 175, 55, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8)",
+                    fontFamily: "var(--font-orbitron), 'Arial Black', sans-serif",
+                    letterSpacing: "0.15em"
+                  }}
+                >
+                  <p className='text-amber-100'>
+                      K_user 密钥
+                  </p>
+                </Label>
+                <Input
+                    id="kuser"
+                    type="password"
+                    value={kUser}
+                    onChange={(e) => setKUser(e.target.value)}
+                    required
+                    disabled={isLoading}
+                    placeholder="管理员发给你的 32 位十六进制"
+                    className="h-12 bg-black/20 backdrop-blur-sm border-2 rounded-lg text-white placeholder:text-orange-200/60 focus:ring-0 transition-all font-semibold input-shine"
+                    style={{
+                      fontFamily: "var(--font-orbitron), monospace",
+                      borderColor: "rgba(251, 145, 88, 0.79)",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = "rgba(251, 145, 88, 1)";
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = "rgba(251, 145, 88, 0.79)";
+                    }}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setNeedKUser(true)}
+                className="text-sm text-amber-200/70 hover:text-amber-100 underline underline-offset-4"
+              >
+                换一把 K_user 密钥
+              </button>
+            )}
+
+            {notice && (
+              <div className="p-3 text-sm bg-amber-900/70 backdrop-blur-md border-2 border-amber-500/50 rounded-lg text-amber-50 font-semibold">
+                {notice}
+              </div>
+            )}
 
             <Button
                 type="submit"
