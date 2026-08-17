@@ -17,6 +17,11 @@ __pycache__/
 
 node_modules/
 
+# Next.js 构建产物与缓存(上游 fork 曾把 .next/ 提交进库,400 个文件 / 78M,见 changes/0076)
+.next/
+out/
+*.tsbuildinfo
+
 original_password.txt
 pokertable_files.txt
 

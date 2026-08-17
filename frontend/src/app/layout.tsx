@@ -1,8 +1,13 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
-import './styles/globals.css'
+import { Inter, Orbitron } from 'next/font/google'
+import '/src/styles/globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
+const orbitron = Orbitron({ 
+  subsets: ['latin'],
+  variable: '--font-orbitron',
+  weight: ['400', '700', '900']
+})
 
 export const metadata: Metadata = {
   title: '扑克平台',
@@ -16,7 +21,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className={inter.className}>
+      <body className={`${inter.className} ${orbitron.variable}`}>
         <div className="min-h-screen bg-gradient-to-br from-poker-green to-green-900">
           {children}
         </div>

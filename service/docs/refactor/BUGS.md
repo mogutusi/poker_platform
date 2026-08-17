@@ -1,0 +1,151 @@
+# 未修缺陷登记册(bug registry)
+
+> **这是所有「已确认为真、但还没修」的缺陷的唯一集中清单。** 建于 0076。
+>
+> 在此之前,缺陷散在 [TODO.md](TODO.md) 的各轮小节里,和「还没做的功能」混排,容易漏掉。本篇只收**缺陷**(已存在的代码会错),不收待办功能。功能仍在 TODO.md。
+>
+> 规则:
+>
+> - 每条给出**症状 → 机理 → 修法**,以及台账出处。修完在这里划掉并注明改动号,不要直接删行——删了就看不出它曾经存在。
+> - 新发现的缺陷,如果当场修掉,只进 changes/,不必来这里;**只有「确认为真但本次不修」的才登记到这里**。
+> - 每条都经过对抗验证(默认先试图反驳,驳不倒才算数),不是猜测。
+
+## 怎么读严重度
+
+- **high**:会造成数据/资金损失、或让进程无法正常工作。优先修。
+- **medium**:特定交错或边界下才触发,后果明确但范围有限。
+- **low**:边角、体验或整洁性问题,择机修。
+
+---
+
+## high
+
+### BUG-1 · 顶替链 A←B←C 复活已离线用户,座位筹码永久泄漏
+
+- **来源**:[0074·E](changes/0074-code-defect-hunt.md)
+- **症状**:座位被永久占住、里面的筹码再也回不到全局积分。
+- **机理**:B 在 `_displace(A)` 的 await 窗口内被 C 顶掉;B 恢复执行后不知道自己已经不是当前连接,仍然去 `cancel_cleanup` + 投 `Connect`,于是把已经 `OFFLINE` 的用户复活成在线,同时抹掉了占座清理表里的定时项。清理再也不会触发。
+- **修法**:`_displace` 之后复查 `is_current`,不是当前连接就直接返回,不做后续动作。
+- **要补的测试**:构造 A←B←C 三连顶替的交错,断言 B 恢复后不复活用户、不抹清理表。
+
+### BUG-2 · 手牌记录跨房间世代撞键,新记录被静默丢弃
+
+- **来源**:[0072·R1](changes/0072-architecture-audit.md) · **状态:用户定案暂缓(2026-07-28「先不修」)**
+- **症状**:同名房间销毁重建、或进程重启之后,新手牌的记录写不进 DB,且不报错。
+- **机理**:`dedupe_key = "room:seq"`,`seq` 随房重建而归零,于是与旧世代的键相撞;幂等 INSERT 见到重复键就跳过,新记录被静默丢弃。
+- **修法**:两案留档在 0072,尚未选定。修的时候必须带「销房重建」和「进程重启」两条路径的回归测试。
+- **注意**:这条是**已确认的缺陷、用户主动决定暂不修**,不是「被判定为不用修」。
+
+---
+
+## medium
+
+### BUG-3 · Timeout 的 staleness 校验跨手失效
+
+- **来源**:[0072·R2](changes/0072-architecture-audit.md)
+- **症状**:上一手的超时命令可能被当成本手的有效超时执行,导致本手玩家被误判超时。
+- **机理**:`epoch` 每手归零,所以「上一手的 epoch」和「本手的 epoch」会重号,单靠 `epoch` 区分不出跨手的陈旧命令。
+- **修法**:`Timeout` 补带 `hand.seq`,与 `epoch` 双键校验。可与 BUG-2 同批(都动手牌标识)。
+- **要补的测试**:构造跨手交错,让上一手的 `Timeout` 在新手开始后才到达。
+
+### BUG-4 · 改昵称窗内发生 ws 顶替,活连接永久挂在旧 nick 键上
+
+- **来源**:[0074·F](changes/0074-code-defect-hunt.md)
+- **症状**:用户明明在线,却收不到任何消息。
+- **机理**:改昵称流程里捕获的 `live_conn` 在 DB await 窗口内已被顶替;`rekey` 因此走 `else` 分支,只改了那个**已死对象**的 `.nick`,真正的活连接还挂在 `old_nick` 键下。
+- **修法**:`rekey` 前后按当前连接对象重新解析,而不是用窗口前捕获的引用。
+- **注意**:0074·C 的窗后复查**不覆盖**这条路径——那修的是「窗内进房」,这条是「窗内顶替」。
+
+### BUG-5 · 优雅关闭可能整体跳过,未落库积分全丢
+
+- **来源**:[0074·I / 0074·J](changes/0074-code-defect-hunt.md)(两条同源,合并登记)
+- **症状**:进程关闭时,还在写缓冲里没落库的积分变更全部丢失,DB 连接与协程泄漏。
+- **机理**:两处:
+  - `_cancel_and_await` 会吞掉 `stop()` **自身**收到的取消,导致关闭超时和强制中止失效;
+  - lifespan 的 `yield` 没有 `try/finally`,关闭路径上一旦抛异常或被取消,`shell.stop()` 被整体跳过,drain 根本不执行。
+- **修法**:`yield` 包 `try/finally` 保证 `stop()` 必被调用;`_cancel_and_await` 区分「被取消的是子任务」还是「是我自己」,后者要向上传播。
+
+### BUG-6 · 慢客户端被丢弃时只 unregister,不关 ws、不取消协程
+
+- **来源**:[0072·N2](changes/0072-architecture-audit.md)
+- **症状**:出现幽灵命令源;同一个 nick 同时挂着两个 Receiver。
+- **机理**:`dispatch._drop_connection` 只把连接从表里摘掉,既不关 ws 也不 cancel Sender/Receiver 协程。那条连接还能继续往 `inbox` 投命令。需要非对称慢客户端才触发(读慢、写健康)。
+- **修法**:对齐 `receiver.py` 的退出清理路径——drop 时一并关 ws + cancel 协程。
+
+### BUG-7 · GameLoop 的异常兜底范围太窄,唯一状态写者可能被杀
+
+- **来源**:[0072·N3](changes/0072-architecture-audit.md)
+- **症状**:某条命令处理中途抛异常,整个 GameLoop 协程退出,服务器不再处理任何命令,且无人察觉。
+- **机理**:`handle` 的 `except Exception` 只裹住 `reduce()` 一行;`commit` / `_audit_applied` / `dispatch` 抛出的异常会冒出去杀掉唯一的状态写者协程,而且没有 watchdog。这与 [architecture.md](../architecture.md)「接住 → 继续处理下一条」的承诺不符。
+- **修法**:把 `except` 提到裹住 commit/dispatch;另外给 run task 加 done-callback 做重启或告警。
+
+### BUG-8 · 会话无法吊销
+
+- **来源**:[0072·N5](changes/0072-architecture-audit.md)
+- **症状**:`K_user` 泄露后即使用 `issue --reset` 换了钥,已经建立的会话仍然有效,直到 `SESSION_TTL` 自然到期。
+- **机理**:`SessionStore.revoke` 全仓零调用者——既没有登出端点,也没有管理员吊销通道。
+- **修法**:补吊销通道(登出端点,或建 `name→sessions` 索引供改密/reset 时撤销)。若确认 v1 就是不做,则要在 [auth.md](../auth.md) 显式记档「不吊销,靠 TTL + 重启」,不能留成隐性缺口。
+
+### BUG-9 · 重连/顶替后免盲投票面板消失
+
+- **来源**:[0072·N9](changes/0072-architecture-audit.md)
+- **症状**:重连或顶替后,进行中的免盲投票在客户端消失;重连回来的必需投票人根本不知道有一张票在等他。投票因此卡住。
+- **机理**:`StateSnapshot` 不投影 `room.entry_vote`。
+- **修法**:给 `StateSnapshot` 加投票公开态的投影;或在 reduce 的重连臂补发一条 `FreeEntryVoteUpdated`。
+
+### BUG-10 · 离场者收不到自己参与的那手的结算事件
+
+- **来源**:[0072·N-e32](changes/0072-architecture-audit.md)
+- **症状**:玩家 `LeaveRoom` 触发了「只剩一人」的终手结算,但他本人收不到 `PlayerActed`/`HandShowDown`/`HandEnded`——看不到自己投入的底池是怎么结算的。
+- **机理**:`Broadcast` 的收件人取的是 commit **之后**的成员表,而离场者此时已被移出。
+- **修法**:结算事件对离场者改用 `Personal` 补发;或调整「驱逐」与「结算广播」的先后顺序。
+
+---
+
+## low(择机,可并入任意批次)
+
+来源均为 [0072](changes/0072-architecture-audit.md) 的 N 系列低危项。
+
+| ID | 缺陷 |
+|---|---|
+| BUG-11(N-e9) | DM 读游标无单调防护,游标可能被旧值回拨 |
+| BUG-12(N-e10/N-e11) | [db-migrations.md](../db-migrations.md) 的示例配置照抄会导致启动崩溃,且违反本仓自己的配置铁律 |
+| BUG-13(N-e16) | `_evict` 不清 `waive_entry_for` → 离房再进仍享免盲 |
+| BUG-14(N-e26) | `scripts/scripts.py` 是原型遗留的孤儿脚本,应删除 |
+| BUG-15(N-e34) | `NullPersister` 无生产消费者 |
+| BUG-16(N-e35) | `Presence` 的三个方法零消费者 |
+| BUG-17(N-e36) | `profile.py` 手抄 `_NICKNAME_MAX_LEN`,成了第二份事实源 |
+| BUG-18(C3) | `rest/lobby.py` 的 `big_blind=2*` 应改引 `blinds.BIG_BLIND_MULTIPLE`(一行) |
+
+---
+
+## 契约债 / 文档债(不是代码会错,但会误导人)
+
+| ID | 事项 | 出处 |
+|---|---|---|
+| DEBT-1(C2) | [architecture.md](../architecture.md)/[wire.md](../wire.md) 声称 codegen「进 CI/pre-commit」,实际只有 pytest 守门。要么补最小 pre-commit 配置,要么把口径改成如实。取向待用户定案 | 0072·C2 |
+| DEBT-2(D2) | [architecture.md](../architecture.md) 不变量 2 写「读 DB、不读 `world`」,但已有三处**记档合规**的只读豁免(presence 0037、`GET /lobby/rooms` 0048、`FetchRoomChat` 0071)。顶层不变量没描述这个豁免家族,读者按字面会把三处合规代码误判为违规。修法:不变量 2 补一句豁免判据 | 0072·D2 |
+| DEBT-3(D3) | [connection.md](../connection.md) / [lobby.md](../lobby.md) 的「待定」段陈旧 | 0072·D3 |
+| DEBT-4(D4) | 四处陈旧注释,含两处 JWT 反事实(P5 已无 JWT) | 0072·D4 |
+| DEBT-5(D5) | 其余文档小项 | 0072·D5 |
+
+已解决:
+
+- ~~**D1** [messaging.md](../messaging.md) §房聊历史留有 0071 之前的整段旧文(四处反事实,内部自相矛盾)~~ —— **0075 的文档重写已连带解决**,四处反事实全部消失,现文与 `reduce._room_chat` / `receiver.py` 只读豁免 / 动态房模型一致。
+
+---
+
+## 已修复(留档,别再重复发现)
+
+| ID | 缺陷 | 修于 |
+|---|---|---|
+| 0074·A | `authenticate` 巨整数 ts 触发 OverflowError 逃逸 → 500 破 fail-closed + 成 K_user 猜测预言机 | 0074 |
+| 0074·C | 改昵称「仅大厅可改」检查与内存联动之间隔两次 DB await → 四处永久发散 | 0074 |
+| 0074·D | `PersistWriter.drain()` 的 deadline 罩不住 flush 本身 → 进程无法优雅退出 | 0074 |
+| 0074·G | 改昵称落在 DM 路由的 DB await 窗内 → 私信静默不落库 | 0074 |
+| 0074·H | `_buy_in` 的「局中」判据看状态而非「是否本手 Player」 → 手牌记录凭空多筹码 | 0074 |
+
+## 误报留档(别再「发现」一次)
+
+- **0074·B** `_disconnect` 不重算免盲投票 —— **不是缺陷**。[rules.md](../rules.md) ① 与实现同批(0020)明写「`voters` 每次实时重算,断线者在下一结算点自然不计,**不为断线单独触发通过**」,是有意设计:断线可逆、占座窗口内可重连,全票制下按减员结算等于剥夺其否决权;离场/坐出才不可逆。已补反向钉 `test_voter_disconnect_does_not_trigger_vote`。
+- **`ttxsgm` 裸库脆弱面**:SM4 去填充无校验、非对齐密文抛异常(实跑复现),但当前所有入口都有守卫挡住(MAC 先行 / 长度预校验),故非缺陷。**日后新增任何直喂 `sm4_cbc_*` 的入口,必须自带同款长度守卫。**

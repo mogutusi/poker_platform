@@ -3,6 +3,8 @@
 > 规则见 [README.md](README.md) §5:每次收工勾掉完成项、补新发现项,并在 [changes/](changes/) 留一篇变更记录。
 > 计划本身可以改——发现顺序不对、任务拆错,直接调整。
 
+> **缺陷去 [BUGS.md](BUGS.md) 看。** 本篇只管「还没做的事」;「已经确认会错、但还没修的代码」集中登记在 [BUGS.md](BUGS.md)(0076 建立),按严重度排序。以前缺陷混在本篇各轮小节里,容易漏掉。
+
 图例:`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成
 
 ---
@@ -101,16 +103,16 @@
 
 ## 审计跟进(0072,2026-07-14)— 台账见 [changes/0072](changes/0072-architecture-audit.md)
 
-- [~] **0072·R1** 手牌记录跨房间世代撞键(**用户定案暂缓,2026-07-28**:「先不修」;已确认未修非接受,方案两案留档 0072):`dedupe_key="room:seq"` 同名房销毁重建/进程重启后与旧世代撞键 → 幂等 INSERT 静默丢新记录;启动时须带「销房重建 + 重启两路径」回归测试
-- [ ] **0072·R2** Timeout staleness 跨手失效:epoch 每手归零,`Timeout` 补带 `hand.seq` 双键校验 + 构造交错的回归测试(可与 R1 同批)
-- [ ] **0072·D1-D5** 文档 truth-up 一批(仿 0047/0067):messaging.md §房聊历史 0071 残留旧段(D1)/ architecture.md 不变量 2 补「只读 committed world 豁免」判据(D2)/ connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
+- [~] **0072·R1** 手牌记录跨房间世代撞键(**用户定案暂缓,2026-07-28**:「先不修」;已确认未修非接受,方案两案留档 0072):`dedupe_key="room:seq"` 同名房销毁重建/进程重启后与旧世代撞键 → 幂等 INSERT 静默丢新记录;启动时须带「销房重建 + 重启两路径」回归测试 —— 详见 [BUGS.md#BUG-2](BUGS.md)
+- [ ] **0072·R2** Timeout staleness 跨手失效:epoch 每手归零,`Timeout` 补带 `hand.seq` 双键校验 + 构造交错的回归测试(可与 R1 同批) —— 详见 [BUGS.md#BUG-3](BUGS.md)
+- [ ] **0072·D2-D5** 文档 truth-up 一批(仿 0047/0067):~~messaging.md §房聊历史 0071 残留旧段(D1)~~ **D1 已由 0075 文档重写连带解决**(四处反事实全消失)/ architecture.md 不变量 2 补「只读 committed world 豁免」判据(D2)/ connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
 - [ ] **0072·C2** codegen 守门兑现:补最小 pre-commit 配置,或把 architecture.md/wire.md「进 CI/pre-commit」口径改为如实(pytest 守门)——取向待定案
 - [ ] **0072·C3** `rest/lobby.py` 的 `big_blind=2*` 改引 `blinds.BIG_BLIND_MULTIPLE`(一行,可并入任意批)
 - 注:0072·C1(前端消费 wire.gen.ts)已有 W 段既有项,不重复登记
 
 **新增缺陷(第五次工作流 N 系列对抗验证坐实,均 medium;台账 0072「N 系列」节)**:
 - [x] **0072·N1** 离房→flush 窗口内快速重进房静默回退积分 — **0073 已修**:运行期落库屏障(`JoinRoom` 载入前 `inbox.join()` + `PersistWriter.barrier()`,fail-closed);N1 主钉 e2e(同连接 + 跨连接 Cleanup 驱逐两路)+ 关屏障必红反证 + 三视角复审抓修毒丸在飞洞,712 全绿
-- [ ] **0072·N2** 慢客户端 `dispatch._drop_connection` 只 unregister 不 close ws/不 cancel Sender-Receiver → 幽灵命令源 + 同 nick 双 Receiver(需非对称慢客户端:读慢写健)。对齐 receiver.py 退出清理路径:drop 时关 ws + cancel
+- [ ] **0072·N2** 慢客户端 `dispatch._drop_connection` 只 unregister 不 close ws/不 cancel Sender-Receiver → 幽灵命令源 + 同 nick 双 Receiver(需非对称慢客户端:读慢写健)。对齐 receiver.py 退出清理路径:drop 时关 ws + cancel —— 详见 [BUGS.md#BUG-6](BUGS.md)
 - [ ] **0072·N3** `GameLoop.run` 无兜底:handle 的 `except Exception` 只裹 reduce() 一行,commit/_audit_applied/dispatch 抛异常冒出杀唯一状态写者协程且无 watchdog,与 architecture.md「接住→继续下一条」不符。把 except 提到裹住 commit/dispatch,或给 run task 加 done-callback 重启/告警
 - [ ] **0072·N5** `SessionStore.revoke` 全仓零调用者——无登出端点/无管理员吊销通道,泄露应对(issue --reset)后已建会话仍活至 SESSION_TTL。补吊销通道(登出端点 或 name→sessions 索引供改密/reset 时撤销),或若确认 v1 不做则在 auth.md 显式记档「不吊销、靠 TTL+重启」
 - [ ] **0072·N9** StateSnapshot 不投影 `room.entry_vote` → 顶替/重连快照清空进行中免盲投票面板、重连的必需投票人不知有票。给 StateSnapshot 加投票公开态投影(或 reduce 重连臂补发 FreeEntryVoteUpdated)
@@ -129,11 +131,25 @@
 - 注:**裸库脆弱面记档**——`ttxsgm` 的 SM4 去填充无校验、非对齐密文抛异常(实跑复现),当前被各 app 入口守卫挡住(MAC 先行 / 长度预校验)故非缺陷;**日后新增任何直喂 `sm4_cbc_*` 的入口,必须自带同款长度守卫**
 - [x] **0074·C** 改昵称「仅大厅可改」检查与内存联动之间隔两次 DB await:窗内 JoinRoom → world 挂 old_nick 而 DB/会话/连接键变 new_nick,**四处永久发散**(幽灵成员收不到广播 / 用户一切命令 NOT_IN_ROOM 无法自救 / 座位筹码永不回收 / 可二次进房复制积分)— **已修**(窗后复查 + CAS 回滚 + 403)+ 变异验证
 - [x] **0074·D** `PersistWriter.drain()` 的 deadline 只在循环顶部判,罩不住 flush 本身 → DB 挂起时 drain 无限等、`stop()` 永不返回、进程无法优雅退出(非 0073 引入,0025 起就在)— **已修**(`wait_for(flush_once, remaining)` + 节流收进 deadline)+ 变异验证
-- [ ] **0074·E**(high)顶替链 A←B←C:B 在 `_displace(A)` 的 await 窗内被 C 顶掉,恢复后仍 `cancel_cleanup` + 投 `Connect` → 复活已 OFFLINE 用户 + 抹掉占座清理表 → 座位/筹码永久泄漏。修复须在 `_displace` 后复查 `is_current`
-- [ ] **0074·F**(medium)改昵称窗内 ws 顶替:119 行捕获的 `live_conn` 已被顶替,`rekey` 落 else 分支只改死对象 `.nick`,活连接永久挂旧键 → 用户在线却收不到消息。(0074·C 的复查不覆盖此路径)
+- [ ] **0074·E**(high)顶替链 A←B←C:B 在 `_displace(A)` 的 await 窗内被 C 顶掉,恢复后仍 `cancel_cleanup` + 投 `Connect` → 复活已 OFFLINE 用户 + 抹掉占座清理表 → 座位/筹码永久泄漏。修复须在 `_displace` 后复查 `is_current` —— 详见 [BUGS.md#BUG-1](BUGS.md)
+- [ ] **0074·F**(medium)改昵称窗内 ws 顶替:119 行捕获的 `live_conn` 已被顶替,`rekey` 落 else 分支只改死对象 `.nick`,活连接永久挂旧键 → 用户在线却收不到消息。(0074·C 的复查不覆盖此路径) —— 详见 [BUGS.md#BUG-4](BUGS.md)
 - [x] **0074·G** 改昵称落在 DM 路由 DB await 窗内:`uids` 用旧 nick 建表却用被 `rekey` 就地改写的 `conn.nick` 查 → 私信静默不落库 + 假 INTERNAL(`route_dm_mark_read` 同款)— **已修**(进路由即快照 nick,建表/查表/投递全程同源)+ 变异验证
 - [x] **0074·H** `_buy_in` 的「局中」判据用 `users_in_room is PLAYING` 而非 `_player_in_hand` → 手内掉线者可给已锁筹座位加筹,手牌记录 initial/final 凭空多筹码 — **已修**(判据换 `_player_in_hand`)+ 变异验证。**实跑推翻了「`_set_user_status` 同款错位」**:那处被 `userself_can_change_to` 挡住(OFFLINE 起身 → INVALID_STATUS_TRANSITION),不可达
-- [ ] **0074·I/J**(medium)`_cancel_and_await` 吞掉 `stop()` 自身的取消(优雅关闭超时失效);lifespan 的 `yield` 无 try/finally(关闭异常时 `stop()` 整体跳过 → 未落库积分全丢 + engine 泄漏)
+- [ ] **0074·I/J**(medium)`_cancel_and_await` 吞掉 `stop()` 自身的取消(优雅关闭超时失效);lifespan 的 `yield` 无 try/finally(关闭异常时 `stop()` 整体跳过 → 未落库积分全丢 + engine 泄漏) —— 详见 [BUGS.md#BUG-5](BUGS.md)
+
+## 前端(0076 起由本团队开发)— 台账见 [changes/0076](changes/0076-frontend-merge.md)
+
+> 上游 `YangBaiii/poker_platform@f7463fe` 的 `frontend/` 已合入(79 文件 / +5602 行):登录页 + 大厅页 + 牌桌页 + shadcn/ui + 54 张牌面图。
+> **只合前端**:上游的 `service/` 是 0027 已拆除的旧原型,合了就是把重构退回去。`.next/` 构建缓存也没合(已补进 `.gitignore`)。
+> ⚠️ 合入的 1200+ 行页面代码**一行都没跑过**——本机无 node,连 `tsc --noEmit` 都跑不了。
+
+- [ ] **0076·M2**(阻断)装 node 工具链,跑通 `npm install` + `next build` + `tsc --noEmit`;当前只做了静态 import 解析与依赖声明核对
+- [ ] **0076·M1**(阻断)`api.ts` 打的是旧原型端点(`/Texas/service/user/login`、`/api/games/*`),对不上现在的后端。登录改 `POST /user/login` 加密信封(`{name, iv, blob}` → `{session_id, session_token, exp}`),公开读接 `/lobby/rooms`·`/leaderboard`·`/hands`(见 [rest.md](../rest.md)/[auth.md](../auth.md))
+- [ ] **前端接 WebSocket**:按 [wire-protocol-guide.md](../wire-protocol-guide.md) 实现 SM4+HMAC-SM3 逐帧信封 + `ClientMessage`/`ServerMessage` 收发,替换 `game/page.tsx` 的 mock 牌局(游戏动作走 ws,不走 REST)
+- [ ] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途(`chips`/`phase` 与后端 enum 的漂移仍在;新合入的 `game/page.tsx` 还在用它)。这条即上文「前端消费 wire.gen.ts」的落地时机
+- [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
+- [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改
+- [ ] **0076·M5/M6**(low)`package.json` 声明约 50 个 Radix 包、实际只用 2 个,可裁剪;`src/pics/poker-room.png` 单张 3.4M,建议转 WebP/AVIF
 
 ## 持续项(随时回看)
 

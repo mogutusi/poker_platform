@@ -1,139 +1,243 @@
-'use client'
+"use client"
 
-import { useState } from 'react'
-import { Card, Heart, Spade, Diamond, Club } from 'lucide-react'
+import type React from "react"
+import { useState } from "react"
+import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { apiClient } from "@/lib/api"
+import pokerRoomBg from "@/pics/poker-room.png"
 
-export default function Home() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
+export default function PokerLoginPage() {
+  const router = useRouter()
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [isHovered, setIsHovered] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="max-w-md w-full mx-4">
-          <div className="card p-8">
-            <div className="text-center mb-8">
-              <div className="flex justify-center mb-4">
-                <div className="flex space-x-2">
-                  <Heart className="w-8 h-8 text-red-500" />
-                  <Spade className="w-8 h-8 text-black" />
-                  <Diamond className="w-8 h-8 text-red-500" />
-                  <Club className="w-8 h-8 text-black" />
-                </div>
-              </div>
-              <h1 className="text-3xl font-bold text-poker-green mb-2">扑克平台</h1>
-              <p className="text-gray-600">专业的在线扑克游戏平台</p>
-            </div>
-            
-            <div className="space-y-4">
-              <button 
-                className="btn-primary w-full"
-                onClick={() => setIsLoggedIn(true)}
-              >
-                开始游戏
-              </button>
-              <button className="btn-secondary w-full">
-                注册账号
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setIsLoading(true)
+
+    try {
+      // Mock login for testing: admin / 123456
+      const isMockLogin = username === "admin" && password === "123456"
+      
+      if (isMockLogin) {
+        // Simulate API delay
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
+        // Mock successful response
+        const mockToken = `mock_token_${Date.now()}`
+        if (typeof window !== "undefined") {
+          localStorage.setItem("auth_token", mockToken)
+          localStorage.setItem("player_name", username)
+        }
+        router.push("/lobby")
+        return
+      }
+
+      // Real API call for other credentials
+      const response = await apiClient.login(username, password)
+      // Store token and basic player info
+      if (response.token) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("auth_token", response.token)
+          localStorage.setItem("player_name", username)
+        }
+        router.push("/lobby")
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "登录失败，请检查用户名和密码"
+      setError(errorMessage)
+      console.error("Login error:", err)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
-    <div className="min-h-screen p-4">
-      <header className="mb-8">
-        <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold">扑克平台</h1>
-          <div className="flex items-center space-x-4">
-            <div className="chip bg-poker-gold text-poker-black">
-              <span>1000</span>
+      <div 
+        className="min-h-screen relative overflow-hidden flex items-center justify-center p-4"
+        style={{
+          backgroundImage: `url(${pokerRoomBg.src})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          backgroundAttachment: "fixed",
+        }}
+      >
+        {/* Subtle vignette overlay */}
+        <div className="absolute inset-0 bg-gradient-radial from-transparent via-black/20 to-black/40 z-0"></div>
+
+        {/* Gaming-style login form */}
+        <div className="w-full max-w-md relative z-10 mt-40">
+          <form onSubmit={handleLogin} className="space-y-6">
+            {error && (
+              <div 
+                className="p-4 text-sm bg-red-900/80 backdrop-blur-md border-2 border-red-500/50 rounded-lg text-white font-semibold"
+                style={{
+                  textShadow: "0 0 10px rgba(239, 68, 68, 0.8), 0 0 20px rgba(239, 68, 68, 0.4)",
+                  boxShadow: "0 0 20px rgba(239, 68, 68, 0.3), inset 0 0 20px rgba(239, 68, 68, 0.1)"
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <div className="space-y-3">
+              <Label 
+                htmlFor="username" 
+                className="text-white font-bold text-lg tracking-wider uppercase"
+                style={{
+                  textShadow: "0 0 10px rgba(212, 175, 55, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8)",
+                  fontFamily: "var(--font-orbitron), 'Arial Black', sans-serif",
+                  letterSpacing: "0.15em"
+                }}
+              >
+                  <p className='text-amber-100'>
+                      Username
+                  </p>
+              </Label>
+              <Input
+                  id="username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  disabled={isLoading}
+                  className="h-12 bg-black/20 backdrop-blur-sm border-2 rounded-lg text-white placeholder:text-orange-200/60 focus:ring-0 transition-all font-semibold input-shine"
+                  style={{
+                    fontFamily: "var(--font-orbitron), monospace",
+                    // TO CHANGE BORDER COLOR: Change rgba(251, 145, 88, ...) values
+                    // Current: rgba(251, 145, 88, 0.79) - Orange/Coral
+                    // Gold: rgba(212, 175, 55, 0.6) | Blue: rgba(59, 130, 246, 0.6) | Red: rgba(239, 68, 68, 0.6)
+                    borderColor: "rgba(251, 145, 88, 0.79)",
+                    // Override focus border
+                    outline: "none",
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "rgba(251, 145, 88, 1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "rgba(251, 145, 88, 0.79)";
+                  }}
+              />
             </div>
-            <button 
-              className="btn-secondary"
-              onClick={() => setIsLoggedIn(false)}
+            <div className="space-y-3">
+              <Label 
+                htmlFor="password" 
+                className="text-white font-bold text-lg tracking-wider uppercase"
+                style={{
+                  textShadow: "0 0 10px rgba(212, 175, 55, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8)",
+                  fontFamily: "var(--font-orbitron), 'Arial Black', sans-serif",
+                  letterSpacing: "0.15em"
+                }}
+              >
+                <p className='text-amber-100'>
+                    Password
+                </p>
+              </Label>
+              <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  disabled={isLoading}
+                  className="h-12 bg-black/20 backdrop-blur-sm border-2 rounded-lg text-white placeholder:text-orange-200/60 focus:ring-0 transition-all font-semibold input-shine"
+                  style={{
+                    fontFamily: "var(--font-orbitron), monospace",
+                    // TO CHANGE BORDER COLOR: Change rgba(251, 145, 88, ...) values
+                    // Current: rgba(251, 145, 88, 0.79) - Orange/Coral
+                    // Gold: rgba(212, 175, 55, 0.6) | Blue: rgba(59, 130, 246, 0.6) | Red: rgba(239, 68, 68, 0.6)
+                    borderColor: "rgba(251, 145, 88, 0.79)",
+                    // Override focus border
+                    outline: "none",
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "rgba(251, 145, 88, 1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "rgba(251, 145, 88, 0.79)";
+                  }}
+              />
+            </div>
+
+            <Button
+                type="submit"
+                className="w-full h-16 text-xl font-black uppercase tracking-widest relative overflow-hidden group transition-all duration-300"
+                style={{
+                  // TO CHANGE BUTTON BACKGROUND: Change the gradient colors
+                  // Transparent: background: "rgba(0, 0, 0, 0.2)"
+                  // Solid: "linear-gradient(135deg, #f6f343 0%, #f9f75a 50%, #f6f343 100%)"
+                  background: "rgba(0, 0, 0, 0.2)",
+                  backdropFilter: "blur(8px)",
+                  // TO CHANGE BORDER COLOR: #f6f343 (Yellow) = rgba(246, 243, 67, ...)
+                  // Current: #f6f343 | Gold: rgba(212, 175, 55, 0.8) | Blue: rgba(59, 130, 246, 0.8)
+                  border: "2px solid #f6f343",
+                  boxShadow: "0 0 30px rgba(246, 243, 67, 0.6), 0 0 60px rgba(246, 243, 67, 0.3), inset 0 0 20px rgba(246, 243, 67, 0.2)",
+                  textShadow: "0 0 10px rgba(246, 243, 67, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8)",
+                  fontFamily: "var(--font-orbitron), 'Arial Black', sans-serif",
+                  color: "#f6f343",
+                  transform: "perspective(1000px)",
+                }}
+                onMouseEnter={(e) => {
+                  setIsHovered(true)
+                  // Hover color - brighter yellow
+                  e.currentTarget.style.border = "2px solid #fffca8"
+                  e.currentTarget.style.boxShadow = "0 0 40px rgba(255, 252, 168, 0.8), 0 0 80px rgba(255, 252, 168, 0.5), inset 0 0 30px rgba(255, 252, 168, 0.3)"
+                  e.currentTarget.style.textShadow = "0 0 15px rgba(255, 252, 168, 1), 0 2px 4px rgba(0, 0, 0, 0.8)"
+                  e.currentTarget.style.color = "#fffca8"
+                }}
+                onMouseLeave={(e) => {
+                  setIsHovered(false)
+                  // Reset to original color #f6f343
+                  e.currentTarget.style.border = "2px solid #f6f343"
+                  e.currentTarget.style.boxShadow = "0 0 30px rgba(246, 243, 67, 0.6), 0 0 60px rgba(246, 243, 67, 0.3), inset 0 0 20px rgba(246, 243, 67, 0.2)"
+                  e.currentTarget.style.textShadow = "0 0 10px rgba(246, 243, 67, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8)"
+                  e.currentTarget.style.color = "#f6f343"
+                }}
+                disabled={isLoading}
+                onMouseMove={(e) => {
+                  if (isHovered && !isLoading) {
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    const x = ((e.clientX - rect.left) / rect.width) * 100
+                    const y = ((e.clientY - rect.top) / rect.height) * 100
+                    // Hover effect with brighter yellow
+                    e.currentTarget.style.background = `radial-gradient(circle at ${x}% ${y}%, rgba(255, 252, 168, 0.3) 0%, rgba(246, 243, 67, 0.2) 50%, rgba(249, 247, 90, 0.2) 100%)`
+                  }
+                }}
             >
-              退出
+              <span className="relative z-10">{isLoading ? 'Loading...' : 'Enter'}</span>
+              {isHovered && !isLoading && (
+                <div 
+                  className="absolute inset-0"
+                  style={{
+                    background: "linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.3) 50%, transparent 100%)",
+                    animation: "shimmer 2s infinite",
+                  }}
+                />
+              )}
+            </Button>
+          </form>
+
+          {/* Forget Password */}
+          <div className="text-center pt-6">
+            <button 
+              className="text-sm text-amber-300 hover:text-amber-200 font-semibold tracking-wide transition-all uppercase"
+              style={{
+                textShadow: "0 0 8px rgba(212, 175, 55, 0.6), 0 2px 4px rgba(0, 0, 0, 0.8)",
+                fontFamily: "var(--font-orbitron), sans-serif",
+                letterSpacing: "0.1em"
+              }}
+            >
+              忘记密码?太笨！
             </button>
           </div>
         </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 游戏区域 */}
-          <div className="lg:col-span-2">
-            <div className="card p-6">
-              <h2 className="text-xl font-semibold mb-4">游戏桌</h2>
-              <div className="bg-poker-green rounded-lg p-8 min-h-96 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="flex justify-center space-x-2 mb-4">
-                    <div className="poker-card">A♠</div>
-                    <div className="poker-card">K♥</div>
-                    <div className="poker-card">Q♦</div>
-                    <div className="poker-card">J♣</div>
-                    <div className="poker-card">10♠</div>
-                  </div>
-                  <p className="text-white">公共牌区域</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 侧边栏 */}
-          <div className="space-y-6">
-            {/* 玩家信息 */}
-            <div className="card p-4">
-              <h3 className="font-semibold mb-3">玩家信息</h3>
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span>用户名:</span>
-                  <span className="font-medium">玩家1</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>筹码:</span>
-                  <span className="font-medium text-poker-gold">1000</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>位置:</span>
-                  <span className="font-medium">庄家</span>
-                </div>
-              </div>
-            </div>
-
-            {/* 游戏控制 */}
-            <div className="card p-4">
-              <h3 className="font-semibold mb-3">游戏控制</h3>
-              <div className="space-y-2">
-                <button className="btn-primary w-full">跟注</button>
-                <button className="btn-secondary w-full">加注</button>
-                <button className="btn-secondary w-full">弃牌</button>
-                <button className="btn-secondary w-full">全下</button>
-              </div>
-            </div>
-
-            {/* 聊天区域 */}
-            <div className="card p-4">
-              <h3 className="font-semibold mb-3">聊天</h3>
-              <div className="h-32 bg-gray-50 rounded p-2 mb-2 overflow-y-auto">
-                <div className="text-sm text-gray-600">
-                  <p>欢迎来到扑克平台！</p>
-                  <p>祝您游戏愉快！</p>
-                </div>
-              </div>
-              <div className="flex space-x-2">
-                <input 
-                  type="text" 
-                  placeholder="输入消息..."
-                  className="flex-1 px-3 py-1 border border-gray-300 rounded text-sm"
-                />
-                <button className="btn-primary text-sm px-3 py-1">发送</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-    </div>
+      </div>
   )
 }

@@ -1,4 +1,3 @@
-// API 客户端配置
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export class ApiClient {
@@ -26,7 +25,19 @@ export class ApiClient {
       const response = await fetch(url, config)
       
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        let errorMessage = `HTTP error! status: ${response.status}`
+        try {
+          const errorData = await response.json()
+          if (errorData.detail) {
+            errorMessage = typeof errorData.detail === 'string' 
+              ? errorData.detail 
+              : JSON.stringify(errorData.detail)
+          }
+        } catch {
+          // If response is not JSON, use status text
+          errorMessage = response.statusText || errorMessage
+        }
+        throw new Error(errorMessage)
       }
       
       return await response.json()
@@ -37,10 +48,10 @@ export class ApiClient {
   }
 
   // 用户相关 API
-  async login(username: string, password: string) {
-    return this.request('/api/auth/login', {
+  async login(name: string, password: string) {
+    return this.request<{ token: string }>('/Texas/service/user/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ name, password }),
     })
   }
 
