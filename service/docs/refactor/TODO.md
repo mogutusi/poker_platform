@@ -145,9 +145,12 @@
 
 - [x] **0076·M2** 装 node 工具链(Node 24.19.0 装在 `~/.local/node`,无 sudo)— **0077 已解决**,`build`/`type-check`/`test` 三项全绿;顺带抓到两个静态检查看不见的真错误(tsconfig `target: es5` 卡住 `matchAll`;`/game` 的 `useSearchParams` 未包 Suspense 致构建失败)
 - [x] **0076·M1** 旧原型端点 — **0077 已解决**:删掉 `src/lib/api.ts`,新建 `src/transport/`(login 走 `POST /user/login` 加密信封;公开读接 `/lobby/rooms`·`/leaderboard`)。登录页、大厅页已接真后端
-- [~] **前端接 WebSocket**:**信道已落地**(0077:`src/crypto/` 国密原语 29/29 向量通过、`src/transport/ws.ts` 收发帧 + 重连 + seq 跨重连累加)。**余项**:`game/page.tsx` 尚未接线——要 `join_room` → `StateSnapshot` → 事件增量,并拆掉本地 mock 发牌与街道推进(见 [frontend/docs/state.md](../../../frontend/docs/state.md))
-- [ ] **端到端冒烟**:起后端 + 前端真跑通「登录 → 进房 → 入座 → 买入 → 准备 → 开局 → 一手牌」。传输层目前只有类型检查与构建保证,没有端到端验证
-- [ ] **传输层补测**:seq 跨重连累加、拆帧失败不误伤其它帧、关闭码 4401 不自动重连 —— 现在只有代码和文档在保证(0077 自 review ⑥ 记的缺口)
+- [x] **前端接 WebSocket** — **0078 完成**:`src/store/` 快照为真相 + 事件增量;牌桌页完全由服务器驱动,本地发牌/街道推进/牌力计算已从仓库删除(不是注释掉)
+- [x] **端到端冒烟** — **0078 完成**:`npm run smoke` 用前端自己的加密代码对真后端跑通登录 → ws → 进房 → 入座 → 买入 → 准备 → 开局 → 一手牌 → 聊天 → 离桌,并验底牌隐私、seq 单调、离桌后筹码守恒;可重复跑
+- [x] **传输层补测** — **0078 完成**:46 项单测(加密向量 29 + 状态归并 + seq 纪律)
+- [ ] **0078·A** 牌桌页处理「上次会话残留」:上次在座断线的用户重登后仍挂在旧房,新连接走重连路径会先收到**旧房**快照,此时 `join_room` 到新房被 `ALREADY_IN_ROOM` 拒。进房前先比对快照房名,不对先 `leave_room`(冒烟脚本已有实现,照搬即可)
+- [ ] **0078·B** 冒烟扩展:跟注/加注/多街推进/摊牌比牌/边池;断线重连后 seq 继续累加。当前只打了「一方 fold」这一条最短路径
+- [ ] **0078·C** 手动过一遍真实界面(`npm run dev` + 后端):目前只验了协议层,**界面本身还没人真正点过**
 - [ ] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途(`chips`/`phase` 与后端 enum 的漂移仍在;新合入的 `game/page.tsx` 还在用它)。这条即上文「前端消费 wire.gen.ts」的落地时机
 - [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
 - [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改

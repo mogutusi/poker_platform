@@ -9,8 +9,23 @@ import PokerCard from "@/components/PokerCard"
 import Image from "next/image"
 import gamingTableBg from "@/pics/game-table.jpg"
 import { cn } from "@/lib/utils"
-import { createDeck } from "@/utils/poker"
-import type { Card as PokerCardType } from "@/types/poker"
+import { toUiCards } from "@/utils/card"
+import type { Card as UiCard } from "@/types/poker"
+import { getSession } from "@/transport/session"
+import { useRoom } from "@/store/useRoom"
+import { isMyTurn, myPlayer, mySeat } from "@/store/room"
+import {
+  bet,
+  buyIn,
+  check,
+  closeRoom,
+  enterRoom,
+  fold,
+  leaveRoom,
+  setReady,
+  sitDown,
+  startHand,
+} from "@/store/actions"
 
 interface SeatPlayer {
   id: string
@@ -28,191 +43,129 @@ interface Seat {
 
 // useSearchParams 让这棵子树只能在客户端渲染,Next 15 要求它落在 Suspense 边界内,
 // 否则整页预渲染报错。故拆成「内层用 searchParams + 外层给边界」两段。
+// useSearchParams 让这棵子树只能在客户端渲染,Next 15 要求它落在 Suspense 边界内,
+// 否则整页预渲染报错。故拆成「内层用 searchParams + 外层给边界」两段。
 function GameView() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const seatNumber = parseInt(searchParams.get("seat") || "0")
-  const [playerName, setPlayerName] = useState<string>("")
-  const [points, setPoints] = useState<number>(1000)
-  const [isReady, setIsReady] = useState<boolean>(false)
+  const roomId = searchParams.get("room") || "dev"
 
-  // Mock seat data - in real app, this would come from API/WebSocket
-  // Seat 6 will be assigned to current player in useEffect
-  const [seats, setSeats] = useState<Seat[]>([
-    { number: 1, player: { id: "1", name: "HighRoller", points: 3250, isReady: true } },
-    { number: 2, player: { id: "2", name: "RiverKing", points: 2812, isReady: false } },
-    { number: 3, player: { id: "3", name: "John Doe", points: 320, isReady: true } },
-    { number: 4, player: { id: "4", name: "AllInQueen", points: 2344, isReady: true } },
-    { number: 5, isButton: true, player: { id: "5", name: "SlowPlay", points: 1980, isReady: false } },
-    { number: 6 }, // Will be assigned to current player
-    { number: 7, player: { id: "7", name: "ChipLeader", points: 1765, isReady: false } },
-    { number: 8, player: { id: "8", name: "Tom Dwan", points: 2344, isReady: true } },
-    { number: 9, player: { id: "9", name: "Tan Xuan", points: 2344, isReady: true } },
-  ])
-
-  // Game mode: after all ready and Start Game
-  const [gameStarted, setGameStarted] = useState(false)
-  const [playerHands, setPlayerHands] = useState<Record<number, PokerCardType[]>>({})
-  const [currentBet, setCurrentBet] = useState(0)
-  const [callAmount, setCallAmount] = useState(20)
-  const [raiseAmount, setRaiseAmount] = useState(40)
-  const [pot, setPot] = useState(0)
-  const [phase, setPhase] = useState<"preflop" | "flop" | "turn" | "river" | "showdown">("preflop")
-  const [communityCards, setCommunityCards] = useState<PokerCardType[]>([])
-  const [remainingDeck, setRemainingDeck] = useState<PokerCardType[]>([])
-  const [foldedSeats, setFoldedSeats] = useState<Set<number>>(new Set())
-
-  const currentPlayers = useMemo(
-    () => seats.filter((seat) => seat.player).length,
-    [seats]
-  )
-
-  const readyPlayers = useMemo(
-    () => seats.filter((seat) => seat.player?.isReady).length,
-    [seats]
-  )
-
-  const allReady = useMemo(
-    () => currentPlayers > 0 && readyPlayers === currentPlayers,
-    [currentPlayers, readyPlayers]
-  )
+  // 全部牌局状态来自服务器。这一页不发牌、不推进街道、不算底池(见 docs/architecture.md 不变量 1)。
+  const state = useRoom()
+  const [buyInAmount, setBuyInAmount] = useState<number>(0)
+  const [raiseAmount, setRaiseAmount] = useState<number>(0)
+  const [seatChoice, setSeatChoice] = useState<number | null>(null)
 
   useEffect(() => {
-    // Simple auth gate: if no token, back to login
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null
-    if (!token) {
+    if (!getSession()) {
       router.replace("/")
       return
     }
-
-    // Use last login name from storage if available
-    const storedName =
-      (typeof window !== "undefined" && localStorage.getItem("player_name")) || "Player"
-    setPlayerName(storedName)
-
-    // Always assign current player to seat 6
-    setSeats((prevSeats) =>
-      prevSeats.map((s) =>
-        s.number === 6
-          ? { ...s, player: { id: "current", name: storedName, points: points, isReady: false } }
-          : s
-      )
-    )
-
-    // TODO(0077):这一页还没接后端。改由 ws 的 join_room -> StateSnapshot 驱动,
-    // 并拆掉本文件里的本地 mock 发牌与街道推进(见 docs/state.md)。
-  }, [router, points])
-
-  const handleReady = async () => {
-    try {
-      setIsReady(true)
-      setSeats((prevSeats) =>
-        prevSeats.map((s) =>
-          s.number === 6 && s.player
-            ? { ...s, player: { ...s.player, isReady: true } }
-            : s
-        )
-      )
-    } catch (error) {
-      console.error("Failed to set ready:", error)
+    void enterRoom(roomId, () => router.replace("/")).catch(() => router.replace("/"))
+    return () => {
+      closeRoom()
     }
-  }
+  }, [roomId, router])
 
-  /** For testing: mark all players ready so "Start Game" appears */
-  const handleSetAllReadyTest = () => {
-    setIsReady(true)
-    setSeats((prevSeats) =>
-      prevSeats.map((s) =>
-        s.player ? { ...s, player: { ...s.player, isReady: true } } : s
-      )
-    )
-  }
+  const me = mySeat(state)
+  const mine = myPlayer(state)
+  const myTurn = isMyTurn(state)
+  const gameStarted = state.handStatus !== null
 
-  const handleStartGame = async () => {
-    if (!allReady) return
-
-    try {
-      const deck = createDeck()
-      const hands: Record<number, PokerCardType[]> = {}
-      let idx = 0
-      seats.forEach((seat) => {
-        if (seat.player && idx + 2 <= deck.length) {
-          hands[seat.number] = [deck[idx], deck[idx + 1]]
-          idx += 2
-        }
-      })
-      setPlayerHands(hands)
-      setGameStarted(true)
-      setCurrentBet(20)
-      setCallAmount(20)
-      setRaiseAmount(40)
-      setPot(readyPlayers * 30)
-      setPhase("preflop")
-      setCommunityCards([])
-      setRemainingDeck(deck.slice(idx))
-      setFoldedSeats(new Set())
-    } catch (error) {
-      console.error("Failed to start game:", error)
-    }
-  }
-
-  const advanceToFlop = () => {
-    setRemainingDeck((prev) => {
-      if (prev.length >= 3) {
-        setCommunityCards(prev.slice(0, 3))
-        setPhase("flop")
-        return prev.slice(3)
-      }
-      return prev
+  /** 把服务器的座位/玩家投影成这一页 JSX 期望的形状。空座渲染成「可入座」。 */
+  const seats = useMemo(() => {
+    return Array.from({ length: state.maxSeats }, (_, i) => {
+      const seatView = state.seats.find((s) => s.seat_position === i)
+      const player = seatView
+        ? {
+            id: seatView.nickname === state.me ? "current" : seatView.nickname,
+            name: seatView.nickname,
+            points: seatView.points,
+            isReady: seatView.status === "ready_to_play" || seatView.status === "playing",
+          }
+        : undefined
+      return { number: i + 1, player, isButton: i === state.buttonPosition }
     })
-  }
-  const advanceToTurn = () => {
-    setRemainingDeck((prev) => {
-      if (prev.length < 1) return prev
-      const card = prev[0]
-      setCommunityCards((c) => {
-        if (c.length !== 3) return c
-        setPhase("turn")
-        return [...c, card]
-      })
-      return prev.slice(1)
-    })
-  }
-  const advanceToRiver = () => {
-    setRemainingDeck((prev) => {
-      if (prev.length < 1) return prev
-      const card = prev[0]
-      setCommunityCards((c) => {
-        if (c.length !== 4) return c
-        setPhase("river")
-        return [...c, card]
-      })
-      return prev.slice(1)
-    })
-  }
-  const advanceToShowdown = () => {
-    setPhase((p) => (p === "river" ? "showdown" : p))
+  }, [state.maxSeats, state.seats, state.me, state.buttonPosition])
+
+  const currentPlayers = useMemo(() => seats.filter((s) => s.player).length, [seats])
+  const readyPlayers = useMemo(() => seats.filter((s) => s.player?.isReady).length, [seats])
+  const allReady = currentPlayers > 0 && readyPlayers === currentPlayers
+  const isReady = me?.status === "ready_to_play" || me?.status === "playing"
+
+  const communityCards = useMemo(() => toUiCards(state.board), [state.board])
+
+  /**
+   * 手牌只发给自己(your_hole_cards),别人的牌在摊牌前结构上就不存在。
+   * 摊牌时 HandShowDown 会带 reveals,那是唯一会出现别人底牌的地方。
+   */
+  const playerHands = useMemo(() => {
+    const hands: Record<number, UiCard[]> = {}
+    if (mine && state.yourHoleCards) hands[mine.seat_position + 1] = toUiCards(state.yourHoleCards)
+    for (const r of state.reveals) hands[r.seat_position + 1] = toUiCards(r.hole_cards)
+    return hands
+  }, [mine, state.yourHoleCards, state.reveals])
+
+  const pot = state.pot
+  const phase = state.handStatus ?? "preflop"
+  /** 本街还要补多少才跟上。服务器给的 last_bet 是本街目标额,减掉自己已投入的。 */
+  const callAmount = Math.max(0, state.lastBet - (mine?.bet_amount ?? 0))
+  const foldedSeats = useMemo(
+    () => new Set(state.players.filter((p) => p.status === "folded").map((p) => p.seat_position + 1)),
+    [state.players],
+  )
+  const currentPlayerFolded = mine?.status === "folded"
+
+  // 座位号在界面上是 1 起,协议里是 0 起,交界处统一在这里换算。
+  const handleSeatClick = (seatNumber: number) => {
+    if (me || state.seats.some((s) => s.seat_position === seatNumber - 1)) return
+    setSeatChoice(seatNumber)
+    sitDown(seatNumber - 1, false)
   }
 
+  const handleBuyIn = () => {
+    if (!me) return
+    buyIn(me.seat_position, buyInAmount || state.buyIn)
+  }
+
+  const handleReady = () => {
+    if (!me) return
+    setReady(!isReady, me.seat_position)
+  }
+
+  const handleStartGame = () => {
+    if (!me) return
+    startHand(me.seat_position)
+  }
+
+  /**
+   * 跟注、加注、all-in 在协议上都是 bet,区别只在金额,且 bet_amount 是**本街目标总额**
+   * 而不是增量(见 service/docs/rules.md ②)。
+   */
   const handleAction = (action: "fold" | "check" | "call" | "raise" | "all-in") => {
-    if (action === "fold") {
-      setFoldedSeats((prev) => new Set(prev).add(6)) // current player is seat 6
-    }
-    if (action === "raise") {
-      setCurrentBet(raiseAmount)
-    }
-    if (action === "all-in") {
-      setCurrentBet(points)
+    if (!myTurn || !mine) return
+    switch (action) {
+      case "fold":
+        fold()
+        break
+      case "check":
+        check()
+        break
+      case "call":
+        bet(state.lastBet)
+        break
+      case "raise":
+        bet(raiseAmount || state.lastBet + state.bigBlind)
+        break
+      case "all-in":
+        bet(mine.points + mine.bet_amount)
+        break
     }
   }
-
-  const currentPlayerFolded = foldedSeats.has(6)
 
   const handleLeave = () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("auth_token")
-      localStorage.removeItem("player_name")
-    }
+    leaveRoom()
+    closeRoom()
     router.replace("/lobby")
   }
 
@@ -255,51 +208,37 @@ function GameView() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* Temporary street buttons – left of Ready */}
-            {gameStarted && (
-              <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-black/60 px-2 py-1.5">
-                <span className="text-[10px] font-semibold uppercase text-amber-500/90 mr-0.5">Tmp:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={advanceToFlop}
-                  disabled={phase !== "preflop"}
-                  className="h-6 rounded px-2 text-[11px] border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
-                >
-                  Flop
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={advanceToTurn}
-                  disabled={phase !== "flop"}
-                  className="h-6 rounded px-2 text-[11px] border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
-                >
-                  Turn
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={advanceToRiver}
-                  disabled={phase !== "turn"}
-                  className="h-6 rounded px-2 text-[11px] border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
-                >
-                  River
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={advanceToShowdown}
-                  disabled={phase !== "river"}
-                  className="h-6 rounded px-2 text-[11px] border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
-                >
-                  Showdown
+            {/* 街道推进由服务器的 hand_status_changed 驱动,本地不再有手动按钮 */}
+            {/* 未入座:先在桌上点一个空位坐下(sit_down),这一步原 mock 版跳过了。 */}
+            {!me && (
+              <span className="px-3 py-1.5 rounded-lg bg-sky-500/20 border border-sky-500/50 text-sky-300 text-xs">
+                观战中 · 点桌上空位入座
+              </span>
+            )}
+            {/* 已入座但桌上没筹码:必须先买入才能准备(buy_in)。 */}
+            {me && me.points === 0 && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={buyInAmount || state.buyIn}
+                  onChange={(e) => setBuyInAmount(Number(e.target.value))}
+                  className="h-8 w-24 rounded border border-primary/40 bg-black/40 px-2 text-sm"
+                />
+                <Button size="sm" onClick={handleBuyIn} className="bg-amber-600 hover:bg-amber-700 text-white">
+                  买入
                 </Button>
               </div>
+            )}
+            {/* 服务器拒绝了某个操作时把 code 显示出来;文案由前端按 code 映射(后端只回机器码)。 */}
+            {state.lastError && (
+              <span className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/50 text-red-300 text-xs">
+                {state.lastError.code}
+              </span>
             )}
             {!isReady ? (
               <Button
                 onClick={handleReady}
+                disabled={!me || me.points === 0}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
               >
                 Ready
@@ -308,16 +247,6 @@ function GameView() {
               <div className="px-4 py-2 bg-green-500/20 border border-green-500/50 rounded-lg">
                 <span className="text-green-400 font-bold text-sm">✓ Ready</span>
               </div>
-            )}
-            {!allReady && !gameStarted && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSetAllReadyTest}
-                className="border-amber-500/50 text-amber-600 dark:text-amber-400 text-xs"
-              >
-                Test: Set all ready
-              </Button>
             )}
             {allReady && !gameStarted && (
               <Button

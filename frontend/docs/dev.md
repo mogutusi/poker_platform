@@ -22,7 +22,8 @@ npm run dev          # 开发服务器
 npm run build        # 生产构建(会跑 lint + 类型检查)
 npm run type-check   # 只跑 tsc --noEmit
 npm run lint         # eslint
-npm test             # vitest,跑加密向量等单测
+npm test             # vitest:加密向量 + 状态归并 + seq 纪律
+npm run smoke        # 端到端冒烟(需后端在跑,见下)
 ```
 
 `npm run build` 是**提交前必须跑通的门槛**。它会一并做类型检查和预渲染,能抓到 `tsc` 单独跑不出来的问题(例如 `useSearchParams` 没包 Suspense,0077 就是这么抓到的)。
@@ -73,3 +74,17 @@ cd service && .venv/bin/python -m uvicorn app.shell.lifespan:app --reload
 ```
 
 前端默认连 `http://localhost:8000`,可用 `NEXT_PUBLIC_API_URL` 覆盖。dev 阶段后端还留着明文 `?nick=` 的 ws 端点,但**前端一律走加密端点**,不用明文那条(它会随前端切完加密退役)。
+
+### 端到端冒烟
+
+`npm run smoke` 用本前端自己的加密代码,对真后端跑一遍:登录 → ws 握手 → 进房 → 入座 → 买入 → 准备 → 开局 → 打完一手 → 聊天 → 离桌,并检查底牌隐私、seq 单调、离桌后筹码守恒。
+
+**这是检验传输层的唯一可靠办法**——类型检查和构建都发现不了「密钥派生错一个字节」这种问题,而它的表现只是服务器默默关连接。
+
+前置:后端在跑,且本地库 schema 是最新的。库过时(缺鉴权列)会让后端起不来,重建方式:
+
+```sh
+cd service && rm -f poker.db && .venv/bin/alembic upgrade head
+```
+
+脚本每轮用独立房名,结束时 `leave_room` 退分,所以可以反复跑。它用的是 dev 种子用户和 dev 共享密钥,仅限本地。
