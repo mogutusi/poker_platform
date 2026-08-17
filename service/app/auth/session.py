@@ -1,4 +1,4 @@
-# ws 会话表(P5 鉴权,见 docs/auth.md §登录握手 / §token 层级)。/user/login 成功后铸
+# ws 会话表(P5 鉴权,见 docs/auth.md §登录握手 / §密钥层级)。/user/login 成功后铸
 # session_id(公开句柄)+ session_token(32B 秘密票据)+ exp,登记 session_id → Session;ws 握手 ?sid=
 # 查表拿 token(派生逐帧密钥,见 auth/channel.py)+ nickname(投 Connect)。内存 shell 状态(同原型
 # _refresh_token_pool),进程重启即失效 → 重登,可接受。鉴权秘密只在 shell,绝不进 world(user.md)。

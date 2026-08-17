@@ -1,4 +1,4 @@
-"""P1 余项:免盲投票(reduce `_open_free_entry_vote` / `_vote_free_entry`)—— rules.md ① 行 65-96(①.12-15)。
+"""P1 余项:免盲投票(reduce `_open_free_entry_vote` / `_vote_free_entry`)—— rules.md ①「免盲投票」+ 测试 ①.12-15。
 
 投票人 = 已入局(非 new_here)且 READY_TO_PLAY 的座位;候选 = 当前 new_here 座位。
 全票 approve(非空)→ 快照候选进 room.waive_entry_for(_start_hand 消费,免费正常入局);

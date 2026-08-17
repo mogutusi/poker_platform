@@ -1,7 +1,7 @@
 # 重构 TODO(活清单)
 
-> 规则见 [README.md](README.md) §5:每次收工**勾掉完成项 / 补新发现项**,并在 [changes/](changes/) 留一篇变更记录。
-> 这是计划本身,**可以改**——发现顺序不对、任务拆错,直接调整。
+> 规则见 [README.md](README.md) §5:每次收工勾掉完成项、补新发现项,并在 [changes/](changes/) 留一篇变更记录。
+> 计划本身可以改——发现顺序不对、任务拆错,直接调整。
 
 图例:`[ ]` 未开始 · `[~]` 进行中 · `[x]` 完成
 
@@ -9,7 +9,7 @@
 
 ## 执行顺序(0016 重排:前端解锁前置)
 
-> 前端要联调 → **wire 协议 + 明文 dev 端点前置**;**国密加密信道(原 P5)推到最后**;**协议按模块增量交付**(每落一个模块补该模块的 wire 切片 + 重 codegen)。详见 [changes/0016](changes/0016-replan-wire-first.md)。**只动顺序,不动架构/不变量。**
+> 前端要联调,故 wire 协议 + 明文 dev 端点前置,国密加密信道(原 P5)推到最后,协议按模块增量交付(每落一个模块补该模块的 wire 切片 + 重 codegen)。详见 [changes/0016](changes/0016-replan-wire-first.md)。只动顺序,不动架构/不变量。
 
 执行序:**P0 ✓ → P1(主体 ✓,余项随后)→ W(wire 首批协议)→ D(最小明文 dev shell + 端点)→ P1 余项 +各模块(每项补协议切片)→ 硬化(delayDB / 背压 / 重连)→ 日志 / 配置收编 → 国密安全信道(最后)→ 收尾**。
 
@@ -46,7 +46,7 @@
 
 ## D · 最小明文 dev shell + 端点(前端真连联调)— 无加密,临时脚手架
 
-> 串起已实现的 reduce,让前端连真端点跑通已落地流。**国密信道(原 P5)最后替换本层明文握手/帧**;明文端点标 `dev-only`、绝不上线。
+> 串起已实现的 reduce,让前端连真端点跑通已落地流。国密信道(原 P5)最后替换本层明文握手/帧;明文端点标 `dev-only`,绝不上线。
 
 - [x] `shell/gameloop.py`:`inbox` 串行 → checkout → reduce → commit/discard → dispatch(只 `put_nowait`;异常归一 `Err(INTERNAL)`)— 0018(`handle()` 抽出供同步测试)
 - [x] `shell/dispatch.py`:`Broadcast`(按 world 房成员 + conns;容错销毁房)/`Personal`/`Persist`(交桩)/`TurnChanged`·`ClearAction`(调 Timer)+ `send_error`(Err→origin)— 0018
@@ -119,10 +119,10 @@
 - 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
 - [ ] **0072·N-低危设计边角**(low,择机):N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e26 `scripts/scripts.py` 原型孤儿脚本删除 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e36 profile.py 手抄 `_NICKNAME_MAX_LEN` 二份事实源 / N-e38·N-e40 演进面与快照 min-raise 记档
 
-## 缺陷猎杀(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
+## 代码缺陷排查(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
 
-> 第六轮**换靶**:0072 已把文档一致性挖到收敛,故本轮的**搜索目标**改为纯代码缺陷,专攻此前从未审的面(国密库内部/真扑克语义/reduce 崩溃点/codegen/迁移/CLI/前端)。验证纪律升级为「验证者须实跑 repro」。
-> ⚠️ **换的只是「找什么」,不是「改代码前读什么」**:本轮把定位误表述为「不再查文档一致性」,直接导致 0074·B 把 rules.md 明写的设计决策当 bug 改掉(已回滚)。**凡动行为必先读该行为的设计文档**;「A/B/C 都做了 X 唯独 D 没做」时**先假设 D 是有意的**。教训详见 [changes/0074](changes/0074-code-defect-hunt.md)「反思」。
+> 第六轮排查:0072 已把文档一致性问题查到收敛,本轮改找纯代码缺陷,专攻此前从未审的面(国密库内部/真扑克语义/reduce 崩溃点/codegen/迁移/CLI/前端)。验证纪律升级为「验证者须实跑 repro」。
+> ⚠️ 本轮曾把 rules.md 明写的设计决策当 bug 改掉(0074·B,已回滚)。**凡动行为必先读该行为的设计文档**;「A/B/C 都做了 X 唯独 D 没做」时先假设 D 是有意的。教训见 [changes/0074](changes/0074-code-defect-hunt.md)「反思」。
 
 - [x] **0074·A** `authenticate` 巨整数 ts → `math.isfinite`/`float` 抛 OverflowError 逃出 try(校验在 try 外)→ 端点 500 破 fail-closed + **「500 vs 401」成 K_user 猜测预言机** — **已修**(ts 校验改 `try: float() except OverflowError`)+ 变异验证
 - [~] ~~**0074·B**~~ `_disconnect` 不重算免盲投票 — **误报,已回滚**:rules.md ①.15 与实现同批(0020)明写「不为断线单独触发通过」,是**有意设计**(断线可逆、占座窗口内可重连,全票制下按减员结算等于剥夺其否决权;离场/坐出才不可逆)。已补**反向钉** `test_voter_disconnect_does_not_trigger_vote` 防再犯

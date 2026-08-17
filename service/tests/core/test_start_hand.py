@@ -344,7 +344,7 @@ def test_bootstrap_three_new_no_entry_post():
     assert _by_seat(h, 1).bet_amount == SB and _by_seat(h, 2).bet_amount == BB  # 仅结构盲注
 
 
-# ── 防躲盲:唯一已入局玩家坐出(仍占座)→ 非 bootstrap → 新人 ready 仍须付入局 BB(rules.md ① 行 46/50)──
+# ── 防躲盲:唯一已入局玩家坐出(仍占座)→ 非 bootstrap → 新人 ready 仍须付入局 BB(rules.md ①「入局与防躲盲」)──
 def test_sitting_out_established_blocks_free_entry():
     world = make_table(
         {

@@ -203,14 +203,14 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
         assert dealt_seat is not None
         dealt_seat.new_here = False
         dealt_seat.wait_for_big_blind = False
-    # 防躲盲(rules.md ① 行 50「判据是上一手是否参与」):本手未被发牌的在座者一律重标 new_here——
+    # 防躲盲(rules.md ①「入局与防躲盲」:判据是「上一手是否参与」):本手未被发牌的在座者一律重标 new_here——
     # 涵盖坐出 / 没 ready 干等 / 断线跨手,回来都要付盲或等大盲(等大盲 waiter 本就 new_here,此处幂等)。
     # 必在上面发牌者清 new_here 之后跑,且 eligibility/bootstrap 已在本函数顶读 pre-hand new_here,故不自扰本手。
     for i, s in enumerate(room.seats):
         if s is not None and i not in dealt_seats:
             s.new_here = True
     room.waive_entry_for = set()
-    room.entry_vote = None  # 阵容已定:未通过的免盲投票随开局作废(rules.md ① 行 75「没投到不算免」),不跨手悬挂
+    room.entry_vote = None  # 阵容已定:未通过的免盲投票随开局作废(rules.md ①「免盲投票」:没投到不算免),不跨手悬挂
     room.button_position = button
     room.status = RoomStatus.HAND_STARTED
     room.hand = hand
@@ -238,7 +238,7 @@ def _eligible_seats(room: Room) -> tuple[set[int], set[int], set[int]]:
         for i, s in enumerate(room.seats)
         if s is not None and room.users_in_room.get(s.nickname) is UserStatus.READY_TO_PLAY
     ]
-    # bootstrap 看**整桌已占座位**(rules.md ① 行 60「桌上还没有任何已入局玩家」),不只 ready 子集:
+    # bootstrap 看**整桌已占座位**(rules.md ①「入局与防躲盲」:桌上还没有任何已入局玩家),不只 ready 子集:
     # 坐出/未 ready 的已入局(new_here=False)玩家仍堵掉新人的免费入局,守防躲盲不变量(行 46/50)。
     bootstrap = not any(s is not None and not s.new_here for s in room.seats)
 
@@ -830,7 +830,7 @@ def _buy_in(work: Work, cmd: BuyIn) -> ReduceResult:
     return [Broadcast(room=work.room_name, msg=msg), persist], None
 
 
-# ── 免盲投票(OpenFreeEntryVote / VoteFreeEntry)── rules.md ① 行 65-96(①.12-15)
+# ── 免盲投票(OpenFreeEntryVote / VoteFreeEntry)── rules.md ①「免盲投票」+ 测试 ①.12-15
 def _open_free_entry_vote(work: Work, cmd: OpenFreeEntryVote) -> ReduceResult:
     # 为当前 new_here 玩家开一次免盲投票。门槛:在房 + 有候选 + 有合格投票人(后者兼挡真空通过,见决策 3/5);
     # 已有进行中投票则幂等 no-op(不重置已有 approvals,防反复开票刷票)。
@@ -867,7 +867,7 @@ def _vote_free_entry(work: Work, cmd: VoteFreeEntry) -> ReduceResult:
     if cmd.approve:
         vote.approvals.add(nick)
     else:
-        vote.rejected = True  # 一票否决(rules.md ① 行 73)
+        vote.rejected = True  # 一票否决(rules.md ①「免盲投票」)
     closed = _finish_entry_vote(work, room)
     if closed is not None:
         return closed, None
@@ -882,7 +882,7 @@ def _vote_free_entry(work: Work, cmd: VoteFreeEntry) -> ReduceResult:
 
 
 def _voters(room: Room) -> set[str]:
-    # 合格投票人(rules.md ① 行 69):已入局(非 new_here)且 READY_TO_PLAY 的座位——其 EV 受「放人免费进来」影响。
+    # 合格投票人(rules.md ①「免盲投票」):已入局(非 new_here)且 READY_TO_PLAY 的座位——其 EV 受「放人免费进来」影响。
     return {
         s.nickname
         for s in room.seats

@@ -2,23 +2,27 @@
 
 ## 定位
 
-presence 是**只读的「谁在线 / 在哪个房 / 什么状态」视图**,给 [lobby.md](lobby.md)(房间人数)、[messaging.md](messaging.md)(私聊在线判断)、[rest.md](rest.md)(改昵称"是否在房"判定)、未来好友共用。它不是新的权威状态,而是**对已有两处状态的只读聚合**:
+presence 是只读的「谁在线 / 在哪个房 / 什么状态」视图,不是新的权威状态,只是对两处已有状态的只读聚合:
 
 | 问题 | 答案来源 |
 |---|---|
-| **在不在线?** | ConnectionManager 的 `nick → Connection`(shell;有连接=在线) |
-| **在哪个房 / 房里几个人?** | `world.rooms`/`world.users[nick].room`(core 权威;**只读已提交状态**) |
-| **什么 UserStatus?** | `world.rooms[r].users_in_room[nick]`(同上,只读) |
+| 在不在线? | ConnectionManager 的 `nick → Connection`(shell:有连接即在线) |
+| 在哪个房 / 房里几个人? | `world.rooms` / `world.users[nick].room`(core 权威状态,只读已提交的那份) |
+| 什么 UserStatus? | `world.rooms[r].users_in_room[nick]`(同上) |
+
+消费方有四处:[lobby.md](lobby.md) 要房间人数,[messaging.md](messaging.md) 要私聊在线判断,[rest.md](rest.md) 要改昵称的在房判定,未来的好友功能也共用它。
 
 ## 读 world 是允许的(只读、展示用、可滞后)
 
-presence 的"在哪个房/人数/状态"来自 `world`。**消费者读已提交的 `world` 是允许的**(并发不变量 2:其它协程只读已提交状态),前提:
+消费者读已提交的 `world` 符合并发不变量 2。前提有三条:
 
-- **只读、绝不写**;**只用于展示 / 软判定,不做实时游戏裁定**(实时裁定一律在 reduce 内)。
-- **可滞后一拍**:`commit` 替换引用(单线程,读到的要么旧要么新,不撕裂);读者可能看到落后一条命令的房态,对展示/守门足够。
-- 与 [rest.md](rest.md) 的"REST 读房间人数"同款约定——presence 把这些零散读法收口成统一只读 API。
+1. 只读,绝不写。
+2. 只用于展示或软判定。实时游戏裁定一律在 reduce 内做。
+3. 容忍滞后一拍。`commit` 是替换引用,单线程下读到的要么是旧的、要么是新的,不会撕裂。
 
-**已落地([changes/0037](refactor/changes/0037-presence.md))**:收口成 [`Presence(world, conns)`](../app/shell/presence.py) 类(持稳定 `world` 引用——`commit` 原地替换其 `.users`/`.rooms`,故每次读得最新提交态)+ 四只读方法:
+这与 [rest.md](rest.md) 的「REST 读房间人数」是同款约定,presence 的作用是把零散读法收口成统一只读 API。
+
+已落地([changes/0037](refactor/changes/0037-presence.md)):[`Presence(world, conns)`](../app/shell/presence.py) 类,四个只读方法,持稳定 `world` 引用——安全,因为 `commit` 原地替换 `world` 的 `.users`/`.rooms`,每次读到的都是最新提交态。
 
 ```python
 class Presence:                       # app/shell/presence.py
@@ -28,15 +32,19 @@ class Presence:                       # app/shell/presence.py
     def online_nicks(self) -> set[str]:         return self._conns.online_nicks()
 ```
 
-> 在线 = 有 live 连接(ConnectionManager);在房 = `current_room` 非 None(大厅用户不在 `world.users`,见 [lobby.md](lobby.md))。两者正交:可在线在大厅、可在房但 OFFLINE。
+两个判定的定义:在线 = 有 live 连接;在房 = `current_room` 非 None,大厅用户不在 `world.users` 里(见 [lobby.md](lobby.md))。两者正交:可以在线但在大厅,也可以在房但 OFFLINE。
 
 ## 改昵称:在房判定 + 连接重挂(填 [rest.md](rest.md) 的坑)
 
-改昵称仅当**不在任何游戏房**(你定的规则,见 [lobby.md](lobby.md)/[rest.md](rest.md)):
+改昵称仅当用户不在任何游戏房时允许,规则出处见 [lobby.md](lobby.md)/[rest.md](rest.md)。走 REST 而非 ws 命令,理由有二:改昵称更贴资料管理;未连接时也能改,那时只改库。
 
-1. **判定**:`current_room(old_nick) is None`(在大厅)才允许——`old_nick` 以 **DB** 为准(会话表可能滞后,0065 决策 1);否则 REST **403**(ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 码保留给未来 ws 形态)。读已提交 world,只读。
-2. **改库**:**CAS** 更新 DB `nickname`(`WHERE id=uid AND nickname=old_nick`,并发双改名只有一个赢;唯一约束兜撞名)+ 会话表的 `nickname`(该账号全部会话)。大厅用户**不在 `world.users`**,所以不触碰 core 权威键。
-3. **连接重挂**:若 `old_nick` 此刻有 live 连接(改名 handler 在 await 前捕获**该对象**),用 `rekey(conn, new)` 按对象 `is` 判定重挂(防 await 窗内键被并发 rename/顶替动过时误挂他人连接;`rename(old,new)` 按键版保留给不涉并发窗的调用方)。
+接口是 `POST /user/nickname`,加密信封见 [rest.md](rest.md)。handler 落地见 [0065](refactor/changes/0065-p7-change-nickname.md),`rename` 原语随 [0037](refactor/changes/0037-presence.md)。
+
+同进程顺序做三步:
+
+1. **判定**:`current_room(old_nick) is None`(人在大厅)才允许,否则 REST 403;判定只读已提交 world。`old_nick` 以 DB 为准,因为会话表可能滞后(0065 决策 1)。ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 码保留给未来 ws 形态。
+2. **改库**:CAS 更新 DB `nickname`,条件是 `WHERE id=uid AND nickname=old_nick`,并发双改名只有一个赢、唯一约束兜住撞名;再 `SessionStore.rename_nickname` 更新该账号全部会话。大厅用户不在 `world.users`,所以这一步不触碰 core 权威键。
+3. **连接重挂**:若 `old_nick` 此刻有 live 连接,用 `rekey(conn, new)` 重挂,handler 在 await 前先捕获该连接对象。`rekey` 按对象 `is` 判定,防止 await 窗口内该键被并发 rename/顶替动过时误挂他人连接;`rename(old, new)` 是按键版,保留给不涉并发窗口的调用方。
 
 ```python
 def rename(self, old: str, new: str) -> None:        # ConnectionManager
@@ -46,16 +54,14 @@ def rename(self, old: str, new: str) -> None:        # ConnectionManager
         self._by_nick[new] = conn
 ```
 
-- **落点(已全落地)**:改昵称走 REST(`POST /user/nickname` 走加密信封,见 [rest.md](rest.md);**handler 已落地 [0065](refactor/changes/0065-p7-change-nickname.md)**),同进程顺序调:同步直写 DB → `SessionStore.rename_nickname`(该账号全部会话)→ `conns.rename`(有 live 连接才动)。`ConnectionManager.rename` 原语早随 [0037](refactor/changes/0037-presence.md) 落地。**决策(保留记录)**:也可做成 ws 命令在 shell 处理;选 REST 因更贴"资料管理",且未连接时也能改(只改库)。
-- **微小竞态(最坏后果记准,0065)**:判定读 world 可能滞后一拍(刚 JoinRoom、REST 仍看到在大厅)→ 极小窗口可能放过一次改名。**最坏情形**:改名与同刻的 `join_room` 精确交错时,world 以旧名装入成员、连接键已改新名 → 该成员收不到房间消息、命令 `NOT_IN_ROOM`、`Cleanup` 因 WATCHING≠OFFLINE 不清 → **幽灵占位直到重启**(房不空不销毁)。触发需同一用户同刻双发(UI 无此路径),≤20 友善用户接受;要严就把改名也经一次 reduce 守门(本规模不必,升级路径保留)。
+> 微小竞态(最坏后果,0065):判定读 world 可能滞后一拍,极小窗口可能放过一次改名。最坏情形是改名与同刻 `join_room` 精确交错:world 以旧名装入成员,连接键已改新名。后果是该成员收不到房间消息、命令 `NOT_IN_ROOM`、`Cleanup` 因 WATCHING≠OFFLINE 不清,形成幽灵占位直到重启(房不空就不销毁)。触发需同一用户同刻双发,UI 无此路径,≤20 友善用户可接受。要更严就把改名也经一次 reduce 守门,本规模不必,升级路径保留。
 
 ## 与架构契约(必须守住)
 
-1. presence 是**只读聚合**:在线来自 ConnectionManager,房/状态来自只读 `world`;**绝不写 world、绝不做实时游戏裁定**。
-2. 改昵称仅限大厅(`current_room is None`),改后**重挂连接 nick 键** + 更新 DB/会话表。
-3. 读 world 只为展示/软守门,容忍滞后一拍。
+1. presence 是只读聚合:在线来自 ConnectionManager,房/状态来自只读 `world`;绝不写 world、不做实时游戏裁定,读 world 只为展示/软守门、容忍滞后一拍。
+2. 改昵称仅限大厅(`current_room is None`),改后重挂连接 nick 键 + 更新 DB/会话表。
 
 ## 待定 / future
 
-- **变化推送**:presence 改变(上下线/进出房)主动广播给大厅/好友——v1 按需查询(轮询)。
-- **好友在线提醒**、**"正在房间 X 游戏中"展示**:基于本视图扩展。
+- **变化推送**:presence 改变(上下线/进出房)主动广播给大厅/好友。v1 按需查询(轮询)。
+- **好友在线提醒**、**「正在房间 X 游戏中」展示**:基于本视图扩展。
