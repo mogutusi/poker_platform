@@ -197,3 +197,34 @@ describe('进房时的「上次会话残留」', () => {
     })
   })
 })
+
+describe('UserStatusChanged 的三种情形', () => {
+  // 后端用同一条事件表达入座 / 在座内变状态 / 起身。只处理其中一种会静默吞掉另外两种——
+  // 最初只做了「在已有座位里改状态」,于是观战者点入座后界面毫无反应(0080 由浏览器测试发现)。
+  it('观战 → 入座:seats 里没有这个人时要新增一条', () => {
+    applyServerMessage(snapshot({ seats: [], players: [], watchers: ['alice'] }))
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'sitting_in', seat_position: 2 })
+    const s = getRoomState()
+    expect(s.seats).toHaveLength(1)
+    expect(s.seats[0]).toMatchObject({ nickname: 'alice', seat_position: 2, status: 'sitting_in' })
+    expect(s.watchers).not.toContain('alice') // 已经不是观战者了
+    expect(mySeat()?.seat_position).toBe(2)
+  })
+
+  it('在座内变状态:就地改,不新增', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'ready_to_play', seat_position: 3 })
+    const s = getRoomState()
+    expect(s.seats).toHaveLength(2)
+    expect(s.seats.find((x) => x.nickname === 'alice')?.status).toBe('ready_to_play')
+  })
+
+  it('起身:seat_position 为 null,要从 seats 移除并回到观战', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'watching', seat_position: null })
+    const s = getRoomState()
+    expect(s.seats.map((x) => x.nickname)).toEqual(['bob'])
+    expect(s.watchers).toContain('alice')
+    expect(mySeat()).toBeNull()
+  })
+})

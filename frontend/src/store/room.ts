@@ -248,11 +248,29 @@ export function applyServerMessage(msg: ServerMessage): void {
       })
       break
 
-    case 'user_status_changed':
-      set({
-        seats: state.seats.map((s) => (s.nickname === msg.nickname ? { ...s, status: msg.status } : s)),
-      })
+    case 'user_status_changed': {
+      // 这条事件兼三种情形,不能只在已有座位里找人改状态:
+      //   观战 → 入座:seats 里还没有他,要**新增**一条(这一条最初漏了,观战者点入座后界面毫无反应)
+      //   在座内变状态(ready / sit-out / 断线):就地改
+      //   起身 → 观战:seat_position 为 null,要把他从 seats 里**移除**
+      if (msg.seat_position === null) {
+        set({
+          seats: state.seats.filter((s) => s.nickname !== msg.nickname),
+          watchers: state.watchers.includes(msg.nickname) ? state.watchers : [...state.watchers, msg.nickname],
+        })
+        break
+      }
+      const known = state.seats.find((s) => s.nickname === msg.nickname)
+      const seats = known
+        ? state.seats.map((s) => (s.nickname === msg.nickname ? { ...s, status: msg.status, seat_position: msg.seat_position! } : s))
+        : [
+            ...state.seats,
+            // 新入座的人:筹码要等 player_bought_in 或下一次快照才知道,先记 0。
+            { seat_position: msg.seat_position, nickname: msg.nickname, status: msg.status, points: 0, new_here: true },
+          ]
+      set({ seats, watchers: state.watchers.filter((n) => n !== msg.nickname) })
       break
+    }
 
     case 'player_bought_in':
       set({

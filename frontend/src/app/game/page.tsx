@@ -13,7 +13,7 @@ import { toUiCards } from "@/utils/card"
 import type { Card as UiCard } from "@/types/poker"
 import { getSession } from "@/transport/session"
 import { useRoom } from "@/store/useRoom"
-import { isMyTurn, myPlayer, mySeat } from "@/store/room"
+import { actingPlayer, isMyTurn, myPlayer, mySeat } from "@/store/room"
 import {
   bet,
   buyIn,
@@ -74,6 +74,7 @@ function GameView() {
   const me = mySeat(state)
   const mine = myPlayer(state)
   const myTurn = isMyTurn(state)
+  const acting = actingPlayer(state)
   const gameStarted = state.handStatus !== null
 
   /** 把服务器的座位/玩家投影成这一页 JSX 期望的形状。空座渲染成「可入座」。 */
@@ -320,16 +321,14 @@ function GameView() {
             {/* left: 0% = far left, 50% = center, 100% = far right */}
             {/* top: 0% = top, 50% = center, 100% = bottom */}
             {seats.map((seat) => {
-              if (!seat.player) return null
-
               // Seat positions: bottom row (5,6,7) aligned at same top; user (6) centered
               const manualPositions: Record<number, { left: number; top: number }> = {
                 1: { left: 25, top: 11 },
                 2: { left: 50, top: 9 },
                 3: { left: 77, top: 12 },
                 4: { left: 95, top: 40 },
-                5: { left: 72, top: 84 },
-                6: { left: 50, top: 84 },  // User – aligned with 5 & 7
+                5: { left: 72, top: 84 },  // User – aligned with 5 & 7
+                6: { left: 50, top: 84 },
                 7: { left: 28, top: 84 },
                 8: { left: 5, top: 60 },
                 9: { left: 7, top: 30 },
@@ -337,7 +336,29 @@ function GameView() {
 
               const position = manualPositions[seat.number] || { left: 50, top: 50 }
 
-              const hand = gameStarted ? playerHands[seat.number] : []
+              // 空座要能点:观战者靠它入座(sit_down)。原 mock 版直接不渲染空座,
+              // 于是进房后根本没有入座的入口——0079 的浏览器测试才发现这条死路。
+              if (!seat.player) {
+                return (
+                  <button
+                    key={seat.number}
+                    type="button"
+                    data-empty-seat={seat.number}
+                    onClick={() => handleSeatClick(seat.number)}
+                    disabled={!!me}
+                    title={me ? "你已入座" : `坐到 ${seat.number} 号位`}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-dashed border-primary/50 bg-black/40 px-3 py-2 text-xs text-primary/80 hover:bg-primary/20 disabled:opacity-30 disabled:hover:bg-black/40"
+                    style={{ left: `${position.left}%`, top: `${position.top}%` }}
+                  >
+                    入座 {seat.number}
+                  </button>
+                )
+              }
+
+              // 只有自己的座位(以及摊牌后被亮牌的人)在 playerHands 里有条目,别人一律没有——
+              // 这正是隐私边界。所以必须兜 []:原 mock 给所有座位都发了牌,直接读 .length 不会崩,
+              // 换成真实数据后其余座位是 undefined,页面会整个白屏(0080 由浏览器测试发现)。
+              const hand = (gameStarted ? playerHands[seat.number] : []) ?? []
               const isCurrent = seat.player.id === "current"
 
               return (
@@ -433,11 +454,16 @@ function GameView() {
           {/* Game mode: compact action bar (hidden when current player folded) */}
           {gameStarted && !currentPlayerFolded && (
             <div className="absolute left-0 right-0 z-30 flex flex-col items-center gap-2 pb-2 bottom-6">
+              {/* 按钮在别人回合是灰的,必须说清在等谁,不然用户只看到一排点不动的按钮。 */}
+              <span className="rounded-full bg-black/60 px-3 py-1 text-xs text-amber-200">
+                {myTurn ? "轮到你行动" : `等待 ${acting?.nickname ?? "…"} 行动`}
+              </span>
               <div className="flex items-center gap-1.5 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 py-1.5 px-2 shadow-lg">
                 <Button
                   variant="destructive"
                   size="sm"
                   onClick={() => handleAction("fold")}
+                  disabled={!myTurn}
                   className="h-7 rounded-full px-3 text-xs font-semibold shadow-sm min-w-0"
                 >
                   Fold
@@ -446,6 +472,7 @@ function GameView() {
                   variant="secondary"
                   size="sm"
                   onClick={() => handleAction("check")}
+                  disabled={!myTurn}
                   className="h-7 rounded-full px-3 text-xs font-semibold border-white/10 min-w-0"
                 >
                   Check
@@ -453,6 +480,7 @@ function GameView() {
                 <Button
                   size="sm"
                   onClick={() => handleAction("call")}
+                  disabled={!myTurn}
                   className="h-7 rounded-full px-3 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white min-w-0"
                 >
                   Call {callAmount}
@@ -468,6 +496,7 @@ function GameView() {
                   <Button
                     size="sm"
                     onClick={() => handleAction("raise")}
+                  disabled={!myTurn}
                     className="h-7 rounded-full px-3 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white min-w-0"
                   >
                     Raise
@@ -476,6 +505,7 @@ function GameView() {
                 <Button
                   size="sm"
                   onClick={() => handleAction("all-in")}
+                  disabled={!myTurn}
                   className="h-7 rounded-full px-3 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white min-w-0"
                 >
                   All-in
