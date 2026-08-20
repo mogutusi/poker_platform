@@ -223,7 +223,7 @@ def reduce(work, cmd):
 
 - **摊牌**:补齐未发的公共牌;产出 `Broadcast(HandShowDown)`,显式携带未弃牌者的 `hole_cards`。这一份不经默认隐藏的 Player 序列化;隐私边界见不变量 3。
 - **分池**:用 `contributed` 算边池,用 treys 定胜负(下节)。
-- **结算**:每个 `Player.points`(赢得的 + 剩余)还回 `Seat.points`,`Seat.in_game_points=0`。`PLAYING` 玩家 UserStatus → `SITTING_IN`。局中请求坐出者(`room.sitting_out_next`)转 `SITTING_OUT`。局中离桌者(`room.leaving`)不转状态,随后驱逐。
+- **结算**:每个 `Player.points`(赢得的 + 剩余)还回 `Seat.points`,`Seat.in_game_points=0`。`PLAYING` 玩家 UserStatus → `SITTING_IN`。局中请求坐出者(`room.sitting_out_next`)转 `SITTING_OUT`。局中离桌者(`room.leaving`)不转状态,随后驱逐。**每个发生转移的人产出一条 `Broadcast(UserStatusChanged)`**,排在 `HandEnded` 之后——客户端只能从事件知道状态变了,「有座不在手需重新 ready」([connection.md](connection.md))正是靠它;0082 之前漏发,客户端一直以为大家还 ready,开不了第二手(见 [changes/0082](refactor/changes/0082-hand-end-status-broadcast.md))。
 - **驱逐离桌者**:对 `room.leaving` 里每人,依次退座位剩余筹码回全局积分(`Persist(PointsWrite)`)、释座、移出 `users_in_room`、`del world.users`,产出 `Broadcast/Personal(UserLeft)`(见 [rules.md](rules.md) ④ / [user.md](user.md) / [lobby.md](lobby.md))。
 - **落库**:产出 `Persist(HandRecordWrite)`,事件写、追加。`dedupe_key = f"{room}:{hand.seq}"`(见「手牌标识」)。`start_time = hand.start_time`;`end_time` 留空,由 shell 在派发该 `Persist` 时盖墙钟。记录内容是结果:各 participant 的 `uid`(由 `work.users[player.nickname].uid` 取)、`initial_points`/`final_points`、`final_pot`;不含底牌。
 - **收尾**:`room.hand=None`,`RoomStatus → PENDING_START`,产出 `ClearAction` 停行动倒计时。

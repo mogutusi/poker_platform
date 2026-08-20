@@ -448,6 +448,7 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     room = work.room
     assert room is not None
     participants: list[ParticipantWrite] = []
+    settled_status: list[tuple[str, int, UserStatus]] = []  # 手尾状态转移,逐个广播(见下)
     for p in hand.players:
         s = room.seats[p.seat_position]
         assert s is not None
@@ -462,9 +463,12 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
         if p.nickname in room.leaving:
             continue
         if room.users_in_room.get(p.nickname) is UserStatus.PLAYING:
-            room.users_in_room[p.nickname] = (
-                UserStatus.SITTING_OUT if p.nickname in room.sitting_out_next else UserStatus.SITTING_IN
-            )
+            settled = UserStatus.SITTING_OUT if p.nickname in room.sitting_out_next else UserStatus.SITTING_IN
+            room.users_in_room[p.nickname] = settled
+            # 这个转移必须广播:客户端只能从事件知道状态变了,而「有座不在手 → 需重新 ready」
+            # (connection.md)正是靠它。0082 之前手尾只发 HandEnded,客户端因此一直以为大家还 ready,
+            # 界面上开不了第二手也点不到 Ready 按钮。
+            settled_status.append((p.nickname, p.seat_position, settled))
 
     record = HandRecordWrite(
         dedupe_key=f"{work.room_name}:{hand.seq}",
@@ -484,6 +488,14 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     room.status = RoomStatus.PENDING_START
 
     events: list[Event] = [Broadcast(room=work.room_name, msg=ended), Persist(payload=record)]
+    # 状态广播排在 HandEnded 之后:客户端先看到「这手怎么结的」,再看到「大家回到了什么状态」。
+    events.extend(
+        Broadcast(
+            room=work.room_name,
+            msg=UserStatusChanged(nickname=nick, status=status, seat_position=seat),
+        )
+        for nick, seat, status in settled_status
+    )
     # 驱逐本手离桌者:退座位剩余筹码回全局积分 + 释座 + 移出(sorted 使产出顺序确定,便于断言)
     for nick in sorted(room.leaving):
         events += _evict(work, room, nick)

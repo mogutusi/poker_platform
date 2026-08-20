@@ -10,7 +10,14 @@ from app.core.commands import PlayerAction, StartHand
 from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatus, UserStatus
 from app.core.errors import ErrorCode
 from app.core.events import Broadcast, ClearAction, Persist, TurnChanged
-from app.wire.server import HandEnded, HandShowDown, HandStarted, HandStatusChanged, PlayerActed
+from app.wire.server import (
+    HandEnded,
+    HandShowDown,
+    HandStarted,
+    HandStatusChanged,
+    PlayerActed,
+    UserStatusChanged,
+)
 from app.core.records import HandRecordWrite
 from tests.builders import DECK, T0, card, hand_world, make_table, player, run, seat
 
@@ -287,3 +294,35 @@ def test_uncalled_bet_refunded_no_showdown():
     # A:开局锁入 110(60+40+10),结算 110-50+60=120;B:锁入 110,剩 100
     assert room.seats[0].points == 120 and room.seats[1].points == 100
     assert sum(s.points for s in room.seats if s is not None) == 220  # 守恒
+
+
+def test_hand_end_broadcasts_status_back_to_sitting_in():
+    # 手尾把 PLAYING 改回 SITTING_IN 必须**广播**:客户端只能从事件知道状态变了。
+    # 0082 之前只发 HandEnded,前端因此一直以为大家还 ready —— 界面上开不了第二手、
+    # 也点不到 Ready 按钮(浏览器里实测复现)。见 core.md §4 结算 / connection.md「有座不在手」。
+    world = hand_world(
+        [
+            player("A", 60, seat=0, bet_amount=40, has_acted=True, hole=TRIP_ACES),
+            player("B", 100, seat=1, bet_amount=0, has_acted=False),
+        ],
+        button=0, status=HandStatus.FLOP, last_bet=40, acting_position=1,
+        contributed={"A": 10, "B": 10},
+    )
+    world, events, err = run(world, PlayerAction(origin="B", action=FOLD))
+    assert err is None
+
+    status_msgs = [e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, UserStatusChanged)]
+    assert {m.nickname: m.status for m in status_msgs} == {
+        "A": UserStatus.SITTING_IN,
+        "B": UserStatus.SITTING_IN,
+    }
+    # 带上座位号,客户端才知道改的是哪个座
+    assert {m.nickname: m.seat_position for m in status_msgs} == {"A": 0, "B": 1}
+    # world 与广播一致:广播不是凭空造的
+    room = _room(world)
+    assert room.users_in_room["A"] is UserStatus.SITTING_IN
+    assert room.users_in_room["B"] is UserStatus.SITTING_IN
+
+    # 顺序:先 HandEnded(这手怎么结的)再状态(大家回到了什么状态)
+    kinds = [type(e.msg).__name__ for e in events if isinstance(e, Broadcast)]
+    assert kinds.index("HandEnded") < kinds.index("UserStatusChanged")

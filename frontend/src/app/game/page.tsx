@@ -8,6 +8,8 @@ import PlayerInfoCard from "@/components/PlayerInfoCard"
 import PokerCard from "@/components/PokerCard"
 import DmDrawer from "@/components/DmDrawer"
 import ConnectionBanner from "@/components/ConnectionBanner"
+import FreeEntryVote from "@/components/FreeEntryVote"
+import RoomConfig from "@/components/RoomConfig"
 import HandResult from "@/components/HandResult"
 import Image from "next/image"
 import gamingTableBg from "@/pics/game-table.jpg"
@@ -16,7 +18,8 @@ import { toUiCards } from "@/utils/card"
 import type { Card as UiCard } from "@/types/poker"
 import { getSession } from "@/transport/session"
 import { useRoom } from "@/store/useRoom"
-import { actingPlayer, clearResult, isMyTurn, myPlayer, mySeat } from "@/store/room"
+import { actingPlayer, clearError, clearResult, isMyTurn, myPlayer, mySeat } from "@/store/room"
+import { errorText } from "@/utils/errorText"
 import {
   bet,
   buyIn,
@@ -27,6 +30,7 @@ import {
   leaveRoom,
   setReady,
   sitDown,
+  openFreeEntryVote,
   startHand,
 } from "@/store/actions"
 
@@ -237,11 +241,37 @@ function GameView() {
                 </Button>
               </div>
             )}
-            {/* 服务器拒绝了某个操作时把 code 显示出来;文案由前端按 code 映射(后端只回机器码)。 */}
+            {/*
+              开票入口:只要在两手之间就给,不预判能不能成。
+
+              本想按「有 new_here 候选 + 有已入局投票人」来判,但**前端无法可靠知道 new_here**:
+              它只出现在 StateSnapshot 的 SeatView 里,而服务端在 _start_hand 末尾重标 new_here 时
+              不发任何携带它的事件,所以打完一手本地这份就过期了(浏览器测试撞出来的)。
+
+              「服务器是唯一真相」在这里的推论就是:不预判自己不可能算准的东西,发出去让服务器裁决,
+              被拒时把 CANNOT_OPEN_VOTE 翻成人话给用户看。已有投票进行中则不重复给。
+            */}
+            {!state.freeEntryVote && me && state.handStatus === null && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={openFreeEntryVote}
+                className="border-amber-500/50 text-amber-300 text-xs"
+              >
+                发起免盲投票
+              </Button>
+            )}
+            <RoomConfig />
+            {/* 后端只回机器码,文案归前端映射(见 service/docs/error.md)。点一下消掉。 */}
             {state.lastError && (
-              <span className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/50 text-red-300 text-xs">
-                {state.lastError.code}
-              </span>
+              <button
+                type="button"
+                onClick={clearError}
+                title={state.lastError.detail ?? state.lastError.code}
+                className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/50 text-red-300 text-xs"
+              >
+                {errorText(state.lastError.code)}
+              </button>
             )}
             {!isReady ? (
               <Button
@@ -533,6 +563,7 @@ function GameView() {
         目前这一页还没有任何房聊 UI(state.chat / sendChat 都还没接),见交付说明。
       */}
       <ConnectionBanner />
+      <FreeEntryVote />
       <HandResult onDismiss={clearResult} />
       <DmDrawer />
     </div>

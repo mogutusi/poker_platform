@@ -164,6 +164,37 @@ export function bet(amount: number): void {
   send({ type: 'player_action', action: 'bet', bet_amount: amount })
 }
 
+/**
+ * 请求开一次免盲投票。
+ *
+ * 免盲 = 已入局玩家全票同意,免掉新人这次的入局盲(见 service/docs/rules.md ①)。
+ * 开票者**不必是投票人**,新人可以自己请求。没有 new_here 候选或没有合格投票人时后端回
+ * CANNOT_OPEN_VOTE;已有投票进行中是幂等的 no-op,不会重置已有的赞成票。
+ */
+export function openFreeEntryVote(): void {
+  send({ type: 'open_free_entry_vote' })
+}
+
+/** 对进行中的免盲投票表态。全票 approve 才通过,任一 reject 立即失败。 */
+export function voteFreeEntry(approve: boolean): void {
+  send({ type: 'vote_free_entry', approve })
+}
+
+/**
+ * 改小盲。大盲不单独设,由 2×小盲派生。
+ *
+ * 任何在房成员都能改(无房主);**仅两手之间可改**,局中后端回 HAND_IN_PROGRESS——
+ * 这是正确性校验不是权限校验。上下限由后端按 gameconfig 防护,越界回 INVALID_SMALL_BLIND。
+ */
+export function setSmallBlind(amount: number): void {
+  send({ type: 'set_small_blind', amount })
+}
+
+/** 改房间默认买入额。约束同上,越界回 INVALID_BUY_IN。 */
+export function setBuyIn(amount: number): void {
+  send({ type: 'set_buy_in', amount })
+}
+
 export function sendChat(text: string): void {
   send({ type: 'room_chat', text })
 }
