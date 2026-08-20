@@ -25,10 +25,52 @@ export interface LeaderboardEntry {
   points: number
 }
 
+/** 一手已结束牌局的历史条目(service/app/rest/hands.py `HandRecordView`)。只有结果,永远没有底牌。 */
+export interface HandRecord {
+  /** 自增主键,兼作下一页游标(下一页传 before=本页最后一条的 id)。 */
+  id: number
+  /** 手牌标识,形如 `"房名:序号"`;房名要用 handRoom() 取,别自己 split。 */
+  dedupe_key: string
+  /** ISO 时间串,由后端墙钟盖。 */
+  start_time: string
+  end_time: string
+  /** 各子池之和,不含退还的未叫注。 */
+  final_pot: number
+  /** 该手全部参与者,按昵称升序;net = final_points - initial_points。 */
+  participants: HandParticipant[]
+}
+
+export interface HandParticipant {
+  nickname: string
+  initial_points: number
+  final_points: number
+  net: number
+}
+
+export interface HandsQuery {
+  /** 按参与者昵称过滤;此人没打过任何一手(或根本不存在)时返回空数组。 */
+  user?: string
+  /** 按房名精确过滤。 */
+  room?: string
+  /** 游标:只取 id 严格小于它的记录,即「更旧的一页」。 */
+  before?: number
+  limit?: number
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`)
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`)
+  // 明文 GET 也用 RestError:调用方判错的写法不必因端点是否加密而分叉。
+  if (!res.ok) throw new RestError(`GET ${path} failed`, res.status)
   return (await res.json()) as T
+}
+
+function query(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined) q.set(k, String(v))
+  }
+  const s = q.toString()
+  return s ? `?${s}` : ''
 }
 
 export function fetchRooms(): Promise<RoomMeta[]> {
@@ -37,6 +79,26 @@ export function fetchRooms(): Promise<RoomMeta[]> {
 
 export function fetchLeaderboard(limit?: number): Promise<LeaderboardEntry[]> {
   return getJson<LeaderboardEntry[]>(`/leaderboard${limit ? `?limit=${limit}` : ''}`)
+}
+
+/**
+ * 手牌历史,新→旧。公开读,明文 GET。
+ *
+ * 分页用游标不用 offset:传 `before=上一页最后一条的 id` 取下一页。返回条数少于 limit 就是到底了。
+ */
+export function fetchHands(q: HandsQuery = {}): Promise<HandRecord[]> {
+  return getJson<HandRecord[]>(`/hands${query({ user: q.user, room: q.room, before: q.before, limit: q.limit })}`)
+}
+
+/**
+ * 从 dedupe_key 取房名。
+ *
+ * 后端的 HandRecordView **不带独立的 room 字段**(房名只在 dedupe_key 里),所以要展示房名得在这儿还原。
+ * 按最后一个冒号切:房名是用户可起的动态名,自己可能含冒号,从左边切会截断。
+ */
+export function handRoom(record: HandRecord): string {
+  const i = record.dedupe_key.lastIndexOf(':')
+  return i < 0 ? record.dedupe_key : record.dedupe_key.slice(0, i)
 }
 
 // ── 需身份的端点(加密信封)──
@@ -80,4 +142,28 @@ export interface Profile {
 
 export function fetchProfile(): Promise<Profile> {
   return postSealed<Profile>('/user/me', {})
+}
+
+/**
+ * 改密码。要验旧密码是第二因子:光有会话 token 改不动密码,盗到 token 的人锁不死真用户。
+ *
+ * 失败按 RestError.status 分:401 信封没过(用新 seq 重试一次再判要不要重登)· 403 旧密码错或该账号未启用密码
+ * · 400 缺参/新密码为空 · 500 服务端。改完**不会**吊销其它会话。
+ */
+export function changePassword(oldPassword: string, newPassword: string): Promise<{ status: string }> {
+  return postSealed<{ status: string }>('/user/password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
+}
+
+/**
+ * 改昵称。**只有在大厅(不在任何房间)时才允许**——昵称是服务器房间状态的键,在房中改会让键错乱。
+ *
+ * 失败按 RestError.status 分:401 信封没过 · 403 人还在房里 · 409 昵称被占(或并发改名输了)
+ * · 400 空/首尾带空白/超 50 字/与现名相同 · 500 服务端。
+ * 成功后返回的 nickname 是权威值,要拿它去更新本地的「我是谁」。
+ */
+export function changeNickname(newNickname: string): Promise<{ status: string; nickname: string }> {
+  return postSealed<{ status: string; nickname: string }>('/user/nickname', { new_nickname: newNickname })
 }

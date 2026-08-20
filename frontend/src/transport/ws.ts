@@ -44,6 +44,17 @@ export function connectionState(): ConnectionState {
 export function connect(h: ChannelHandlers): void {
   handlers = h
   closedByUs = false
+
+  // 已经有一条活着的连接就接手它,绝不开第二条:同一 sid 的第二条 ws 会被服务器当成
+  // 「账号在别处登录」而把前一条静默顶掉(见 docs/transport.md §四)。大厅先连着、
+  // 进牌桌再连一次的话,等于自己把自己踢下线。
+  if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
+    // 复用不会再触发 onopen,得手动把当前状态交给接手的调用方,
+    // 否则它挂在 onStateChange('open') 里的 join_room 永远发不出去。
+    h.onStateChange?.(state)
+    return
+  }
+
   open()
 }
 

@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import PlayerInfoCard from "@/components/PlayerInfoCard"
 import PokerCard from "@/components/PokerCard"
+import DmDrawer from "@/components/DmDrawer"
 import Image from "next/image"
 import gamingTableBg from "@/pics/game-table.jpg"
 import { cn } from "@/lib/utils"
@@ -266,13 +267,20 @@ function GameView() {
                 In game
               </span>
             )}
+            {/*
+              这一页唯一的出口,故意不放别的跳转(设置、手牌历史都只在大厅进)。
+              理由:任何离开本页的导航都会断掉 ws,而在座时断线是按「保座 + 筹码锁在桌上」
+              处理的(见 service/docs/connection.md),要等清理超时才释放;走这个按钮才是
+              LeaveRoom 那条干净路径——退分离桌、筹码结算回全局积分。
+            */}
             <Button
               variant="outline"
               size="sm"
               onClick={handleLeave}
+              title="退分离桌回大厅:桌上筹码结算回全局积分,座位释放"
               className="border-primary/40 bg-card/60 text-xs uppercase tracking-wide hover:bg-primary/10"
             >
-              Leave
+              离开牌桌
             </Button>
           </div>
         </Card>
@@ -515,6 +523,14 @@ function GameView() {
           )}
         </Card>
       </div>
+
+      {/*
+        私聊。位置和大厅完全一致(右下角浮标 → 右侧抽屉),这是有意的:
+        私聊跨房间存在、有未读有已读,房聊随房销毁、不在场就是错过,两者不能被当成一回事。
+        所以私聊固定占右缘,**房间聊天将来要另起一处**(牌桌卡片内侧或左缘),不许也做成右侧抽屉。
+        目前这一页还没有任何房聊 UI(state.chat / sendChat 都还没接),见交付说明。
+      */}
+      <DmDrawer />
     </div>
   )
 }

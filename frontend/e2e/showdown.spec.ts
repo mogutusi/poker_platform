@@ -17,7 +17,7 @@ async function joinTable(page: Page, user: string, room: string, seat: number): 
   await expect(page).toHaveURL(/\/lobby/, { timeout: 15_000 })
 
   await page.getByLabel('房间名').fill(room)
-  await page.getByRole('button', { name: '进入房间' }).click()
+  await page.getByTestId('enter-room').click()
   await expect(page).toHaveURL(/\/game/, { timeout: 10_000 })
 
   await page.locator(`[data-empty-seat="${seat}"]`).click()

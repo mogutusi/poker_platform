@@ -161,6 +161,17 @@
 - [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改
 - [ ] **0076·M5/M6**(low)`package.json` 声明约 50 个 Radix 包、实际只用 2 个,可裁剪;`src/pics/poker-room.png` 单张 3.4M,建议转 WebP/AVIF
 
+## 前端页面与功能(0081 起)— 台账见 [changes/0081](changes/0081-lobby-hub-settings-history-dm.md)
+
+> 设计规则(用户定):**大厅是枢纽,每个模块在大厅只给摘要,点进去是细分页面承载全量与操作。**
+> 已落地 5 页:登录 `/` · 大厅 `/lobby` · 牌桌 `/game` · 账号设置 `/settings` · 手牌历史 `/history`;私聊是全局右侧抽屉,不是页面。
+
+- [x] **0081** 大厅枢纽化(摘要+入口、椭圆桌=当前房间可切换、排行榜标注不含桌上筹码)+ `/settings`(含 K_user 轮换出口)+ `/history`(游标翻页)+ 私聊抽屉。协议命令覆盖 9/15 → 11/15
+- [ ] **0081·A**(体验缺口,优先)**结算结果与连接状态没上界面**:`lastResult`(谁赢了多少)和 `connection`(重连中)store 里都有,界面不显示 → 打完一手看不到赢多少、断线时无任何提示
+- [ ] **0081·B** 免盲投票面板(`open_free_entry_vote`/`vote_free_entry`)+ 房间参数配置(`set_small_blind`/`set_buy_in`)—— 剩下 4 条未接命令都在这两块
+- [ ] **0081·C** 私聊两人真实收发的浏览器验证;历史页有真实记录时的渲染验证;设置页改密码/改昵称的实际执行验证(需想清楚怎么隔离 dev 账号状态)
+- [ ] **0081·D** 排行榜详情页(大厅「查看完整排行」目前标注「待建」且不可点,没有造假链接)
+
 ## 持续项(随时回看)
 
 - [ ] **协议增量交付**:每落一个模块 → 补该模块 wire client/server 切片 + 重 codegen,前端跟随(见 [changes/0016](changes/0016-replan-wire-first.md))

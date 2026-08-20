@@ -59,7 +59,7 @@ test.describe('用户旅程', () => {
     // 必须走站内跳转,不能 page.goto:session_token 只在内存,整页加载就丢了
     // (这是 docs/transport.md §六 的有意取舍,另有一条用例专门验它)。
     await page.getByLabel('房间名').fill('ui-journey')
-    await page.getByRole('button', { name: '进入房间' }).click()
+    await page.getByTestId('enter-room').click()
     await expect(page).toHaveURL(/\/game/, { timeout: 10_000 })
 
     // 进房后是观战状态,界面应提示去入座

@@ -5,6 +5,7 @@ import { fetchProfile } from '@/transport/rest'
 import { decideJoinMessage } from './joinFlow'
 import { connect, disconnect, send, type ConnectionState } from '@/transport/ws'
 import { applyServerMessage, getRoomState, resetRoom, setConnection, setMe } from './room'
+import { resetDm } from './dm'
 
 /**
  * 连上 ws 并进入房间。
@@ -67,6 +68,43 @@ export async function enterRoom(
     },
     onAuthLost: () => {
       resetRoom()
+      resetDm()
+      onAuthLost()
+    },
+  })
+}
+
+/**
+ * 只连 ws,不进任何房间。大厅用。
+ *
+ * 大厅**必须**有这条连接,否则私聊在大厅是死的:私聊走 shell 路由、跨房间存在,
+ * 收发双方都不必在房里(见 service/docs/messaging.md);而离线期消息的「登录补收」
+ * 只在(重)连时发生一次,没有连接就一条也补不回来。
+ *
+ * 「我是谁」不在这里取:大厅本来就要拉一次 /user/me 填头像卡,由它顺手 setMe 即可,
+ * 没必要为同一个昵称多发一个信封请求。
+ */
+export function connectLobby(onAuthLost: () => void): void {
+  connect({
+    onMessage: (msg) => {
+      // 大厅只认私聊和服务器的拒绝。房间事件此刻要么无意义,要么是上一次会话的残留
+      // (在座时断线的用户重连,服务器会先私发**旧房间**的快照),并进来会让已经离桌的
+      // 大厅凭空多出一个房间;真要回那个房间,enterRoom 里的 recover 路径会处理。
+      switch (msg.type) {
+        case 'dm_delivered':
+        case 'dm_read':
+        case 'dm_undelivered':
+        case 'error':
+          applyServerMessage(msg)
+          break
+        default:
+          break
+      }
+    },
+    onStateChange: setConnection,
+    onAuthLost: () => {
+      resetRoom()
+      resetDm()
       onAuthLost()
     },
   })
@@ -79,6 +117,18 @@ export function leaveRoom(): void {
 export function closeRoom(): void {
   disconnect()
   resetRoom()
+}
+
+/**
+ * 登出:断连接 + 清掉所有本地状态。
+ *
+ * 私聊只随**会话**结束清,不随离开房间清(closeRoom 就故意不碰它),
+ * 否则换个账号登进来会看到上一个人的私信。
+ */
+export function endLocalState(): void {
+  disconnect()
+  resetRoom()
+  resetDm()
 }
 
 /** 入座。wait_for_big_blind=true 是「等大盲免费」,false 是默认的「付盲即玩」。 */

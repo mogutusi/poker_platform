@@ -21,7 +21,7 @@ async function loginAs(page: Page, user: string): Promise<void> {
 /** 站内进房:不能用 goto,session_token 只在内存,整页加载就丢。 */
 async function enterRoom(page: Page, room: string): Promise<void> {
   await page.getByLabel('房间名').fill(room)
-  await page.getByRole('button', { name: '进入房间' }).click()
+  await page.getByTestId('enter-room').click()
   await expect(page).toHaveURL(/\/game/, { timeout: 10_000 })
   await expect(page.locator('text=/观战中/')).toBeVisible({ timeout: 15_000 })
 }

@@ -19,6 +19,7 @@ import type {
   ShowdownReveal,
 } from '@/types/wire.gen'
 import type { ConnectionState } from '@/transport/ws'
+import { applyDmMessage } from './dm'
 
 export interface RoomState {
   /** 已进入的房间;null 表示还没 join_room 成功。 */
@@ -304,8 +305,15 @@ export function applyServerMessage(msg: ServerMessage): void {
       set({ lastError: { code: msg.code, detail: msg.detail ?? null } })
       break
 
+    case 'dm_delivered':
+    case 'dm_read':
+    case 'dm_undelivered':
+      // 私聊与牌桌无关(跨房间存在、有未读),状态在 dm.ts;这里只转发,不碰它的内部。
+      applyDmMessage(msg)
+      break
+
     default:
-      // 私信等与牌桌无关的消息在别处处理;这里静默忽略,不当成错误。
+      // 还没接的消息静默忽略,不当成错误。
       break
   }
 }
