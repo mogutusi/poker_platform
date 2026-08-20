@@ -20,6 +20,7 @@ import { setMe } from "@/store/room"
 import { useRoom } from "@/store/useRoom"
 import TableSeat from "@/components/TableSeat"
 import DmDrawer from "@/components/DmDrawer"
+import ConnectionBanner from "@/components/ConnectionBanner"
 
 interface LeaderboardEntry {
   name: string
@@ -644,6 +645,7 @@ export default function LobbyPage() {
       </div>
 
       {/* 私聊浮标。大厅和牌桌挂同一个组件、同一个位置(右下角),换页不用重新找入口。 */}
+      <ConnectionBanner />
       <DmDrawer />
     </div>
   )

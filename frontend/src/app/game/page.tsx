@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import PlayerInfoCard from "@/components/PlayerInfoCard"
 import PokerCard from "@/components/PokerCard"
 import DmDrawer from "@/components/DmDrawer"
+import ConnectionBanner from "@/components/ConnectionBanner"
+import HandResult from "@/components/HandResult"
 import Image from "next/image"
 import gamingTableBg from "@/pics/game-table.jpg"
 import { cn } from "@/lib/utils"
@@ -14,7 +16,7 @@ import { toUiCards } from "@/utils/card"
 import type { Card as UiCard } from "@/types/poker"
 import { getSession } from "@/transport/session"
 import { useRoom } from "@/store/useRoom"
-import { actingPlayer, isMyTurn, myPlayer, mySeat } from "@/store/room"
+import { actingPlayer, clearResult, isMyTurn, myPlayer, mySeat } from "@/store/room"
 import {
   bet,
   buyIn,
@@ -530,6 +532,8 @@ function GameView() {
         所以私聊固定占右缘,**房间聊天将来要另起一处**(牌桌卡片内侧或左缘),不许也做成右侧抽屉。
         目前这一页还没有任何房聊 UI(state.chat / sendChat 都还没接),见交付说明。
       */}
+      <ConnectionBanner />
+      <HandResult onDismiss={clearResult} />
       <DmDrawer />
     </div>
   )

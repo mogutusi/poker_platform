@@ -3,7 +3,18 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { StateSnapshot } from '@/types/wire.gen'
-import { actingPlayer, applyServerMessage, getRoomState, isMyTurn, myPlayer, mySeat, resetRoom, setMe } from './room'
+import {
+  actingPlayer,
+  applyServerMessage,
+  clearResult,
+  getRoomState,
+  isMyTurn,
+  myPlayer,
+  mySeat,
+  resetRoom,
+  setConnection,
+  setMe,
+} from './room'
 import { decideJoinMessage } from './joinFlow'
 
 function snapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
@@ -226,5 +237,54 @@ describe('UserStatusChanged 的三种情形', () => {
     expect(s.seats.map((x) => x.nickname)).toEqual(['bob'])
     expect(s.watchers).toContain('alice')
     expect(mySeat()).toBeNull()
+  })
+})
+
+describe('结算面板的生命周期', () => {
+  // 结算结果 store 一直收着,但 0081 之前没接到界面上——打完一手用户看不到赢了多少。
+  it('hand_ended 记下赢取与退还,两者分开', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({
+      type: 'hand_ended',
+      winnings: [{ nickname: 'alice', amount: 120 }],
+      refunds: [{ nickname: 'bob', amount: 40 }],
+    })
+    const s = getRoomState()
+    expect(s.lastResult?.winnings).toEqual([{ nickname: 'alice', amount: 120 }])
+    // 退还是「没人跟的注还给你」,不是赢来的钱,不能并进 winnings
+    expect(s.lastResult?.refunds).toEqual([{ nickname: 'bob', amount: 40 }])
+  })
+
+  it('新一手开始要清掉上一手的结算,否则面板会挂在新牌局上', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({ type: 'hand_ended', winnings: [{ nickname: 'alice', amount: 10 }], refunds: [] })
+    expect(getRoomState().lastResult).not.toBeNull()
+
+    applyServerMessage({
+      type: 'hand_started',
+      hand_seq: 2,
+      button_position: 0,
+      small_blind: 10,
+      big_blind: 20,
+      players: [],
+      acting_position: null,
+    })
+    expect(getRoomState().lastResult).toBeNull()
+  })
+
+  it('用户手动关掉后不再显示', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [] })
+    clearResult()
+    expect(getRoomState().lastResult).toBeNull()
+  })
+})
+
+describe('连接状态', () => {
+  it('setConnection 会推给订阅者,界面据此显示横幅', () => {
+    setConnection('reconnecting')
+    expect(getRoomState().connection).toBe('reconnecting')
+    setConnection('open')
+    expect(getRoomState().connection).toBe('open')
   })
 })

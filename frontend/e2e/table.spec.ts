@@ -87,6 +87,13 @@ test.describe('两人同桌', () => {
       // 一人弃牌 → 只剩一个未弃牌者 → 手牌直接结束(见 service/docs/rules.md ③)
       await expect(a.locator('text=/In game/i')).toBeHidden({ timeout: 15_000 })
 
+      // 结算面板必须出现:此前这条信息 store 收着但界面不显示,打完一手看不到赢了多少。
+      await expect(a.locator('text=/本手结算/')).toBeVisible({ timeout: 10_000 })
+      await expect(a.locator('text=/你赢了|这手没有赢到底池/')).toBeVisible()
+      // 能关掉
+      await a.getByRole('button', { name: '关闭结算' }).click()
+      await expect(a.locator('text=/本手结算/')).toBeHidden()
+
       expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
     } finally {
       await ctxA.close()

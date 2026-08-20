@@ -114,6 +114,11 @@ export function setConnection(connection: ConnectionState): void {
   set({ connection })
 }
 
+/** 关掉结算面板。新一手开始时 hand_started 会自己清,这个是给用户手动关的。 */
+export function clearResult(): void {
+  if (state.lastResult) set({ lastResult: null })
+}
+
 export function clearError(): void {
   if (state.lastError) set({ lastError: null })
 }
