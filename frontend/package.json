@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "esbuild src/crypto/index.ts --bundle --format=esm --platform=neutral --outfile=dist-smoke/crypto.js && node scripts/smoke-e2e.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "smoke:raise": "esbuild src/crypto/index.ts --bundle --format=esm --platform=neutral --outfile=dist-smoke/crypto.js && node scripts/smoke-raise-sidepot.mjs",
+    "smoke:stale": "esbuild src/crypto/index.ts --bundle --format=esm --platform=neutral --outfile=dist-smoke/crypto.js && node scripts/smoke-stale-room.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

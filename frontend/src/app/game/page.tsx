@@ -11,6 +11,7 @@ import ConnectionBanner from "@/components/ConnectionBanner"
 import FreeEntryVote from "@/components/FreeEntryVote"
 import RoomConfig from "@/components/RoomConfig"
 import HandResult from "@/components/HandResult"
+import { formatChips } from "@/utils/poker"
 import Image from "next/image"
 import gamingTableBg from "@/pics/game-table.jpg"
 import { cn } from "@/lib/utils"
@@ -282,6 +283,7 @@ function GameView() {
                 type="button"
                 onClick={clearError}
                 title={state.lastError.detail ?? state.lastError.code}
+                data-testid="action-error"
                 className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/50 text-red-300 text-xs"
               >
                 {errorText(state.lastError.code)}
@@ -367,6 +369,20 @@ function GameView() {
                     ) : null}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/*
+              底池。服务器每条 player_acted / hand_status_changed 都带着 pot 过来,而 0085 之前这个值
+              被算进 `pot` 变量后**从没渲染过**——桌上看不到底池有多大,边池就更无从判断。
+              这里只渲染服务器给的数,不本地累加(累加就会和服务器分叉,见 docs/architecture.md 不变量 1)。
+            */}
+            {gameStarted && (
+              <div
+                className="absolute left-[63%] top-1/2 z-10 -translate-x-1/2 rounded-full border border-amber-500/40 bg-black/70 px-3 py-1 text-xs font-semibold text-amber-200"
+                style={{ transform: "translate(-50%, calc(-50% + 4.5rem))" }}
+              >
+                底池 <span data-testid="pot-amount">{formatChips(pot)}</span>
               </div>
             )}
 

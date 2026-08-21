@@ -53,8 +53,11 @@ test.describe('用户旅程', () => {
     await page.locator('button[type="submit"]').click()
 
     await expect(page).toHaveURL(/\/lobby/, { timeout: 15_000 })
-    // 排行榜来自真实的 GET /leaderboard,dev 种子用户都在里面。
-    await expect(page.locator('text=alice').first()).toBeVisible({ timeout: 10_000 })
+    // 大厅确实拿到了真实数据。**不能断言某个具体账号出现在榜上**:榜只取前 5,而积分随每一手牌变动,
+    // 打过几把之后那个账号就掉出前 5 了(0085 的加注/边池冒烟一跑就把 alice 挤了下去,这条因此变红)。
+    // 稳的是:榜上有真实条目 + 头像卡显示的是**本次登录的这个人**(它同时验证了 /user/me 走通)。
+    await expect(page.getByTestId('profile-card')).toContainText(user, { timeout: 10_000 })
+    await expect(page.getByTestId('leaderboard-entry').first()).toBeVisible({ timeout: 10_000 })
 
     // 必须走站内跳转,不能 page.goto:session_token 只在内存,整页加载就丢了
     // (这是 docs/transport.md §六 的有意取舍,另有一条用例专门验它)。

@@ -103,6 +103,17 @@
 
 ---
 
+### BUG-19 · 前端自己编了一个 min-raise 下限,别人大额加注之后就发不出合法的加注
+
+- **来源**:[0085](changes/0085-raise-and-sidepot-verification.md)(写加注冒烟时**实测**出来的,不是推断)
+- **症状**:有人大额加注之后,点「Raise」而不手动改金额,发出去的注会被服务器以 `ILLEGAL_ACTION` 拒掉;金额输入框上的 `min` 也是个假下限,照它填一样被拒。
+- **机理**:[rules.md](../rules.md) ② 的合法下限是 `last_bet + max(last_raise_size, BB)`,而 **`last_raise_size` 只在 `core/domain.py` 的 `Hand` 里,从来没上过 wire**。前端够不着它,于是自己编了两个式子:输入框 `min={callAmount * 2}`(规则里根本没有这个式子),留空时回退 `state.lastBet + state.bigBlind`(只在 `last_raise_size ≤ BB` 时才等于真下限)。
+- **实测证据**(`npm run smoke:raise`):`last_bet=2` 时加注到 10 ⇒ `last_raise_size=8`;此后下限是 `10+8=18`,而前端那个式子给的是 `10+2=12` —— 12 被 `ILLEGAL_ACTION` 拒,18 被接受。
+- **这是 [0084](changes/0084-new-here-channel.md) 那类病的第二例**:客户端需要的一个规则输入没有传达渠道,于是前端只好猜。修法同款——把下限(或 `last_raise_size`)放上 wire,让服务器说,前端只显示不推算。要碰的消息是 `last_bet` 会变的那几处:`HandStarted` / `PlayerActed` / `HandStatusChanged` / `StateSnapshot`。
+- **为什么本批不修**:0085 是验证批,它的职责是把这条路走通并留下证据;改协议要动 4 条消息 + codegen + 前端,值得单独一篇变更记录。**已有回归护栏**:`smoke:raise` 会一直钉住服务端这一侧的下限语义。
+
+---
+
 ## low(择机,可并入任意批次)
 
 来源均为 [0072](changes/0072-architecture-audit.md) 的 N 系列低危项。

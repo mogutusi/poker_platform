@@ -23,7 +23,9 @@ npm run build        # 生产构建(会跑 lint + 类型检查)
 npm run type-check   # 只跑 tsc --noEmit
 npm run lint         # eslint
 npm test             # vitest:加密向量 + 状态归并 + seq 纪律
-npm run smoke        # 协议层端到端冒烟(需后端在跑,见下)
+npm run smoke        # 协议层端到端冒烟:一手牌全程(需后端在跑,见下)
+npm run smoke:raise  # 加注 / min-raise / 三人边池(0085)
+npm run smoke:stale  # 「上次会话残留」自愈(0078·A)
 npm run test:e2e     # 真实浏览器走用户旅程(需后端在跑)
 ```
 
@@ -77,6 +79,8 @@ cd service && .venv/bin/python -m uvicorn app.shell.lifespan:app --reload
 前端默认连 `http://localhost:8000`,可用 `NEXT_PUBLIC_API_URL` 覆盖。dev 阶段后端还留着明文 `?nick=` 的 ws 端点,但**前端一律走加密端点**,不用明文那条(它会随前端切完加密退役)。
 
 ### 端到端冒烟
+
+三个冒烟脚本共用 `scripts/smoke-client.mjs`(登录握手 + 加密 ws + 收发帧 + 残留房处理)。**别再复制一份**:它直接压在协议面上,协议一改所有副本都得跟着改,漏一份就是一个静默失效的冒烟。
 
 `npm run smoke` 用本前端自己的加密代码,对真后端跑一遍:登录 → ws 握手 → 进房 → 入座 → 买入 → 准备 → 开局 → 打完一手 → 聊天 → 离桌,并检查底牌隐私、seq 单调、离桌后筹码守恒。
 

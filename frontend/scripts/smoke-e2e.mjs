@@ -10,84 +10,9 @@
 //
 // 用的是 dev 种子用户与 dev 共享密钥(见 service/app/poker.env.example),仅限本地。
 
-import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
-
-const FRONTEND = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const BASE = process.env.SMOKE_API_URL || 'http://127.0.0.1:8000'
-const K_USER = '00112233445566778899aabbccddeeff'
-const PASSWORD = 'devpass123'
-
-const { sm4CbcEncrypt, sm4CbcDecrypt, hexToBytes, bytesToHex, utf8ToBytes, bytesToUtf8,
-        deriveWsKeys, sealFrame, openFrame } = await import(`${FRONTEND}/dist-smoke/crypto.js`)
+import { BASE, Client, ensureInRoom, login } from './smoke-client.mjs'
 
 function log(...a) { console.log(...a) }
-
-async function login(name) {
-  const kUser = hexToBytes(K_USER)
-  const iv = crypto.getRandomValues(new Uint8Array(16))
-  const payload = { password: PASSWORD, client_nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts: Math.floor(Date.now() / 1000) }
-  const blob = sm4CbcEncrypt(kUser, iv, utf8ToBytes(JSON.stringify(payload)))
-  const res = await fetch(`${BASE}/user/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, iv: bytesToHex(iv), blob: bytesToHex(blob) }),
-  })
-  if (!res.ok) throw new Error(`login ${name} failed: ${res.status}`)
-  const body = await res.json()
-  const plain = sm4CbcDecrypt(kUser, hexToBytes(body.iv), hexToBytes(body.blob))
-  return JSON.parse(bytesToUtf8(plain))
-}
-
-class Client {
-  constructor(name, session) {
-    this.name = name
-    this.session = session
-    this.keys = deriveWsKeys(hexToBytes(session.session_token))
-    this.sendSeq = 0n
-    this.seenSeq = 0n
-    this.events = []
-    this.waiters = []
-  }
-
-  connect() {
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${BASE.replace('http', 'ws')}/ws?sid=${encodeURIComponent(this.session.session_id)}`)
-      ws.binaryType = 'arraybuffer'
-      this.ws = ws
-      ws.onopen = () => resolve()
-      ws.onerror = (e) => reject(new Error(`ws error for ${this.name}`))
-      ws.onclose = (e) => { this.closed = e.code }
-      ws.onmessage = (ev) => {
-        const opened = openFrame(this.keys, new Uint8Array(ev.data))
-        if (opened.seq <= this.seenSeq) { log(`  !! ${this.name} 收到不新鲜 seq`); return }
-        this.seenSeq = opened.seq
-        const msg = JSON.parse(bytesToUtf8(opened.plaintext))
-        this.events.push(msg)
-        for (const w of this.waiters.slice()) {
-          if (w.pred(msg)) { this.waiters.splice(this.waiters.indexOf(w), 1); w.resolve(msg) }
-        }
-      }
-    })
-  }
-
-  send(msg) {
-    this.sendSeq += 1n
-    this.ws.send(sealFrame(this.keys, this.sendSeq, utf8ToBytes(JSON.stringify(msg))))
-  }
-
-  wait(pred, label, ms = 4000) {
-    const hit = this.events.find(pred)
-    if (hit) return Promise.resolve(hit)
-    return new Promise((resolve, reject) => {
-      const w = { pred, resolve }
-      this.waiters.push(w)
-      setTimeout(() => {
-        const i = this.waiters.indexOf(w)
-        if (i >= 0) { this.waiters.splice(i, 1); reject(new Error(`超时等待 ${label} (${this.name})`)) }
-      }, ms)
-    })
-  }
-}
 
 // 每轮用独立房名:断线后座位会保留一个占座窗口(~90s),复用房名会撞上一轮的座位。
 // 房间是动态创建的,末人离开即销毁,所以不会堆积。
@@ -126,17 +51,6 @@ log('③ 进房')
  * 此时直接 join_room 会被 ALREADY_IN_ROOM 拒。所以先 leave_room 再进。
  * 前端真实场景同理,不是测试特有的。
  */
-async function ensureInRoom(client, room) {
-  await new Promise((r) => setTimeout(r, 200)) // 给可能的重连快照一点时间
-  const stale = client.events.find((m) => m.type === 'state_snapshot' && m.room !== room)
-  if (stale) {
-    client.send({ type: 'leave_room' })
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  client.send({ type: 'join_room', room })
-  return client.wait((m) => m.type === 'state_snapshot' && m.room === room, `${client.name} 进 ${room}`)
-}
-
 const snapA = await ensureInRoom(alice, ROOM)
 check(snapA.room === ROOM, `收到 StateSnapshot(房间=${snapA.room}, 座位数=${snapA.max_seats})`)
 await ensureInRoom(bob, ROOM)

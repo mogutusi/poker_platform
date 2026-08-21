@@ -536,6 +536,7 @@ export default function LobbyPage() {
                 return (
                   <div
                     key={entry.name}
+                    data-testid="leaderboard-entry"
                     className="relative overflow-hidden rounded-lg bg-secondary/60 p-3 text-xs shadow-inner"
                   >
                     <div className="flex items-center justify-between">
