@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from app.core.commands import Disconnect
 from app.core.events import Broadcast, ClearAction, Personal, Persist, TurnChanged
 from app.core.enums import UserStatus
@@ -127,3 +129,27 @@ def test_drop_connection_inbox_full_logs_critical_not_crash(caplog):
         sh.dispatcher.dispatch(Broadcast(room="r1", msg=_msg()))  # outbound 满 → drop;inbox 满 → 不崩,落 CRITICAL
     assert sh.conns.get("alice") is None  # 仍 unregister 停路由
     assert any(r.levelno == logging.CRITICAL and "inbox full" in r.message for r in caplog.records)
+
+
+async def test_dropped_slow_client_has_its_coroutines_cancelled():
+    # changes/0083 / BUG-6:drop 不能只摘键——ws 还开着、Receiver 还阻塞在 receive 的话,
+    # 这条「已经不存在」的连接会继续往 inbox 投命令。两条协程都必须一并终结。
+    # (端到端「drop 后真的不再投命令」在 tests/shell/test_lifecycle_0083.py。)
+    world = _world()
+    sh = Shell(world)
+    conns = sh.connect("alice")
+    alice = conns["alice"]
+
+    async def _park():
+        await asyncio.sleep(3600)
+
+    alice.sender_task = asyncio.create_task(_park())
+    alice.receiver_task = asyncio.create_task(_park())
+    await asyncio.sleep(0)  # 让两条 task 真的跑到 await 上
+    while not alice.outbound.full():
+        alice.outbound.put_nowait(_msg())
+    sh.dispatcher.dispatch(Broadcast(room="r1", msg=_msg()))  # QueueFull → drop
+    assert sh.conns.get("alice") is None
+    for task in (alice.sender_task, alice.receiver_task):
+        with pytest.raises(asyncio.CancelledError):
+            await task

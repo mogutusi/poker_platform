@@ -49,9 +49,21 @@ async def run_receiver(
     persist: WriteBuffer,
     persistwriter: PersistWriter | None = None,  # 载入屏障(0073):生产必传;None=测试/dev 直驱,跳过屏障
 ) -> None:
+    conn.receiver_task = asyncio.current_task()  # 供慢客户端丢弃路径 cancel 本 Receiver(0083,见 dispatch._drop_connection)
     old = conns.register(conn)  # 登记;返回被顶掉的旧连接
     if old is not None:
         await _displace(old)  # 顶替:cancel 旧 Sender + 关旧 ws,不投 Disconnect(connection.md 顶替语义)
+        if not conns.is_current(conn):
+            # 顶替链 A←B←C(0083 / BUG-1):上一行是 await 窗口,窗内**本连接自己**可能已被更新的连接顶掉。
+            # 此时若照旧往下走,会 cancel_cleanup 抹掉占座清理表的定时项 + 投 Connect 把已 OFFLINE 的用户
+            # 复活成在线;而 `_cleanup` 只回收 OFFLINE 座位,于是清理再也不触发,座位与桌上筹码永久泄漏。
+            # 故就地退出:不起 Sender、不拆表、不投 Connect,也不进下面的 try——那里的 finally 会投
+            # Disconnect,而顶替语义要求被顶的一方静默退出(否则会把刚上位的连接误标 OFFLINE)。
+            # **这条退出路径刻意不 await**(不补一次 ws.close):顶掉我的那条已经关过我的 ws,而 return 之后
+            # ws endpoint 就返回了,uvicorn 自会收掉 socket。多一个 await 只会多一个可被 cancel 打断的窗口
+            # ——`dispatch._drop_connection` 恰好可能在此刻 cancel 本 Receiver,那时异常点落在 try 之外、
+            # finally 一行都不跑,得靠「此刻 sender_task 仍是 None」才碰巧不泄漏。不留这种巧合。
+            return
     conn.sender_task = asyncio.create_task(sender_loop(conn))
     try:
         timer.cancel_cleanup(conn.nick)  # 重连/顶替落在占座窗口内:拆断线倒计时(0070;竞态由 reduce OFFLINE 兜)
@@ -255,7 +267,12 @@ async def _build_join(
 async def _displace(old: Connection) -> None:
     if old.sender_task is not None:
         old.sender_task.cancel()
+    await _close_quietly(old.ws)  # 关旧 ws → 旧 Receiver 的 receive_text 报错退出(其 is_current=False,不投 Disconnect)
+
+
+async def _close_quietly(ws: object) -> None:
+    # 关 ws 并吞掉异常:已关 / 已断 / 对端消失都无害,关连接这一步绝不该反过来把调用方掀翻。
     try:
-        await old.ws.close()  # 关旧 ws → 旧 Receiver 的 receive_text 报错退出(其 is_current=False,不投 Disconnect)
+        await ws.close()  # type: ignore[attr-defined]
     except Exception:
         pass

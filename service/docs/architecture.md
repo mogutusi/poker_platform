@@ -196,7 +196,10 @@ wire 消息(`ServerMessage`/`ClientMessage`)只在后端 Pydantic 写一份,前�
 
 - 业务校验失败:工作副本被丢弃,`world` 未动;GameLoop 把 `Err` 转成 `ErrorMessage` 回发命令发起人(`cmd.origin`),不广播。
 - 协议/解析错误:发生在 Receiver 层,还没形成合法 `Command`。直接构造 `ErrorMessage` 投该连接的 Sender 队列,绕过 reduce,但不绕过保序。
-- 未预期异常(bug):GameLoop 用 `try/except` 接住 → 丢弃工作副本 → 以 `Err(INTERNAL)` 回发并 `log.exception`,然后继续处理下一条命令。
+- 未预期异常(bug):GameLoop 用 `try/except` 接住 → 以 `Err(INTERNAL)` 回发并 `log.exception`,然后继续处理下一条命令。**兜底罩住整条链**(checkout / reduce / commit / 派发),不只是 `reduce`——否则一次异常就杀掉唯一的状态写者协程,服务器从此不再处理任何命令(0083)。
+  - 落点不同,处置也不同:崩在 commit **之前** = 工作副本被丢、`world` 一字节未动,正是 `INTERNAL` 的定义,照常回发;崩在 commit **之后** = `world` 已经改了,这时再回 `INTERNAL` 等于告诉客户端「什么都没发生」,还会诱导它重试而重复生效——改为落 CRITICAL 留人工介入,客户端的真相以后续 `StateSnapshot` 为准。
+  - 派发**逐事件**兜:一个事件炸了不牵连同批其余事件。丢一条 `Persist` 是手牌记录永久丢失(写缓冲里只有 `put` 进去的),丢一条 `TurnChanged` 是 Timer 不装表、该行动的人能无限拖住整桌。
+  - 三条常驻协程(GameLoop / Timer / PersistWriter)另挂 watchdog:非取消而退出即落 CRITICAL。「进程还在、ws 还连着,但状态机已经哑了」是最难察觉的故障(见 [log.md](log.md) 级别约定)。
 
 ## 定时器(详见 [timer.md](timer.md))
 

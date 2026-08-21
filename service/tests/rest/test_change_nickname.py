@@ -80,8 +80,8 @@ async def test_happy_path_renames_db_sessions_and_connection():
     presence, conns = _wiring()
     sid, session = store.create("alice", "Alice", _T0)
     sid2, session2 = store.create("alice", "Alice", _T0)  # 同账号第二会话(另一设备)
-    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS())
-    conns.register(conn)  # 大厅 live 连接
+    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS(), session=session)
+    conns.register(conn)  # 大厅 live 连接(加密路:带会话)
     resp = await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Neo"}))
     seq, data = _open_resp(session, resp)
     assert (seq, data) == (1, {"status": "ok", "nickname": "Neo"})
@@ -141,7 +141,7 @@ async def test_race_integrity_error_maps_409(monkeypatch):
         return False  # 预查看不见占用 → 放行到写
 
     monkeypatch.setattr(profile_mod, "nickname_taken", _blind_precheck)
-    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS())
+    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS(), session=session)
     conns.register(conn)
     with pytest.raises(HTTPException) as ei:
         await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Bob"}))  # Bob 已占
@@ -260,7 +260,7 @@ async def test_lobby_check_and_rekey_use_db_nickname_not_session(monkeypatch=Non
     # ② 大厅:live 连接键于 DB 名 "Alice",会话昵称仍陈旧 → rekey 命中
     presence2, conns2 = _wiring()
     sid2, session2 = store.create("alice", "OldAlice", _T0)
-    conn = Connection.create(nick="Alice", session_id=sid2, ws=FakeWS())
+    conn = Connection.create(nick="Alice", session_id=sid2, ws=FakeWS(), session=session2)
     conns2.register(conn)
     await _rename(store, sm, presence2, conns2, sid2, _seal_req(session2, 1, {"new_nickname": "Neo"}))
     assert conns2.get("Neo") is conn and conn.nick == "Neo"  # 按 DB 名捕获重挂,非按会话名 miss
@@ -277,7 +277,7 @@ async def test_join_room_during_await_window_reverts_and_403():
     store = SessionStore(_TTL)
     presence, conns = _wiring(world)
     sid, session = store.create("alice", "Alice", _T0)
-    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS())
+    conn = Connection.create(nick="Alice", session_id=sid, ws=FakeWS(), session=session)
     conns.register(conn)
 
     calls = {"n": 0}
@@ -298,3 +298,86 @@ async def test_join_room_during_await_window_reverts_and_403():
     assert await _db_nick(sm, 1) == "Alice"  # DB 已回滚(修复前会停在 Neo)
     assert session.nickname == "Alice"  # 会话表未动
     assert conns.get("Alice") is conn and conn.nick == "Alice"  # 连接键未动 → 广播仍能按 world 的 old_nick 找到他
+
+
+# ── 改昵称窗内发生 ws 顶替(changes/0083 / BUG-4)──
+
+async def test_ws_takeover_inside_db_window_rekeys_the_live_connection(monkeypatch):
+    # 两次 DB await 的窗口里本人被 ws 顶替(另一设备登录):此前用窗前捕获的引用做 rekey,
+    # 改的是**已死对象**,真正的活连接永久挂在旧 nick 键下 —— 用户在线却收不到任何消息。
+    import app.rest.profile as profile_mod
+
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    presence, conns = _wiring()
+    sid, session = store.create("alice", "Alice", _T0)
+    dead = Connection.create(nick="Alice", session_id=sid, ws=FakeWS(), session=session)
+    conns.register(dead)
+    live = Connection.create(nick="Alice", session_id="sid2", ws=FakeWS(), session=session)
+
+    real_taken = profile_mod.nickname_taken
+
+    async def taken_then_takeover(*args, **kwargs):
+        conns.register(live)  # 窗内顶替:同 nick 新连接接管(旧的被静默关掉)
+        return await real_taken(*args, **kwargs)
+
+    monkeypatch.setattr(profile_mod, "nickname_taken", taken_then_takeover)
+    await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Neo"}))
+    assert await _db_nick(sm, 1) == "Neo"
+    assert conns.get("Neo") is live  # 重挂的是**活**连接
+    assert conns.get("Alice") is None  # 旧键不留残挂
+    assert live.nick == "Neo"
+
+
+async def test_rename_does_not_rekey_another_accounts_connection(monkeypatch):
+    # 0065 早捕获本来要防的另一头:窗内**别人**改名占走了 old_nick 键,这时表里挂的是他人的连接,
+    # 绝不能把它重挂到我的新昵称上(那等于把别人的连接抢过来)。晚查 + 归属校验两头都要堵住。
+    import app.rest.profile as profile_mod
+
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    presence, conns = _wiring()
+    sid, session = store.create("alice", "Alice", _T0)
+    mine = Connection.create(nick="Alice", session_id=sid, ws=FakeWS(), session=session)
+    conns.register(mine)
+    _, other_session = store.create("bob", "Alice", _T0)  # 另一账号,窗内改名占走了 "Alice" 这个键
+    intruder = Connection.create(nick="Alice", session_id="sid-bob", ws=FakeWS(), session=other_session)
+
+    real_taken = profile_mod.nickname_taken
+
+    async def taken_then_intrude(*args, **kwargs):
+        conns.unregister(mine)  # 我的连接此刻已断
+        conns.register(intruder)  # 他人连接占走 old_nick 键
+        return await real_taken(*args, **kwargs)
+
+    monkeypatch.setattr(profile_mod, "nickname_taken", taken_then_intrude)
+    await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Neo"}))
+    assert await _db_nick(sm, 1) == "Neo"  # 我的改名照常完成
+    assert conns.get("Alice") is intruder and intruder.nick == "Alice"  # 他人连接一动不动
+    assert conns.get("Neo") is None  # 没把别人的连接挂到我的新昵称上
+
+
+async def test_dev_plaintext_connection_is_matched_by_its_handshake_nick():
+    # dev 明文连接没有会话,归属只能按 dev 端点自己的不变量判(session_id == 握手时的 ?nick=)。
+    # 「无会话就当本人」不行:那是 TOCTOU —— DB 行是建连时查的,到 rekey 这一步 old_nick 名下早已没有行,
+    # 一条搁浅在该键上的陌生 socket 会被认领成我的。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    presence, conns = _wiring()
+    sid, session = store.create("alice", "Alice", _T0)
+    dev_conn = Connection.create(nick="Alice", session_id="Alice", ws=FakeWS())  # dev:session_id = 握手 nick
+    conns.register(dev_conn)
+    await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Neo"}))
+    assert conns.get("Neo") is dev_conn and conns.get("Alice") is None
+
+
+async def test_sessionless_connection_on_a_foreign_key_is_not_claimed():
+    # 同为无会话,但 session_id 对不上 old_nick(= 不是「以 Alice 身份握手」建的)→ 不认领。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    presence, conns = _wiring()
+    sid, session = store.create("alice", "Alice", _T0)
+    stranded = Connection.create(nick="Alice", session_id="somebody-else", ws=FakeWS())
+    conns.register(stranded)
+    await _rename(store, sm, presence, conns, sid, _seal_req(session, 1, {"new_nickname": "Neo"}))
+    assert conns.get("Alice") is stranded and conns.get("Neo") is None

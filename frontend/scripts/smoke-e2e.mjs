@@ -98,6 +98,17 @@ function check(cond, label) {
   if (!cond) failures++
 }
 
+// 两人积分的基线:守恒断言必须对着**本次跑之前的实际总额**比,不能对着写死的 2000。
+// dev 库是长期复用的:服务器带着「有人在座」被杀过一次,桌上的筹码就再也回不到全局积分
+// (进程崩溃带走内存状态,见 service/docs/architecture.md「崩溃语义」),写死的初始总额从此永远对不上;
+// 而真正的不变量——「这一趟跑下来两人合计不变」——照样成立。
+async function pairPoints() {
+  const board = await (await fetch(`${BASE}/leaderboard`)).json()
+  return ['alice', 'bob'].map((nick) => [nick, board.find((e) => e.nickname === nick)?.points ?? 0])
+}
+const baseline = await pairPoints()
+const baselineSum = baseline.reduce((n, [, p]) => n + p, 0)
+
 log('① 登录 alice / bob')
 const alice = new Client('alice', await login('alice'))
 const bob = new Client('bob', await login('bob'))
@@ -232,13 +243,20 @@ check(alice.seenSeq > 0n && bob.seenSeq > 0n, `alice 收 ${alice.seenSeq} 帧, b
 log('⑩ 离桌退分(让脚本可重复跑)')
 alice.send({ type: 'leave_room' })
 bob.send({ type: 'leave_room' })
-await new Promise((r) => setTimeout(r, 400))
-// 断言守恒,而不是某人回到 1000:赢家会多、输家会少,但两人合计必须不变
+// 断言守恒,而不是某人回到某个定值:赢家会多、输家会少,但两人合计必须不变
 // (筹码守恒是后端的核心不变量,见 service/docs/review.md)。
-const after = await (await fetch(`${BASE}/leaderboard`)).json()
-const sum = ['alice', 'bob'].reduce((n, nick) => n + (after.find((e) => e.nickname === nick)?.points ?? 0), 0)
-const detail = ['alice', 'bob'].map((nick) => `${nick}=${after.find((e) => e.nickname === nick)?.points}`).join(' ')
-check(sum === 2000, `离桌后筹码守恒:${detail},合计 ${sum}`)
+// **必须轮询等**:/leaderboard 读的是 DB,而积分走 delayDB —— 落库最多滞后一个 DB_FLUSH_INTERVAL_MS
+// (缺省 500ms),固定睡 400ms 必然偶尔读到退分之前的旧值,那读出来就是「凭空少了一笔买入」的假阳性。
+let after = []
+let sum = 0
+for (let i = 0; i < 40; i++) {
+  await new Promise((r) => setTimeout(r, 100))
+  after = await pairPoints()
+  sum = after.reduce((n, [, p]) => n + p, 0)
+  if (sum === baselineSum) break
+}
+const detail = after.map(([nick, p]) => `${nick}=${p}`).join(' ')
+check(sum === baselineSum, `离桌后筹码守恒:${detail},合计 ${sum}(跑之前 ${baselineSum})`)
 
 log('')
 log(failures === 0 ? '冒烟通过' : `冒烟失败:${failures} 项`)

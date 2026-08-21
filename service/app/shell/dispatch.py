@@ -84,9 +84,21 @@ class Dispatcher:
             self._drop_connection(conn)
 
     def _drop_connection(self, conn: Connection) -> None:
-        # 慢客户端:停路由到它(unregister)+ 投 Disconnect 标 OFFLINE;客户端重连靠 StateSnapshot 补回。
-        # ws 物理关闭由其 Sender/Receiver 下次错误兜(dispatch 不 await,不在此 close)。
-        self.conns.unregister(conn)
+        # 慢客户端:停路由到它(unregister)+ 终结它的两条协程 + 投 Disconnect 标 OFFLINE;重连靠 StateSnapshot 补回。
+        self.conns.unregister(conn)  # 必须先摘键:Receiver 的 finally 据 is_current 决定投不投 Disconnect,这里已投过
+        # 对齐 receiver.py 的退出清理路径(0083 / BUG-6):只 unregister 会留下一条**还活着的**连接——
+        # ws 没关、Receiver 还阻塞在 receive,客户端继续发帧就继续往 inbox 投命令(幽灵命令源),
+        # 且它重连时同一 nick 会同时挂两个 Receiver。
+        # 为什么 cancel Receiver 而不是只关 ws:触发条件正是「读慢写健」的非对称慢客户端——它的下行已经堵住
+        # (所以 outbound 才会满),关闭帧同样发不出去,而上行畅通,Receiver 照旧产命令;关 ws 堵不住这个源。
+        # cancel 是同步的(只置标志,下个 await 才生效),不违反「dispatch 全程不 await」(不变量 3)。
+        if conn.sender_task is not None:
+            conn.sender_task.cancel()
+        if conn.receiver_task is not None:
+            # 其 finally 里 `was_current` 已为 False ⇒ 不会重复投 Disconnect。这一点**靠 receiver.py 那个 finally
+            # 全程无 await 撑着**(与本函数一样对事件循环原子):谁先跑,另一边看到的都是「已经不是当前连接」。
+            # 往那个 finally 里加任何 await(比如"礼貌地"关一下 ws)就会重新打开窗口、变成双份 Disconnect。
+            conn.receiver_task.cancel()
         self.timer.arm_cleanup(conn.nick)  # 断线装表(0070:凡投 Disconnect 处必 arm,占座窗口自此起算)
         try:
             self.inbox.put_nowait(Disconnect(origin=None, nick=conn.nick))

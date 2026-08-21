@@ -38,6 +38,8 @@
 | ERROR | 需人介入但已隔离 | reduce 未预期异常(已丢弃工作副本)、落库失败、Sender 发送异常 |
 | CRITICAL | 进程级不可恢复 | GameLoop task 意外退出、drain 失败、配置缺失启动失败 |
 
+> 「GameLoop task 意外退出」这条由 `lifespan` 给三条常驻协程(GameLoop / Timer / PersistWriter)挂的 done-callback 兑现:非取消而退出即落 CRITICAL(0083 之前只有这行文档,没有实现——退出只会在 GC 时以 asyncio 的 "Task exception was never retrieved" 冒个泡)。
+
 ## 结构化日志 + 上下文绑定
 
 日志一律结构化成 JSON,便于内网用 `jq` 按字段过滤。

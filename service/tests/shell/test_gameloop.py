@@ -133,3 +133,97 @@ def test_audit_never_logs_hole_cards_or_deck(caplog):
             code = c.rank.value + c.suit.value
             assert code not in text, f"hole card {code} leaked into logs"
     assert "deck" not in text.lower() and "牌堆" not in text  # 余牌也不入日志(英文 deck + 中文牌堆 detail)
+
+
+# ── 兜底范围(changes/0083 / BUG-7):唯一状态写者不得因单条命令而退出 ──
+
+def test_dispatch_exception_neither_escapes_nor_strands_the_rest(monkeypatch, caplog):
+    # commit 成功之后某个事件的派发崩了。两条要求:
+    #   ① 不得冒出去 —— 此前 `except` 只裹 reduce() 一行,这里的异常会一路杀掉唯一状态写者协程;
+    #   ② 不得连累同批其余事件 —— 丢一条 Persist = 手牌记录永久丢失,丢一条 TurnChanged = Timer 不装表、
+    #      该行动的人能无限拖住整桌。
+    # 且**不回 INTERNAL**:commit 已生效,回它等于骗客户端「什么都没发生」,还会诱导重试重复生效
+    # (error.md 定义 INTERNAL 是「工作副本已丢、world 未动」)。改落 CRITICAL 留人工介入。
+    world = _two_watchers()
+    sh = Shell(world)
+    conns = sh.connect("alice", "bob")
+    real = sh.dispatcher.dispatch
+    seen = []
+
+    def first_one_explodes(ev):
+        seen.append(ev)
+        if len(seen) == 1:
+            raise RuntimeError("dispatch kaboom")
+        real(ev)
+
+    monkeypatch.setattr(sh.dispatcher, "dispatch", first_one_explodes)
+    with caplog.at_level(logging.CRITICAL):
+        sh.gameloop.handle(SitDown(origin="alice", seat=0))  # 不得抛
+    assert world.rooms["r1"].users_in_room["alice"] is UserStatus.SITTING_IN  # commit 已生效
+    assert not any(isinstance(m, ErrorMessage) for m in drain(conns["alice"]))  # 没有骗人的 INTERNAL
+    assert not any(r.levelno == logging.CRITICAL for r in caplog.records)  # 逐事件兜住了,没升级成半途态
+
+
+def test_post_commit_crash_logs_critical_instead_of_lying_to_client(monkeypatch, caplog):
+    # 崩在 commit 之后、且不在逐事件兜底射程内(这里用审计):world 已经改了 → 落 CRITICAL,不回 INTERNAL。
+    world = _two_watchers()
+    sh = Shell(world)
+    conns = sh.connect("alice")
+
+    def boom(events):
+        raise RuntimeError("audit kaboom")
+
+    monkeypatch.setattr(sh.gameloop, "_audit_applied", boom)
+    with caplog.at_level(logging.CRITICAL):
+        sh.gameloop.handle(SitDown(origin="alice", seat=0))  # 不得抛
+    assert world.rooms["r1"].users_in_room["alice"] is UserStatus.SITTING_IN  # commit 已生效
+    assert drain(conns["alice"]) == []  # 不回 INTERNAL(那会说成「world 未动」)
+    assert any(r.levelno == logging.CRITICAL and "world committed" in r.getMessage() for r in caplog.records)
+
+
+def test_checkout_exception_does_not_escape_handle(monkeypatch):
+    # checkout(工作副本深拷贝)崩:同样在旧 except 的射程之外。
+    world = _two_watchers()
+    sh = Shell(world)
+    conns = sh.connect("alice")
+
+    def boom(world_, cmd):
+        raise RuntimeError("checkout kaboom")
+
+    monkeypatch.setattr(gameloop_mod.world_api, "checkout", boom)
+    sh.gameloop.handle(SitDown(origin="alice", seat=0))  # 不得抛
+    assert world.rooms["r1"].users_in_room["alice"] is UserStatus.WATCHING  # commit 之前崩 ⇒ world 一字节未动
+    a = drain(conns["alice"])
+    assert len(a) == 1 and isinstance(a[0], ErrorMessage) and a[0].code.value == "INTERNAL"
+
+
+async def test_run_survives_crashing_command_and_keeps_processing(monkeypatch):
+    # architecture.md「接住 → 继续处理下一条」:第一条命令的 dispatch 崩,GameLoop 仍在,第二条照常处理。
+    import asyncio
+
+    world = _two_watchers()
+    sh = Shell(world)
+    sh.connect("alice", "bob")
+    real = sh.dispatcher.dispatch
+    calls = {"n": 0}
+
+    def flaky(ev):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first dispatch kaboom")
+        real(ev)
+
+    monkeypatch.setattr(sh.dispatcher, "dispatch", flaky)
+    gl = asyncio.create_task(sh.gameloop.run())
+    try:
+        sh.inbox.put_nowait(SitDown(origin="alice", seat=0))
+        sh.inbox.put_nowait(SitDown(origin="bob", seat=1))
+        await asyncio.wait_for(sh.inbox.join(), timeout=1.0)
+        assert not gl.done()  # 唯一状态写者还活着
+        assert world.rooms["r1"].seats[1] is not None  # 第二条命令照常处理
+    finally:
+        gl.cancel()
+        try:
+            await gl
+        except asyncio.CancelledError:
+            pass

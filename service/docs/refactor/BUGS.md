@@ -20,9 +20,9 @@
 
 ## high
 
-### BUG-1 · 顶替链 A←B←C 复活已离线用户,座位筹码永久泄漏
+### ~~BUG-1 · 顶替链 A←B←C 复活已离线用户,座位筹码永久泄漏~~ —— **0083 已修**
 
-- **来源**:[0074·E](changes/0074-code-defect-hunt.md)
+- **来源**:[0074·E](changes/0074-code-defect-hunt.md) · **修于 [0083](changes/0083-shell-lifecycle-hardening.md)**(`_displace` 后复查 `is_current`,不是当前连接就地退出;A←B←C 交错回归测钉住「不复活 + 清理照常触发 + 筹码退回」)
 - **症状**:座位被永久占住、里面的筹码再也回不到全局积分。
 - **机理**:B 在 `_displace(A)` 的 await 窗口内被 C 顶掉;B 恢复执行后不知道自己已经不是当前连接,仍然去 `cancel_cleanup` + 投 `Connect`,于是把已经 `OFFLINE` 的用户复活成在线,同时抹掉了占座清理表里的定时项。清理再也不会触发。
 - **修法**:`_displace` 之后复查 `is_current`,不是当前连接就直接返回,不做后续动作。
@@ -48,33 +48,34 @@
 - **修法**:`Timeout` 补带 `hand.seq`,与 `epoch` 双键校验。可与 BUG-2 同批(都动手牌标识)。
 - **要补的测试**:构造跨手交错,让上一手的 `Timeout` 在新手开始后才到达。
 
-### BUG-4 · 改昵称窗内发生 ws 顶替,活连接永久挂在旧 nick 键上
+### ~~BUG-4 · 改昵称窗内发生 ws 顶替,活连接永久挂在旧 nick 键上~~ —— **0083 已修**
 
-- **来源**:[0074·F](changes/0074-code-defect-hunt.md)
+- **来源**:[0074·F](changes/0074-code-defect-hunt.md) · **修于 [0083](changes/0083-shell-lifecycle-hardening.md)**(连接改为全部 await 之后**当场**按 old_nick 查 + 归属校验;两个方向各一条回归测:窗内顶替要重挂到活连接、窗内他人占键不许误挂)
 - **症状**:用户明明在线,却收不到任何消息。
 - **机理**:改昵称流程里捕获的 `live_conn` 在 DB await 窗口内已被顶替;`rekey` 因此走 `else` 分支,只改了那个**已死对象**的 `.nick`,真正的活连接还挂在 `old_nick` 键下。
 - **修法**:`rekey` 前后按当前连接对象重新解析,而不是用窗口前捕获的引用。
 - **注意**:0074·C 的窗后复查**不覆盖**这条路径——那修的是「窗内进房」,这条是「窗内顶替」。
 
-### BUG-5 · 优雅关闭可能整体跳过,未落库积分全丢
+### ~~BUG-5 · 优雅关闭可能整体跳过,未落库积分全丢~~ —— **0083 已修**
 
-- **来源**:[0074·I / 0074·J](changes/0074-code-defect-hunt.md)(两条同源,合并登记)
+- **来源**:[0074·I / 0074·J](changes/0074-code-defect-hunt.md)(两条同源,合并登记)· **修于 [0083](changes/0083-shell-lifecycle-hardening.md)**(`yield` 包 `try/finally`;`_cancel_and_await` 按 `current_task().cancelling()` + `t.cancelled()` 区分两种取消)
 - **症状**:进程关闭时,还在写缓冲里没落库的积分变更全部丢失,DB 连接与协程泄漏。
 - **机理**:两处:
   - `_cancel_and_await` 会吞掉 `stop()` **自身**收到的取消,导致关闭超时和强制中止失效;
   - lifespan 的 `yield` 没有 `try/finally`,关闭路径上一旦抛异常或被取消,`shell.stop()` 被整体跳过,drain 根本不执行。
 - **修法**:`yield` 包 `try/finally` 保证 `stop()` 必被调用;`_cancel_and_await` 区分「被取消的是子任务」还是「是我自己」,后者要向上传播。
 
-### BUG-6 · 慢客户端被丢弃时只 unregister,不关 ws、不取消协程
+### ~~BUG-6 · 慢客户端被丢弃时只 unregister,不关 ws、不取消协程~~ —— **0083 已修**
 
-- **来源**:[0072·N2](changes/0072-architecture-audit.md)
+- **来源**:[0072·N2](changes/0072-architecture-audit.md) · **修于 [0083](changes/0083-shell-lifecycle-hardening.md)**(`Connection.receiver_task` + drop 时 cancel Sender 与 Receiver;**修法与本条原「修法」不同**:只关 ws 堵不住「读慢写健」的客户端,关闭帧和数据一样发不出去)
 - **症状**:出现幽灵命令源;同一个 nick 同时挂着两个 Receiver。
 - **机理**:`dispatch._drop_connection` 只把连接从表里摘掉,既不关 ws 也不 cancel Sender/Receiver 协程。那条连接还能继续往 `inbox` 投命令。需要非对称慢客户端才触发(读慢、写健康)。
 - **修法**:对齐 `receiver.py` 的退出清理路径——drop 时一并关 ws + cancel 协程。
 
-### BUG-7 · GameLoop 的异常兜底范围太窄,唯一状态写者可能被杀
+### ~~BUG-7 · GameLoop 的异常兜底范围太窄,唯一状态写者可能被杀~~ —— **0083 已修(并降级为「潜在缺口」)**
 
-- **来源**:[0072·N3](changes/0072-architecture-audit.md)
+- **来源**:[0072·N3](changes/0072-architecture-audit.md) · **修于 [0083](changes/0083-shell-lifecycle-hardening.md)**(兜底提到罩住 checkout/commit/派发 + 三条常驻协程挂 watchdog)
+- **登记时的定性偏重,更正如下**:0083 的对抗核实把 `commit`/`_audit_applied`/`dispatch`/`checkout` 逐条走了一遍,**当前代码里没有可达的抛出路径**(commit 是一次属性赋值加一次 dict 操作;dispatch 的两处 `QueueFull` 早已各自兜住;checkout 深拷的全是普通 dataclass)。所以它是**潜在缺口**而非活的崩溃路径——0072 当初也只给了结构性论证、没给出触发者。修它的理由是防御性的:兜底缺口 + 无告警的组合,会让**日后新增的任何一行**(例如 0083 自己给 `Connection` 加字段)把一个 AttributeError 变成永久哑掉的服务器。
 - **症状**:某条命令处理中途抛异常,整个 GameLoop 协程退出,服务器不再处理任何命令,且无人察觉。
 - **机理**:`handle` 的 `except Exception` 只裹住 `reduce()` 一行;`commit` / `_audit_applied` / `dispatch` 抛出的异常会冒出去杀掉唯一的状态写者协程,而且没有 watchdog。这与 [architecture.md](../architecture.md)「接住 → 继续处理下一条」的承诺不符。
 - **修法**:把 `except` 提到裹住 commit/dispatch;另外给 run task 加 done-callback 做重启或告警。
@@ -144,6 +145,11 @@
 | 0074·D | `PersistWriter.drain()` 的 deadline 罩不住 flush 本身 → 进程无法优雅退出 | 0074 |
 | 0074·G | 改昵称落在 DM 路由的 DB await 窗内 → 私信静默不落库 | 0074 |
 | 0074·H | `_buy_in` 的「局中」判据看状态而非「是否本手 Player」 → 手牌记录凭空多筹码 | 0074 |
+| 0074·E(BUG-1)| 顶替链 A←B←C 复活已 OFFLINE 用户 + 抹清理表 → 座位筹码永久泄漏 | 0083 |
+| 0072·N2(BUG-6)| 慢客户端被丢弃只摘键,ws 与 Receiver 都还活着 → 幽灵命令源 + 同 nick 双 Receiver | 0083 |
+| 0072·N3(BUG-7)| GameLoop 兜底只罩 `reduce()`,且常驻协程死了无人告警(潜在缺口,非活路径)| 0083 |
+| 0074·F(BUG-4)| 改昵称窗内 ws 顶替 → `rekey` 只改死对象,活连接永久挂旧键 | 0083 |
+| 0074·I/J(BUG-5)| `_cancel_and_await` 吞自己的取消;lifespan `yield` 无 `try/finally` → drain 整体跳过 | 0083 |
 
 ## 误报留档(别再「发现」一次)
 

@@ -44,7 +44,7 @@ class Presence:                       # app/shell/presence.py
 
 1. **判定**:`current_room(old_nick) is None`(人在大厅)才允许,否则 REST 403;判定只读已提交 world。`old_nick` 以 DB 为准,因为会话表可能滞后(0065 决策 1)。ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 码保留给未来 ws 形态。
 2. **改库**:CAS 更新 DB `nickname`,条件是 `WHERE id=uid AND nickname=old_nick`,并发双改名只有一个赢、唯一约束兜住撞名;再 `SessionStore.rename_nickname` 更新该账号全部会话。大厅用户不在 `world.users`,所以这一步不触碰 core 权威键。
-3. **连接重挂**:若 `old_nick` 此刻有 live 连接,用 `rekey(conn, new)` 重挂,handler 在 await 前先捕获该连接对象。`rekey` 按对象 `is` 判定,防止 await 窗口内该键被并发 rename/顶替动过时误挂他人连接;`rename(old, new)` 是按键版,保留给不涉并发窗口的调用方。
+3. **连接重挂**:若 `old_nick` 此刻有 live 连接,用 `rekey(conn, new)` 重挂。**连接在全部 await 之后才查**(0083,那之后到 rekey 全程同步、对事件循环原子);0065 曾改成 await 前捕获,为的是防「窗内该键被并发 rename/顶替动过 → 误挂他人连接」,但那样又踩另一头:窗内本人被顶替时捕获的就是死对象,`rekey` 落 else 分支只改死对象的 `.nick`,活连接永久挂在旧键下、用户在线却收不到任何消息。两头都要堵,所以现在是「晚查 + 归属校验」:加密连接比会话账号名(一个账号可有多个会话,故不比对象),dev 明文连接比 `session_id`(dev 端点建连时盖成握手 nick);`rekey` 自身的 `is` 判定留作第二道。`rename(old, new)` 是按键版,保留给不涉并发窗口的调用方。
 
 ```python
 def rename(self, old: str, new: str) -> None:        # ConnectionManager

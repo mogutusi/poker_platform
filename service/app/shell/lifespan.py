@@ -91,6 +91,19 @@ def _channel_for(session: Session) -> SecureChannel:
     return session.channel
 
 
+def _watchdog(task: "asyncio.Task") -> None:
+    # 常驻协程的死亡告警(0083 / BUG-7):GameLoop/Timer/PersistWriter 三条循环只应因关闭时的 cancel 而结束。
+    # 任何其它退出都意味着「进程还在、ws 还连着,但状态机已经哑了」——这是最难察觉的故障,必须留 CRITICAL。
+    # 正常关闭走 cancel,不落噪声。
+    if task.cancelled():
+        return
+    exc = task.exception()  # 已排除 cancelled ⇒ 不会抛
+    if exc is not None:
+        log.critical("shell task %s died: %r", task.get_name(), exc, exc_info=exc)
+    else:
+        log.critical("shell task %s exited unexpectedly", task.get_name())
+
+
 class DevShell:
     # 持有 dev shell 全部组件/协程。__init__ 只建脱 IO 部件;setup() 异步建表/种子/载入 + 建 world 依赖部件。
     def __init__(self, engine: AsyncEngine | None = None) -> None:
@@ -123,14 +136,21 @@ class DevShell:
         self.presence = Presence(self.world, self.conns)  # 只读聚合,持稳定 world 引用(commit 原地改其 .users/.rooms)
 
     def start(self) -> None:
-        # 起 GameLoop + Timer + PersistWriter(须先 await setup() 建好 gameloop)。
+        # 起 GameLoop + Timer + PersistWriter(须先 await setup() 建好 gameloop)。三者都是不该返回的常驻循环,
+        # 各挂一个 watchdog:非取消而退出即落 CRITICAL(0083 / BUG-7)。
         assert self.gameloop is not None, "DevShell.start() 前须先 await setup()"
         self._gameloop_task = asyncio.create_task(self.gameloop.run(), name="gameloop")
         self._timer_task = asyncio.create_task(self.timer.run(), name="timer")
         self._persistwriter_task = asyncio.create_task(self.persistwriter.run(), name="persistwriter")
+        for t in (self._gameloop_task, self._timer_task, self._persistwriter_task):
+            t.add_done_callback(_watchdog)
 
     async def _cancel_and_await(self, *tasks: "asyncio.Task | None") -> None:
-        # cancel 一组 task 并收割(吞 CancelledError;意外死亡记 ERROR 但不阻断关闭——尽力 drain)。
+        # cancel 一组 task 并收割(意外死亡记 ERROR 但不阻断关闭——尽力 drain)。
+        # **两种 CancelledError 必须分开**(0083 / BUG-5):此前一律吞掉,连「取消是冲 stop() 自己来的」也吞,
+        # 于是关闭超时与强制中止形同虚设——上层再怎么 cancel,stop() 都赖着不走。
+        # 判据取两条相与:`current.cancelling() > 0` = 确实有人 cancel 了我(3.11+ 精确计数);
+        # `not t.cancelled()` = 子任务并非「被我 cancel 掉」这一预期结局。任一成立就上抛。
         for t in tasks:
             if t is not None:
                 t.cancel()
@@ -140,7 +160,9 @@ class DevShell:
             try:
                 await t
             except asyncio.CancelledError:
-                pass
+                current = asyncio.current_task()
+                if (current is not None and current.cancelling() > 0) or not t.cancelled():
+                    raise  # 取消冲我来的 → 上抛,让关闭超时真的能中止 stop()
             except Exception:
                 log.exception("task %s crashed during shutdown", t.get_name())
 
@@ -160,7 +182,7 @@ class DevShell:
                 except asyncio.QueueEmpty:
                     break
                 try:
-                    self.gameloop.handle(cmd)  # 同步;内部已兜 reduce 崩溃,这里再兜 checkout/commit 等
+                    self.gameloop.handle(cmd)  # 同步;内部已兜住整条链(0083),这里是不信任兜底的第二道
                 except Exception:  # 单条命令处理异常不得中断关闭(否则 dispose 被跳、连接池泄漏)——尽力 drain
                     log.exception("command %s crashed during shutdown drain", type(cmd).__name__)
                 finally:
@@ -189,8 +211,13 @@ def create_app() -> FastAPI:
         await shell.setup()  # 异步建表 + 种子 + 载入 + 建 world/gameloop(serving 前完成)
         shell.start()
         log.info("dev shell up: room=%s users=%s", gameconfig.DEV_ROOM, gameconfig.DEV_USERS)
-        yield
-        await shell.stop()
+        try:
+            yield
+        finally:
+            # 关闭无条件跑到 stop()(0083 / BUG-5):此前 `yield` 裸着,关闭路径上一旦抛异常或被取消,
+            # stop() 被整体跳过 → drain 根本不执行,写缓冲里未落库的积分全丢、engine 连接池泄漏。
+            # 「关闭必须 drain」是 connection.md / db.md 的关闭契约,不能挂在「关闭一切顺利」这个前提上。
+            await shell.stop()
 
     app = FastAPI(lifespan=lifespan, title="poker dev shell (plaintext, dev-only)")
     app.state.shell = shell

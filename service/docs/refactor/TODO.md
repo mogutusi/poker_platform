@@ -112,8 +112,8 @@
 
 **新增缺陷(第五次工作流 N 系列对抗验证坐实,均 medium;台账 0072「N 系列」节)**:
 - [x] **0072·N1** 离房→flush 窗口内快速重进房静默回退积分 — **0073 已修**:运行期落库屏障(`JoinRoom` 载入前 `inbox.join()` + `PersistWriter.barrier()`,fail-closed);N1 主钉 e2e(同连接 + 跨连接 Cleanup 驱逐两路)+ 关屏障必红反证 + 三视角复审抓修毒丸在飞洞,712 全绿
-- [ ] **0072·N2** 慢客户端 `dispatch._drop_connection` 只 unregister 不 close ws/不 cancel Sender-Receiver → 幽灵命令源 + 同 nick 双 Receiver(需非对称慢客户端:读慢写健)。对齐 receiver.py 退出清理路径:drop 时关 ws + cancel —— 详见 [BUGS.md#BUG-6](BUGS.md)
-- [ ] **0072·N3** `GameLoop.run` 无兜底:handle 的 `except Exception` 只裹 reduce() 一行,commit/_audit_applied/dispatch 抛异常冒出杀唯一状态写者协程且无 watchdog,与 architecture.md「接住→继续下一条」不符。把 except 提到裹住 commit/dispatch,或给 run task 加 done-callback 重启/告警
+- [x] **0072·N2** 慢客户端被丢弃只摘键 → 幽灵命令源 + 同 nick 双 Receiver — **0083 已修**:`Connection.receiver_task` + drop 时 cancel Sender 与 Receiver。**修法与登记时不同**:只关 ws 堵不住「读慢写健」的非对称慢客户端(关闭帧和数据一样发不出去),故改为 cancel(同步,不违反「dispatch 不 await」);顺带补上 `stop()` 收 Sender 时按 `online_nicks()` 遍历、够不着已被 drop 的连接那个泄漏
+- [x] **0072·N3** GameLoop 兜底只罩 `reduce()` + 常驻协程死了无人告警 — **0083 已修**:`handle` 兜底提到罩住 checkout/commit/审计/派发 + GameLoop·Timer·PersistWriter 三条常驻协程挂 watchdog(非取消退出即 CRITICAL,兑现 log.md 早就写着的那条)。**定性更正**:对抗核实逐条走过后确认当前无可达抛出路径,是潜在缺口而非活的崩溃路径,详见 [BUGS.md#BUG-7](BUGS.md)
 - [ ] **0072·N5** `SessionStore.revoke` 全仓零调用者——无登出端点/无管理员吊销通道,泄露应对(issue --reset)后已建会话仍活至 SESSION_TTL。补吊销通道(登出端点 或 name→sessions 索引供改密/reset 时撤销),或若确认 v1 不做则在 auth.md 显式记档「不吊销、靠 TTL+重启」
 - [ ] **0072·N9** StateSnapshot 不投影 `room.entry_vote` → 顶替/重连快照清空进行中免盲投票面板、重连的必需投票人不知有票。给 StateSnapshot 加投票公开态投影(或 reduce 重连臂补发 FreeEntryVoteUpdated)
 - [ ] **0072·N-e32** Broadcast 收件人取 commit 后成员表:LeaveRoom 触发 fold-to-one 终手时,离场者收不到同批 PlayerActed/HandShowDown/HandEnded(看不到自己参与底池的结算)。离场结算事件改 Personal 补发给离场者,或调整驱逐与结算广播的顺序
@@ -131,11 +131,11 @@
 - 注:**裸库脆弱面记档**——`ttxsgm` 的 SM4 去填充无校验、非对齐密文抛异常(实跑复现),当前被各 app 入口守卫挡住(MAC 先行 / 长度预校验)故非缺陷;**日后新增任何直喂 `sm4_cbc_*` 的入口,必须自带同款长度守卫**
 - [x] **0074·C** 改昵称「仅大厅可改」检查与内存联动之间隔两次 DB await:窗内 JoinRoom → world 挂 old_nick 而 DB/会话/连接键变 new_nick,**四处永久发散**(幽灵成员收不到广播 / 用户一切命令 NOT_IN_ROOM 无法自救 / 座位筹码永不回收 / 可二次进房复制积分)— **已修**(窗后复查 + CAS 回滚 + 403)+ 变异验证
 - [x] **0074·D** `PersistWriter.drain()` 的 deadline 只在循环顶部判,罩不住 flush 本身 → DB 挂起时 drain 无限等、`stop()` 永不返回、进程无法优雅退出(非 0073 引入,0025 起就在)— **已修**(`wait_for(flush_once, remaining)` + 节流收进 deadline)+ 变异验证
-- [ ] **0074·E**(high)顶替链 A←B←C:B 在 `_displace(A)` 的 await 窗内被 C 顶掉,恢复后仍 `cancel_cleanup` + 投 `Connect` → 复活已 OFFLINE 用户 + 抹掉占座清理表 → 座位/筹码永久泄漏。修复须在 `_displace` 后复查 `is_current` —— 详见 [BUGS.md#BUG-1](BUGS.md)
-- [ ] **0074·F**(medium)改昵称窗内 ws 顶替:119 行捕获的 `live_conn` 已被顶替,`rekey` 落 else 分支只改死对象 `.nick`,活连接永久挂旧键 → 用户在线却收不到消息。(0074·C 的复查不覆盖此路径) —— 详见 [BUGS.md#BUG-4](BUGS.md)
+- [x] **0074·E**(high)顶替链 A←B←C → 复活已 OFFLINE 用户 + 抹占座清理表 → 座位/筹码永久泄漏 — **0083 已修**:`_displace` 后复查 `is_current`,不是当前连接就地退出(不起 Sender / 不拆表 / 不投 Connect)。三连顶替交错回归测钉住「不复活 + 清理照常触发 + 桌上筹码退回」,并做了反向变异验证
+- [x] **0074·F**(medium)改昵称窗内 ws 顶替 → `rekey` 只改死对象,活连接永久挂旧键 — **0083 已修**:连接改为全部 await **之后**当场按 old_nick 查(那之后到 rekey 全程同步)+ 归属校验(按会话账号名;dev 明文无会话则认本人)。两个方向各一条回归测:窗内顶替要重挂到活连接、窗内他人占走旧键不许误挂
 - [x] **0074·G** 改昵称落在 DM 路由 DB await 窗内:`uids` 用旧 nick 建表却用被 `rekey` 就地改写的 `conn.nick` 查 → 私信静默不落库 + 假 INTERNAL(`route_dm_mark_read` 同款)— **已修**(进路由即快照 nick,建表/查表/投递全程同源)+ 变异验证
 - [x] **0074·H** `_buy_in` 的「局中」判据用 `users_in_room is PLAYING` 而非 `_player_in_hand` → 手内掉线者可给已锁筹座位加筹,手牌记录 initial/final 凭空多筹码 — **已修**(判据换 `_player_in_hand`)+ 变异验证。**实跑推翻了「`_set_user_status` 同款错位」**:那处被 `userself_can_change_to` 挡住(OFFLINE 起身 → INVALID_STATUS_TRANSITION),不可达
-- [ ] **0074·I/J**(medium)`_cancel_and_await` 吞掉 `stop()` 自身的取消(优雅关闭超时失效);lifespan 的 `yield` 无 try/finally(关闭异常时 `stop()` 整体跳过 → 未落库积分全丢 + engine 泄漏) —— 详见 [BUGS.md#BUG-5](BUGS.md)
+- [x] **0074·I/J**(medium)关闭路径两处失守 — **0083 已修**:lifespan `yield` 包 `try/finally`(关闭无条件跑到 `stop()`);`_cancel_and_await` 按 `current_task().cancelling()` + `t.cancelled()` 区分「我 cancel 的子任务」与「取消冲我来的」,后者上抛。注:cancel 一个正等着别的 task 的 task,asyncio 会连它等的 future 一起 cancel ⇒ 只看 `t.cancelled()` 判不出来,`cancelling()` 不可省(有测钉)
 
 ## 前端(0076 起由本团队开发)— 台账见 [changes/0076](changes/0076-frontend-merge.md)
 

@@ -41,6 +41,7 @@ class Connection:                    # 一条物理 ws 的全部 shell 状态;�
     channel: SecureChannel | None    # 引用会话的信道;None = 明文 dev 帧(?nick=),非 None = 加密帧(?sid=,0061)
     session: Session | None          # 所属会话引用;收/发帧前比对 expires_at 做 exp 兜底(0070);dev 明文为 None
     sender_task: asyncio.Task | None = None
+    receiver_task: asyncio.Task | None = None   # 本连接的 ws handler 自身;慢客户端被丢弃时据此终结它(0083)
     # 注:用户在哪个房间是 world 状态(world.users[nick].room),不是连接字段。
     # 注:seq/密钥挂 Session,channel 只是引用;顶替/重连复用同一会话信道,seq 连续。
 
@@ -129,7 +130,7 @@ class Dispatcher:                                        # 持 world(只读)/con
             conn.outbound.put_nowait(msg)
         except asyncio.QueueFull:                        # ≤20 人正常不会满;满 = 该连接 Sender 卡死
             log.warning("slow client dropped nick=%s", conn.nick)
-            self._drop_connection(conn)                  # unregister + 投 Disconnect(inbox 满则丢 + CRITICAL);重连靠 StateSnapshot 补回
+            self._drop_connection(conn)                  # 摘键 + 终结其 Sender/Receiver + 投 Disconnect(inbox 满则丢 + CRITICAL);重连靠 StateSnapshot 补回
 ```
 
 路由全按 nick,因为连接按 nick 全局唯一:
@@ -156,6 +157,8 @@ class Dispatcher:                                        # 持 world(只读)/con
 ### 2. 登记
 
 建 `Connection(nick=…)` → `old = conns.register(conn)`。`old` 非空即顶替(见「顶替语义」):关 `old.ws`、cancel `old.sender_task`,不投 `Disconnect`。
+
+**关旧 ws 是一个很宽的 await 窗口,窗后必须复查「我还是当前连接吗」**(0083)。窗内自己可能已被第三条连接顶掉——顶替恰恰常发生在旧 socket 假死时,而关一条假死的 socket 要等 close 超时,窗口宽达十几秒。不复查就会:拆掉别人刚装的占座清理表,再投一条 `Connect` 把已 `OFFLINE` 的用户复活成在线;而 `Cleanup` 只回收 `OFFLINE` 座位,于是座位与桌上筹码永久泄漏。复查不通过就地返回:不起 Sender、不拆表、不投 `Connect`,静默退出(同顶替语义)。
 
 ### 3. 起 Sender
 
@@ -203,6 +206,10 @@ class Dispatcher:                                        # 持 world(只读)/con
 1. `conns.unregister(conn)`:只删自己,顶替场景自动跳过。
 2. 仅当 `is_current` 为真才 `arm_cleanup(nick)` + 投 `Disconnect(nick)`。被顶替的旧连接 `is_current=False`,静默退出;否则会把刚重连的人误标 OFFLINE。0070 定下的规矩:凡投 `Disconnect` 处必装占座窗口表,`dispatch._drop_connection` 同样适用。
 3. 拆表由**新连接**做:它在自己的「1. 握手鉴权」之后、投 `Connect` 之前 `cancel_cleanup(nick)`(不是在本节的 `unregister` 之后)。竞态漏拆由 reduce 的 OFFLINE staleness 兜底(staleness = reduce 进门先查命令是否还新鲜,不新鲜就忽略)。
+
+> **这段清理必须全程无 await。** 它和 `dispatch._drop_connection` 是同一个 nick 上仅有的两处「摘键 + 投 `Disconnect`」;两边都对事件循环原子,所以无论谁先跑,另一边看到的都是「我已经不是当前连接」,`Disconnect` 恰好一份。往这里加任何 await(哪怕只是「礼貌地」关一下 ws)都会重新打开窗口、变成双份(0083)。
+
+**慢客户端被 dispatch 丢弃**用同一套退出语义,但由 dispatch 主动发起:摘键 → cancel 该连接的 Sender 与 Receiver → 装表 + 投 `Disconnect`。只摘键不够——触发条件正是「读慢写健」的非对称慢客户端:它的下行堵着(所以 `outbound` 才会满)、上行却畅通,Receiver 会继续把它的帧变成命令投进 `inbox`,成为一条「已经不存在的连接」仍在驱动状态机的幽灵命令源;而且它重连时 `register` 返回 `old=None`(键早被摘掉),不触发顶替,于是同一个 nick 同时挂着两个 Receiver(0083)。cancel 是同步的,不违反「dispatch 全程不 await」。
 
 reduce 收到 `Disconnect` 分三类:
 
@@ -269,7 +276,7 @@ per-join 载入已落地([0030](refactor/changes/0030-p4-per-join-wire-load.md))
 3. 加解密只在 ws 边界(Receiver 验解、Sender 加密),`outbound` 装明文,core 不知有加密。
 4. 顶替/注销/Disconnect 都带连接身份判定(`is`/`is_current`),杜绝旧连接误删新连接、误标 OFFLINE。
 5. 连接绑 nick(全局唯一),不绑房间;广播成员 = `world` 房间的 `users_in_room`,按 nick 取连接,无连接者跳过。
-6. 队列有界,满即判慢客户端:丢连接 + `Disconnect`,绝不阻塞 GameLoop(见 [architecture.md](architecture.md))。
+6. 队列有界,满即判慢客户端:丢连接(摘键 + 终结其 Sender/Receiver 协程)+ `Disconnect`,绝不阻塞 GameLoop(见 [architecture.md](architecture.md))。
 7. 关闭必须 drain(见 [db.md](db.md))。
 
 ## 待定 / 未设计

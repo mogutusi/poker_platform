@@ -125,7 +125,7 @@ POST  /user/nickname      →  信封内 { new_nickname } → { status:"ok", nic
   1. `current_room(old_nick) is None`(即在大厅)才允许。`old_nick` 以 DB 为准,因为会话表可能滞后。
   2. CAS 同步直写 DB:`user_writes.update_nickname`,条件 `WHERE id=uid AND nickname=old_nick`。「CAS」= 只在旧值仍是预期值时才写。同账号并发双改名只有一个赢,输的那个 0 命中 → 409,并跳过内存联动,防止 DB / 会话表 / 连接键三处发散。
   3. `SessionStore.rename_nickname`,改该账号的全部会话。
-  4. 有 live 连接则 `ConnectionManager.rekey(conn, new)`。`conn` 是改名 handler 在 await 前捕获的那个对象,用 `is` 判定要不要重挂,防止 await 窗内误挂到别人的连接上。
+  4. 有 live 连接则 `ConnectionManager.rekey(conn, new)`。**连接在全部 await 之后才查**(0083):窗前捕获的引用可能已被 ws 顶替、成了死对象,重挂它等于只改一个没人用的对象、把真正的活连接永久留在旧键下。防「误挂他人连接」的责任改由归属校验承担——加密连接比会话账号名,dev 明文连接比 `session_id`(dev 端点建连时就把它盖成握手用的 nick);`rekey` 自身的 `is` 判定作为第二道。
   - 后两步纯同步、无 await,所以是原子的;DB 失败或 CAS 输,则内存完全未动。
 - 唯一性:`nickname` 全局唯一,两道防线——预查 `nickname_taken` → 409;写时唯一约束兜底,`IntegrityError` → 409,它盖住预查与写之间的 await 窗。
 - 错误分层(承 0062/0064):信封不过 → 401;在房 → 403;撞名、CAS 输 → 409;同名、空、首尾空白(` Bob` 这种冒充面)、超长(>50)、非串 → 400;DB 错、presence 未接线 → 500。

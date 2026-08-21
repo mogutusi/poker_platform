@@ -17,7 +17,7 @@ from app.auth.session import SessionStore
 from app.db.queries import load_identity_by_name, load_password_for_change, load_profile_by_name, nickname_taken
 from app.db.user_writes import update_nickname, update_password_hash
 from app.rest.secure import SecureRequest, SecureResponse, open_request, seal_response
-from app.shell.connection import ConnectionManager
+from app.shell.connection import Connection, ConnectionManager
 from app.shell.presence import Presence
 
 log = logging.getLogger(__name__)
@@ -80,6 +80,14 @@ def make_profile_router(
     return router
 
 
+def _belongs_to(conn: Connection, account: str, dev_key: str) -> bool:
+    # 这条连接是不是 `account` 这个账号的?加密连接看会话上的账号名;dev 明文连接无会话,退回 dev 端点的
+    # 不变量:`Connection.create(nick=nick, session_id=nick, …)`,所以 session_id 就是它握手时报的那个 nick。
+    if conn.session is not None:
+        return conn.session.name == account
+    return conn.session_id == dev_key
+
+
 def make_nickname_router(
     get_sessionmaker: Callable[[], async_sessionmaker[AsyncSession]],
     session_store: SessionStore,
@@ -116,7 +124,6 @@ def make_nickname_router(
             log.error("change_nickname: session name has no DB row")
             raise HTTPException(status_code=500, detail="internal")
         uid, old_nick = row  # 昵称以 DB 为准(会话表可能滞后)
-        live_conn = conns.get(old_nick)  # 此刻捕获本人 live 连接(await 窗后键可能已被并发改名动过,rekey 按对象不按键)
         if new_nick == old_nick:
             raise HTTPException(status_code=400, detail="nickname unchanged")  # 同名无意义,拒(rename 语义干净)
         if presence.current_room(old_nick) is not None:
@@ -153,10 +160,19 @@ def make_nickname_router(
                 log.critical("change_nickname: joined room mid-rename, DB revert missed uid=%s", uid)
                 raise HTTPException(status_code=500, detail="internal")
             raise HTTPException(status_code=403, detail="cannot change nickname in room")
-        # DB 已落定(CAS 赢家)→ 内存联动(纯同步、其间无 await ⇒ 原子):该账号全部会话 + 捕获的那个连接对象
-        # (rekey 按对象 `is` 判定,不按键 pop——防 await 窗内键已被他人 rename 占走时误挂他人连接,0065 自 review)。
+        # DB 已落定(CAS 赢家)→ 内存联动(纯同步、其间无 await ⇒ 原子):该账号全部会话 + 本账号的活连接。
         session_store.rename_nickname(session.name, new_nick)
-        if live_conn is not None:
+        # 连接**此刻**才查(0083 / BUG-4),不用 await 窗前捕获的引用:窗内本人若被 ws 顶替,那个引用已是死对象,
+        # `rekey` 会走 else 分支只改死对象的 `.nick`,真正的活连接永久挂在 old_nick 键下——用户在线却收不到任何消息。
+        # 从上面最后一次 await(CAS `update_nickname`)返回到这里全程同步 ⇒ 查表与 rekey 之间没有窗口。
+        # 归属校验补上 0065 早捕获本要防的另一头:窗内别人可能改名占走 old_nick 键,那时表里挂的是**他人**的连接,
+        # 不能把它重挂到我的新昵称上(那等于把别人的 socket 认领成我的——他之后发的每条命令都会按我的 uid 解析)。
+        # 加密连接按会话账号名判定(一个账号可有多个会话,故比 name、不比对象身份)。
+        # dev 明文连接没有会话(session=None),只能退一步按 dev 端点自己立的不变量判:它建连时 session_id 就盖成
+        # 那个 ?nick=,所以「session_id == old_nick」才算本人;光看「无会话就算本人」是 TOCTOU——DB 行是**建连时**
+        # 查的,到这一步 old_nick 名下早已没有行了。
+        live_conn = conns.get(old_nick)
+        if live_conn is not None and _belongs_to(live_conn, session.name, old_nick):
             conns.rekey(live_conn, new_nick)
         return seal_response(session, seq, {"status": "ok", "nickname": new_nick})
 

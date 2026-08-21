@@ -24,6 +24,7 @@ class Connection:
     channel: SecureChannel | None = None  # 逐会话安全信道(引用会话的 SecureChannel);None=明文 dev 帧、非 None=加密帧(Sender seal / Receiver open,见 changes/0061)
     session: Session | None = None  # 所属会话引用(exp 兜底强制到活连接:收/发帧前比对 expires_at,0070);dev 明文为 None
     sender_task: asyncio.Task | None = None  # 本连接 Sender 协程句柄;起 Sender 前为 None,退出/顶替时 cancel
+    receiver_task: asyncio.Task | None = None  # 本连接 Receiver(= ws endpoint)协程句柄;run_receiver 进门自填,慢客户端被丢弃时 cancel(见 dispatch._drop_connection,0083)
     chat_bucket: TokenBucket | None = None  # 房聊发件人维度令牌桶(每连接,见 messaging.md / ratelimit);create 时建满桶
     dm_bucket: TokenBucket | None = None  # 私信发件人维度令牌桶(每连接,见 messaging.md §私信);与房聊各一桶
     # 注:用户在哪个房间是 world.users[nick].room,不是连接字段(连接绑 nick、不绑房)。
