@@ -9,7 +9,7 @@ from tests.shell._fakes import make_conn
 
 
 def _msg(seat: int) -> UserStatusChanged:
-    return UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=seat)
+    return UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=seat, new_here=True)
 
 
 async def test_sender_preserves_enqueue_order():

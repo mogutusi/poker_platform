@@ -108,6 +108,7 @@ export interface UserStatusChanged {
   nickname: string;
   status: UserStatus;
   seat_position: number | null;
+  new_here: boolean | null;
 }
 
 export interface UserJoined {

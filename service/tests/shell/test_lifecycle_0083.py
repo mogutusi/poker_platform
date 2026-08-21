@@ -138,7 +138,7 @@ async def test_dropped_slow_client_stops_feeding_inbox():
     await _settle(lambda: sh.conns.is_current(conn) and conn.receiver_task is not None)
     sh.inbox_drain()  # 清掉接入时的 Connect(本用例不起 GameLoop,手工记账)
 
-    msg = UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=0)
+    msg = UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=0, new_here=True)
     while not conn.outbound.full():  # 灌满 outbound = 慢客户端的判定条件
         conn.outbound.put_nowait(msg)
     sh.dispatcher.dispatch(Broadcast(room="r1", msg=msg))  # 再来一条 → QueueFull → drop

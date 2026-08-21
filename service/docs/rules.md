@@ -73,6 +73,7 @@
 - `_start_hand` 末尾,把本手未被发牌的每个在座者置 `new_here=True`;换座/退房再进经 `SitDown`,本就新建 `new_here=True` 座位。
 - 坐出再回、没 ready 干等一手、断线跨手,靠这条重标兜住;被发牌者本手算参与,保持 `new_here=False`,连续每手玩的人不会被重标、不过度收费。
 - 重标在 eligibility/bootstrap 读 `new_here` 之后跑,不影响本手发牌集。
+- **重标要广播**(0084):`new_here` 值变了的座位各产一条 `Broadcast(UserStatusChanged)`(该消息带 `new_here` 字段),排在 `HandStarted`/`HoleCards` 之后。否则客户端只能从 `StateSnapshot` 得到这个标志,打完一手就过期——免盲投票的候选是「当前 `new_here` 座位」,界面因此判不准该不该给开票入口(0082·A)。只发真的变了的座位,稳态牌桌每手 0 条。
 
 等大盲入局时机 = 成为大盲那手(`blinds.sweep_entrant`):
 

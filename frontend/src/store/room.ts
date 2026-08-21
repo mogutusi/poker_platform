@@ -266,13 +266,21 @@ export function applyServerMessage(msg: ServerMessage): void {
         })
         break
       }
+      // new_here 一律照抄服务器(0084 起这条消息带它)。此前这里硬写 true,是前端在替服务器裁定规则
+      // ——虽然当时恰好猜对(_sit_down 建的座位确实 new_here=true),但它是猜,而且打完一手就过期:
+      // 服务端在 _start_hand 末尾重标 new_here 时以前不发任何事件。现在它会发,照收即可。
+      const newHere = msg.new_here ?? false
       const known = state.seats.find((s) => s.nickname === msg.nickname)
       const seats = known
-        ? state.seats.map((s) => (s.nickname === msg.nickname ? { ...s, status: msg.status, seat_position: msg.seat_position! } : s))
+        ? state.seats.map((s) =>
+            s.nickname === msg.nickname
+              ? { ...s, status: msg.status, seat_position: msg.seat_position!, new_here: newHere }
+              : s,
+          )
         : [
             ...state.seats,
             // 新入座的人:筹码要等 player_bought_in 或下一次快照才知道,先记 0。
-            { seat_position: msg.seat_position, nickname: msg.nickname, status: msg.status, points: 0, new_here: true },
+            { seat_position: msg.seat_position, nickname: msg.nickname, status: msg.status, points: 0, new_here: newHere },
           ]
       set({ seats, watchers: state.watchers.filter((n) => n !== msg.nickname) })
       break

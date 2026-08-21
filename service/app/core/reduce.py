@@ -196,6 +196,8 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
     hand.deck = deck[2 * n:]
 
     # 置 PLAYING / HAND_STARTED;入局者清 new_here / wait_for_big_blind;消费 waive 快照
+    # 先记下重标前的 new_here,供下面「只广播真的变了的座位」比对(0084)
+    new_here_before = {i: s.new_here for i, s in enumerate(room.seats) if s is not None}
     dealt_seats = {p.seat_position for p in players}
     for p in players:
         room.users_in_room[p.nickname] = UserStatus.PLAYING
@@ -219,6 +221,23 @@ def _start_hand(work: Work, cmd: StartHand) -> ReduceResult:
     hand.acting_position = betting.next_active_position(hand, 1)
 
     events = _start_hand_events(work.room_name, room, hand, small_blind, big_blind)
+    # `new_here` 变了的座位逐个广播(0084 补 0082·A 记的缺口)。此前这个标志**没有任何事件承载**——它只在
+    # `StateSnapshot.SeatView` 里,而重标恰恰发生在这里,于是客户端那份打完一手就过期,免盲开票入口无从判断。
+    # 次序同手尾状态广播(0082):排在 HandStarted / HoleCards 之后——先知道这手怎么开的,再知道各座位落到什么状态。
+    # 只发**真的变了**的:稳态牌桌每手 0 条,新人入局或有人错过一手时 1–2 条,不刷屏。
+    events.extend(
+        Broadcast(
+            room=work.room_name,
+            msg=UserStatusChanged(
+                nickname=s.nickname, status=status, seat_position=i, new_here=s.new_here
+            ),
+        )
+        for i, s in enumerate(room.seats)
+        if s is not None
+        and new_here_before.get(i) != s.new_here
+        # 座位在册而 users_in_room 没这人 = 内部不一致,跳过而不是让开局 KeyError(同 _room_chat 的防御臂)
+        and (status := room.users_in_room.get(s.nickname)) is not None
+    )
     if hand.acting_position is None:
         # born-all-in:全员投盲即 all-in、无人可行动 → 不等动作,立即结算本街、跑公共牌摊牌
         # (完成 0010 §6 待办:街推进入口须接住此手,否则手卡死、无人察觉)。
@@ -448,7 +467,7 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     room = work.room
     assert room is not None
     participants: list[ParticipantWrite] = []
-    settled_status: list[tuple[str, int, UserStatus]] = []  # 手尾状态转移,逐个广播(见下)
+    settled_status: list[tuple[str, int, UserStatus, bool]] = []  # 手尾状态转移(带 new_here),逐个广播(见下)
     for p in hand.players:
         s = room.seats[p.seat_position]
         assert s is not None
@@ -468,7 +487,8 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
             # 这个转移必须广播:客户端只能从事件知道状态变了,而「有座不在手 → 需重新 ready」
             # (connection.md)正是靠它。0082 之前手尾只发 HandEnded,客户端因此一直以为大家还 ready,
             # 界面上开不了第二手也点不到 Ready 按钮。
-            settled_status.append((p.nickname, p.seat_position, settled))
+            # new_here 就地取(此刻座位还在;本手离桌者的驱逐在本函数末尾,那之后就取不到了)
+            settled_status.append((p.nickname, p.seat_position, settled, s.new_here))
 
     record = HandRecordWrite(
         dedupe_key=f"{work.room_name}:{hand.seq}",
@@ -492,9 +512,9 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     events.extend(
         Broadcast(
             room=work.room_name,
-            msg=UserStatusChanged(nickname=nick, status=status, seat_position=seat),
+            msg=UserStatusChanged(nickname=nick, status=status, seat_position=seat, new_here=new_here),
         )
-        for nick, seat, status in settled_status
+        for nick, seat, status, new_here in settled_status
     )
     # 驱逐本手离桌者:退座位剩余筹码回全局积分 + 释座 + 移出(sorted 使产出顺序确定,便于断言)
     for nick in sorted(room.leaving):
@@ -595,7 +615,9 @@ def _connect(work: Work, cmd: Connect) -> ReduceResult:
     restored = _reconnect_status(room, nick)
     room.users_in_room[nick] = restored
     snap = _state_snapshot(room, work.room_name, for_nick=nick)
-    changed = UserStatusChanged(nickname=nick, status=restored, seat_position=_seat_of(room, nick))
+    changed = UserStatusChanged(
+        nickname=nick, status=restored, seat_position=_seat_of(room, nick), new_here=_new_here_of(room, nick)
+    )
     return [Broadcast(room=work.room_name, msg=changed), Personal(nick=nick, msg=snap)], None
 
 
@@ -701,7 +723,10 @@ def _disconnect(work: Work, cmd: Disconnect) -> ReduceResult:
         return [], Err(ErrorCode.INVALID_STATUS_TRANSITION, f"{cmd.nick} {current}→OFFLINE 非法")
     room.users_in_room[cmd.nick] = UserStatus.OFFLINE
     msg = UserStatusChanged(
-        nickname=cmd.nick, status=UserStatus.OFFLINE, seat_position=_seat_of(room, cmd.nick)
+        nickname=cmd.nick,
+        status=UserStatus.OFFLINE,
+        seat_position=_seat_of(room, cmd.nick),
+        new_here=_new_here_of(room, cmd.nick),
     )
     # 断线**不**触发免盲投票重算(rules.md ①.15 明写「不为断线单独触发通过」,0020 定):断线可逆——
     # 占座窗口内可重连、重连后仍是 READY_TO_PLAY 投票人,若此刻按「减员」结算等于剥夺其否决权(全票制);
@@ -808,7 +833,9 @@ def _sit_down(work: Work, cmd: SitDown) -> ReduceResult:
     # new_here=True(防躲盲);wait_for_big_blind 由玩家在 SitDown 声明入局方式(rules.md ①);买入后再 ready
     room.seats[cmd.seat] = Seat(nickname=nick, points=0, wait_for_big_blind=cmd.wait_for_big_blind)
     room.users_in_room[nick] = UserStatus.SITTING_IN
-    msg = UserStatusChanged(nickname=nick, status=UserStatus.SITTING_IN, seat_position=cmd.seat)
+    msg = UserStatusChanged(
+        nickname=nick, status=UserStatus.SITTING_IN, seat_position=cmd.seat, new_here=_new_here_of(room, nick)
+    )
     return [Broadcast(room=work.room_name, msg=msg)], None
 
 
@@ -1030,7 +1057,14 @@ def _set_user_status(work: Work, cmd: SetUserStatus) -> ReduceResult:
             events.append(pw)
     room.users_in_room[nick] = new_status
     seat_idx = _seat_of(room, nick)  # 起身后座位已腾空 → None
-    events.append(Broadcast(room=work.room_name, msg=UserStatusChanged(nickname=nick, status=new_status, seat_position=seat_idx)))
+    events.append(
+        Broadcast(
+            room=work.room_name,
+            msg=UserStatusChanged(
+                nickname=nick, status=new_status, seat_position=seat_idx, new_here=_new_here_of(room, nick)
+            ),
+        )
+    )
     # 该转移可能改变投票人集合(如 voter 坐出/起身退出投票)→ 重算免盲投票(rules.md ①.15)
     events += _maybe_resolve_entry_vote(work, room)
     return events, None
@@ -1042,6 +1076,12 @@ def _seat_of(room: Room, nick: str) -> int | None:
         if s is not None and s.nickname == nick:
             return i
     return None
+
+
+def _new_here_of(room: Room, nick: str) -> bool | None:
+    # 该 nick 座位的 new_here(下一手是否仍需付入局费,rules.md ①);未就座为 None,与 seat_position 同语义。
+    seat = _seat_of(room, nick)
+    return room.seats[seat].new_here if seat is not None else None  # type: ignore[union-attr]
 
 
 def _player_in_hand(hand: Hand | None, nick: str) -> Player | None:

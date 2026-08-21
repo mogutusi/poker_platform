@@ -37,7 +37,7 @@ def _broadcast_samples() -> list[S.ServerMessage]:
         S.PlayerActed(seat_position=0, nickname="A", action=PlayerActionType.BET, bet_amount=2, points=98,
                       status=PlayerStatus.ACTIVE, last_bet=2, pot=3, acting_position=1),
         S.HandEnded(winnings=(S.NickAmount(nickname="A", amount=3),), refunds=()),
-        S.UserStatusChanged(nickname="A", status=UserStatus.SITTING_IN, seat_position=0),
+        S.UserStatusChanged(nickname="A", status=UserStatus.SITTING_IN, seat_position=0, new_here=True),
         S.UserJoined(nickname="C"),
         S.UserLeft(nickname="A", seat_position=0),
         S.PlayerBoughtIn(nickname="A", seat_position=0, amount=64, seat_points=64),

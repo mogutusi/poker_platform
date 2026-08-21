@@ -152,6 +152,7 @@ start_hand 后你会收到:
 - `acting_position` 是 `players[]` 数组的**下标**,不是座位号。"轮到谁" = `players[acting_position]`,他坐哪 = `.seat_position`。
 - `player_action` 的 `bet_amount` 是**本街目标总额,不是增量**:跟注 = 把它设成当前 `last_bet`;加注 = 设成更大的数;all-in = 设成自己的全部。
 - 你**永远收不到别人的底牌**(广播消息里结构上就没有这个字段),只有三处例外:私发给你的 `hole_cards`、摊牌的 `hand_show_down.reveals`、快照里的 `your_hole_cards`(只有你自己的)。渲染时对手的牌一律牌背,摊牌才翻。
+- `user_status_changed` 带一个 `new_here`:该座位下一手**是否仍需付一个大盲才能入局**(防躲盲,新人和错过上一手的人都算),未就座时为 `null`。**别自己推**——它在一手开始时由服务器重标(被发牌的人清掉,没被发牌的人重新标上),重标时服务器会补发这条消息给你,值真的变了才发,所以稳态牌桌上一手一条都不会来。免盲投票的候选就是当前 `new_here` 的座位。
 - 房聊历史(`fetch_room_chat`)只有最近 N 条且**随房间销毁而消失**——人走光房间就没了,之后建的同名房是全新历史。
 - 聊天文本里的表情是 `[code]` 形式的文本 token(如 `[thumbs_up]`),用 `wire.gen.ts` 里的 `EMOJI_CATALOG` 渲染([`src/utils/emoji.ts`](src/utils/emoji.ts) 已经有现成的 tokenizer);不认识的 code 原样显示。
 - `error` 消息只回给你,带机器码 `code`(如 `NOT_YOUR_TURN`)和调试用的 `detail`。**按 `code` 映射你自己的中文文案,`detail` 别直接给玩家看**。

@@ -111,6 +111,7 @@ class UserStatusChanged(ServerMessage):
     nickname: str  # 状态变更者
     status: UserStatus  # 新 UserStatus(如 OFFLINE / SITTING_OUT / READY_TO_PLAY)
     seat_position: int | None  # 占座者的座位号;未就座(大厅/观战)为 None
+    new_here: bool | None  # 该座位下一手是否仍需付入局费(防躲盲,见 rules.md ①);未就座为 None,与 seat_position 同语义
 
 
 class UserJoined(ServerMessage):

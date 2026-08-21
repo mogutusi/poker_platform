@@ -75,9 +75,15 @@ test.describe('免盲投票', () => {
       await joinRoom(b, 'bob', room)
       await seatAndReady(b, 2)
 
+      // 开局前:两人都是新人,座位上应挂「等入局」(值来自服务器的 new_here,不是前端猜的)
+      await expect(a.locator('[data-owes-entry]')).toHaveCount(2)
+
       // 打完一手:A、B 就此成为已入局玩家
       await a.getByRole('button', { name: /Start Game/i }).click()
       await expect(a.locator('text=/In game/i')).toBeVisible({ timeout: 10_000 })
+      // 0084 的正题:开局末尾服务端清掉被发牌者的 new_here 并**广播**。此前这一步没有任何事件承载,
+      // 客户端那份来自进房快照的标志会一直挂着不掉 —— 这条断言就是钉住它。
+      await expect(a.locator('[data-owes-entry]')).toHaveCount(0, { timeout: 10_000 })
       for (const p of [a, b]) {
         const fold = p.getByRole('button', { name: /^Fold$/ })
         if (await fold.isEnabled().catch(() => false)) {
@@ -97,10 +103,14 @@ test.describe('免盲投票', () => {
       await joinRoom(c, 'carol', room)
       await c.locator('[data-empty-seat="3"]').click()
 
-      // 入口在两手之间一直可见:前端无法可靠知道 new_here(它只在 StateSnapshot 里,
-      // 服务端重标时不发事件),所以不预判能不能成,发出去让服务器裁决。
-      const openBtn = a.getByRole('button', { name: '发起免盲投票' })
+      // A 那边应看到 C 挂上「等入局」(sit_down 的 user_status_changed 现在自带 new_here)
+      await expect(a.locator('[data-owes-entry]')).toHaveCount(1, { timeout: 15_000 })
+
+      // 入口在两手之间一直可见:0084 之后候选能如实显示了,但「有没有合格投票人」仍是规则,
+      // 前端不算 —— 照旧发出去让服务器裁决,只是顺带告诉用户桌上有几个人在等入局。
+      const openBtn = a.getByTestId('open-free-entry-vote')
       await expect(openBtn).toBeVisible({ timeout: 15_000 })
+      await expect(openBtn).toContainText('1 人等入局')
       await openBtn.click()
 
       // 面板要说清在投什么、还差谁——全票制下「还差谁」比「几票」有用。

@@ -27,7 +27,7 @@ def _world():
 
 
 def _msg():
-    return UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=0)
+    return UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=0, new_here=True)
 
 
 def test_broadcast_reaches_connected_members_only():

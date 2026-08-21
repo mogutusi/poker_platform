@@ -96,10 +96,18 @@ function GameView() {
             isReady: seatView.status === "ready_to_play" || seatView.status === "playing",
           }
         : undefined
-      return { number: i + 1, player, isButton: i === state.buttonPosition }
+      // 欠一个入局盲(new_here):服务器给的事实,不是本地推的。0084 之前它打完一手就过期,现在
+      // user_status_changed 会带着它来。只做展示——「能不能免」由服务器裁决(见下方开票入口的注释)。
+      const owesEntry = seatView?.new_here === true
+      return { number: i + 1, player, isButton: i === state.buttonPosition, owesEntry }
     })
   }, [state.maxSeats, state.seats, state.me, state.buttonPosition])
 
+  // 欠入局盲的人(= 免盲投票的候选)。纯展示派生,值来自服务器的 new_here,不复算资格。
+  const entryOwers = useMemo(
+    () => seats.filter((s) => s.player && s.owesEntry).map((s) => s.player!.name),
+    [seats],
+  )
   const currentPlayers = useMemo(() => seats.filter((s) => s.player).length, [seats])
   const readyPlayers = useMemo(() => seats.filter((s) => s.player?.isReady).length, [seats])
   const allReady = currentPlayers > 0 && readyPlayers === currentPlayers
@@ -242,23 +250,29 @@ function GameView() {
               </div>
             )}
             {/*
-              开票入口:只要在两手之间就给,不预判能不能成。
+              开票入口:只要在两手之间就给,**仍然不预判能不能成**。
 
-              本想按「有 new_here 候选 + 有已入局投票人」来判,但**前端无法可靠知道 new_here**:
-              它只出现在 StateSnapshot 的 SeatView 里,而服务端在 _start_hand 末尾重标 new_here 时
-              不发任何携带它的事件,所以打完一手本地这份就过期了(浏览器测试撞出来的)。
+              0084 之后 new_here 是可靠的了(服务端重标时会广播),所以「有没有候选」现在能如实显示,
+              下面的提示就是照它写的。但另一半——「有没有合格投票人」(非 new_here 且已准备)——依然是
+              规则,前端不算:算它就是复算服务器规则,而这正是前端不变量 1 禁止的。
 
-              「服务器是唯一真相」在这里的推论就是:不预判自己不可能算准的东西,发出去让服务器裁决,
-              被拒时把 CANNOT_OPEN_VOTE 翻成人话给用户看。已有投票进行中则不重复给。
+              所以决定不变:入口照给,发出去让服务器裁决,被拒时把 CANNOT_OPEN_VOTE 翻成人话。
+              变的只是现在能顺带告诉用户「桌上有谁在等入局」,让人知道值不值得点。
             */}
             {!state.freeEntryVote && me && state.handStatus === null && (
               <Button
                 size="sm"
                 variant="outline"
                 onClick={openFreeEntryVote}
+                data-testid="open-free-entry-vote"
+                title={
+                  entryOwers.length > 0
+                    ? `等入局:${entryOwers.join('、')}`
+                    : '当前没人在等入局,服务器多半会拒'
+                }
                 className="border-amber-500/50 text-amber-300 text-xs"
               >
-                发起免盲投票
+                发起免盲投票{entryOwers.length > 0 ? `(${entryOwers.length} 人等入局)` : ''}
               </Button>
             )}
             <RoomConfig />
@@ -416,6 +430,16 @@ function GameView() {
                     minWidth: isCurrent ? "120px" : "100px",
                   }}
                 >
+                  {/* 欠一个入局盲:标出来,否则「为什么他没被发牌」在界面上无从解释(值由服务器给) */}
+                  {seat.owesEntry && (
+                    <span
+                      data-owes-entry={seat.number}
+                      title="下一手需付一个大盲才能入局(或等大盲位轮到他),见免盲投票"
+                      className="absolute -top-3 z-30 rounded-full border border-amber-500/60 bg-black/80 px-1.5 py-0.5 text-[10px] leading-none text-amber-300"
+                    >
+                      等入局
+                    </span>
+                  )}
                   {isCurrent ? (
                     <>
                       {/* Current player: cards on top, half covered by info bar; face-down if folded */}

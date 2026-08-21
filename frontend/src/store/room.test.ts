@@ -214,7 +214,7 @@ describe('UserStatusChanged 的三种情形', () => {
   // 最初只做了「在已有座位里改状态」,于是观战者点入座后界面毫无反应(0080 由浏览器测试发现)。
   it('观战 → 入座:seats 里没有这个人时要新增一条', () => {
     applyServerMessage(snapshot({ seats: [], players: [], watchers: ['alice'] }))
-    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'sitting_in', seat_position: 2 })
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'sitting_in', seat_position: 2, new_here: true })
     const s = getRoomState()
     expect(s.seats).toHaveLength(1)
     expect(s.seats[0]).toMatchObject({ nickname: 'alice', seat_position: 2, status: 'sitting_in' })
@@ -224,15 +224,27 @@ describe('UserStatusChanged 的三种情形', () => {
 
   it('在座内变状态:就地改,不新增', () => {
     applyServerMessage(snapshot())
-    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'ready_to_play', seat_position: 3 })
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'ready_to_play', seat_position: 3, new_here: false })
     const s = getRoomState()
     expect(s.seats).toHaveLength(2)
     expect(s.seats.find((x) => x.nickname === 'alice')?.status).toBe('ready_to_play')
   })
 
+  it('new_here 照抄服务器,不本地猜(0084)', () => {
+    // 0084 之前这里硬写 new_here: true,是前端替服务器裁定规则(破前端不变量 1),
+    // 而且打完一手就过期——服务端在 _start_hand 末尾重标 new_here 时以前不发任何事件。
+    applyServerMessage(snapshot({ seats: [], players: [], watchers: ['alice'] }))
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'sitting_in', seat_position: 2, new_here: false })
+    expect(getRoomState().seats[0].new_here).toBe(false) // 猜 true 的实现在这里必红
+
+    // 开局重标:服务器说他又欠一个入局盲了,本地那份要跟着变
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'sitting_out', seat_position: 2, new_here: true })
+    expect(getRoomState().seats[0].new_here).toBe(true)
+  })
+
   it('起身:seat_position 为 null,要从 seats 移除并回到观战', () => {
     applyServerMessage(snapshot())
-    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'watching', seat_position: null })
+    applyServerMessage({ type: 'user_status_changed', nickname: 'alice', status: 'watching', seat_position: null, new_here: null })
     const s = getRoomState()
     expect(s.seats.map((x) => x.nickname)).toEqual(['bob'])
     expect(s.watchers).toContain('alice')

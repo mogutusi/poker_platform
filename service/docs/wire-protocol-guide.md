@@ -126,7 +126,7 @@
 | `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`acting_position` | 某人动作 + 推进后底池/下一行动位 |
 | `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
 | `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
-| `user_status_changed` | `nickname`/`status`/`seat_position` | 谁就座/ready/坐出/离线/起身/重连 |
+| `user_status_changed` | `nickname`/`status`/`seat_position`/`new_here` | 谁就座/ready/坐出/离线/起身/重连;`new_here`=该座位下一手是否仍需付入局费(未就座为 `null`),**开局末尾重标时也会补发**(0084)|
 | `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
 | `state_snapshot` | `seats`/`max_seats`/`watchers`/`button_position`/`small_blind`/`big_blind`/`buy_in`/`board`/`pot`/`acting_position`/`players`/`your_hole_cards`… | 私发:进房/重连一次性对齐整桌。`seats` 仅已占座、各带 `seat_position`,空座由 `max_seats` 渲染;`players` 按行动序、不含底牌;`your_hole_cards` 只你自己的牌,在手才有。一次带齐当前注码与买入额,所以进房/重连不用再补拉 |

@@ -80,7 +80,7 @@ async def test_sender_seals_outbound_and_client_opens_in_order():
     client_ch = _client_channel(token)
     conn = Connection.create(nick="alice", session_id="s1", ws=FakeWS(), channel=server_ch)
     for i in range(10):
-        conn.outbound.put_nowait(UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=i))
+        conn.outbound.put_nowait(UserStatusChanged(nickname="alice", status=UserStatus.SITTING_IN, seat_position=i, new_here=True))
     task = asyncio.create_task(sender_loop(conn))
     try:
         await _settle(lambda: len(conn.ws.sent_bytes) >= 10)
