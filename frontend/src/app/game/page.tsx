@@ -177,7 +177,10 @@ function GameView() {
         bet(state.lastBet)
         break
       case "raise":
-        bet(raiseAmount || state.lastBet + state.bigBlind)
+        // 留空就按服务器给的下限来。此前这里是 `state.lastBet + state.bigBlind` —— 一个前端自编的
+        // 式子,只在 last_raise_size ≤ BB 时才等于真下限,别人大额加注之后必被 ILLEGAL_ACTION 拒
+        // (BUG-19,0085 实测)。规则在服务器,前端只用它给的数(0088)。
+        bet(raiseAmount || state.minRaiseTo)
         break
       case "all-in":
         bet(mine.points + mine.bet_amount)
@@ -569,7 +572,7 @@ function GameView() {
                 <div className="flex items-center gap-1">
                   <input
                     type="number"
-                    min={callAmount * 2}
+                    min={state.minRaiseTo}
                     value={raiseAmount}
                     onChange={(e) => setRaiseAmount(Number(e.target.value) || raiseAmount)}
                     className="w-14 rounded-full border border-amber-500/40 bg-black/50 px-2 py-1 text-center text-xs font-semibold text-amber-200 focus:outline-none focus:ring-1 focus:ring-amber-500"

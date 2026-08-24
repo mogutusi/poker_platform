@@ -10,67 +10,7 @@
 // 前置:后端在跑(见 docs/dev.md)。
 
 import { expect, test, type Page } from '@playwright/test'
-import { FACE_UP_CARD, joinTable, login, waitForTurn } from './helpers'
-
-/**
- * 记录本页每一条 ws 的开合与**关闭码**。
- *
- * 为什么要自己包一层:Playwright 的 `page.on('websocket')` 只给「关了」,不给关闭码,而本篇
- * 要断言的恰恰是关闭码(4400 = 服务器判 seq 回退;4401 = 鉴权/会话;1005 = 没带码的普通关闭)。
- * 这是**测试侧**的仪器,包的是浏览器自己的 WebSocket API,不往生产代码里塞测试钩子。
- */
-function installWsProbe(): void {
-  const w = window as unknown as {
-    WebSocket: typeof WebSocket
-    __wsLog: { url: string; closeCode: number | null }[]
-    __wsSockets: WebSocket[]
-  }
-  w.__wsLog = []
-  w.__wsSockets = []
-  const Native = w.WebSocket
-  class Probed extends Native {
-    constructor(url: string | URL, protocols?: string | string[]) {
-      super(url, protocols)
-      const entry = { url: String(url), closeCode: null as number | null }
-      w.__wsLog.push(entry)
-      w.__wsSockets.push(this)
-      this.addEventListener('close', (ev) => {
-        entry.closeCode = (ev as CloseEvent).code
-      })
-    }
-  }
-  w.WebSocket = Probed as unknown as typeof WebSocket
-}
-
-/**
- * 只看牌局那条 ws。两处噪声必须滤掉:`next dev` 自己的 HMR ws,以及 React 严格模式下
- * 开发期 effect 跑两遍带来的**第一条随即被关掉的连接**——所以这里数的是「累计开过几条」,
- * 断言一律用**增量**,不用绝对值。
- */
-async function gameSockets(page: Page): Promise<{ url: string; closeCode: number | null }[]> {
-  const log = await page.evaluate(
-    () => (window as unknown as { __wsLog?: { url: string; closeCode: number | null }[] }).__wsLog ?? [],
-  )
-  return log.filter((s) => s.url.includes('/ws?sid='))
-}
-
-/**
- * 把牌局那条 ws 从**客户端**掐掉,模拟掉线;返回掐之前已经开过几条(用来判断重连真的发生了)。
- *
- * 不用 `context.setOffline(true)`:实测它只挡新请求,**已建立的 WebSocket 照常活着**
- * (2026-08-24 在 chromium 上验过,断线横幅根本不出现)。所以改成直接关那条 socket ——
- * 前端看到的是「不是我要求的关闭」,与真掉线走同一条重连分支(见 transport/ws.ts onclose)。
- */
-async function dropGameSocket(page: Page): Promise<number> {
-  const before = (await gameSockets(page)).length
-  await page.evaluate(() => {
-    const list = (window as unknown as { __wsSockets: WebSocket[] }).__wsSockets
-    for (const s of list) {
-      if (s.url.includes('/ws?sid=') && s.readyState === WebSocket.OPEN) s.close()
-    }
-  })
-  return before
-}
+import { FACE_UP_CARD, dropGameSocket, gameSockets, installWsProbe, joinTable, login, waitForTurn } from './helpers'
 
 test.describe('断线重连', () => {
   test('掉线再重连:座位与底牌原样回来,重连后发出的命令服务器仍然接受', async ({ browser }) => {

@@ -32,10 +32,10 @@ def _all_strings(obj):
 def _broadcast_samples() -> list[S.ServerMessage]:
     view = S.PlayerView(seat_position=0, nickname="A", points=98, bet_amount=2, status=PlayerStatus.ACTIVE)
     return [
-        S.HandStarted(hand_seq=1, button_position=0, small_blind=1, big_blind=2, players=(view,), acting_position=0, pot=3),
-        S.HandStatusChanged(status=HandStatus.FLOP, board=(_A,), last_bet=0, players=(view,)),
+        S.HandStarted(hand_seq=1, button_position=0, small_blind=1, big_blind=2, players=(view,), acting_position=0, pot=3, last_bet=2, min_raise_to=4),
+        S.HandStatusChanged(status=HandStatus.FLOP, board=(_A,), last_bet=0, min_raise_to=2, players=(view,)),
         S.PlayerActed(seat_position=0, nickname="A", action=PlayerActionType.BET, bet_amount=2, points=98,
-                      status=PlayerStatus.ACTIVE, last_bet=2, pot=3, acting_position=1),
+                      status=PlayerStatus.ACTIVE, last_bet=2, min_raise_to=4, pot=3, acting_position=1),
         S.HandEnded(winnings=(S.NickAmount(nickname="A", amount=3),), refunds=()),
         S.UserStatusChanged(nickname="A", status=UserStatus.SITTING_IN, seat_position=0, new_here=True),
         S.UserJoined(nickname="C"),
@@ -80,9 +80,9 @@ def test_state_snapshot_carries_only_own_cards_not_others_or_deck():
         room_status=RoomStatus.HAND_STARTED,
         seats=(S.SeatView(seat_position=0, nickname="A", status=UserStatus.PLAYING, points=50, new_here=False),),
         watchers=("C",),
-        hand_status=HandStatus.FLOP, board=(_A,), pot=20, acting_position=0,
+        hand_status=HandStatus.FLOP, board=(_A,), pot=20, last_bet=0, min_raise_to=2, acting_position=0,
         players=(S.PlayerView(seat_position=0, nickname="A", points=50, bet_amount=0, status=PlayerStatus.ACTIVE),),
-        your_hole_cards=(_A, _K),
+        your_hole_cards=(_A, _K), free_entry_vote=None,
     )
     keys = _all_strings(snap.model_dump(mode="json"))
     assert "your_hole_cards" in keys  # 自己的底牌显式携带

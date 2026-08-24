@@ -94,6 +94,12 @@ async function main() {
   const responder = bySeat(nextActor)
   const TOO_SMALL = RAISE_TO + BB // 12
   const MIN_LEGAL = RAISE_TO + (RAISE_TO - BB) // 18
+  // 服务器把这个下限**说出来**了(0088:min_raise_to)。钉住「广播的下限 = 真正判定用的下限」——
+  // 下面两条正反例就是判定,这一条把它和上 wire 的那个数绑在一起,不许分叉。
+  check(
+    raised.min_raise_to === MIN_LEGAL,
+    `服务器广播的下限就是判定用的那个数(min_raise_to=${raised.min_raise_to},期望 ${MIN_LEGAL})`,
+  )
   responder.send({ type: 'player_action', action: 'bet', bet_amount: TOO_SMALL })
   const rejected = await responder.wait((m) => m.type === 'error', '不足 min-raise 应被拒')
   // 下注规则违反统一是 ILLEGAL_ACTION(errors.py:「动作违反下注规则(rules.md ②)」)

@@ -283,6 +283,11 @@ def reduce(work, cmd):
 
 `UserStatusChanged` 因此带 `new_here: bool | None`(未就座为 `None`,与 `seat_position` 同语义),五处产出点都如实填——客户端不必、也不允许自己推断这个标志。
 
+免盲投票同理(0088):**投票人集合变了就要补一条 `FreeEntryVoteUpdated`**(`_maybe_resolve_entry_vote`,
+离场/坐出/起身/准备都会触发),而 `StateSnapshot` 也投影一份 `free_entry_vote` —— 重连与顶替只私发快照、
+不重发投票事件,不投影的话面板凭空消失,全票制下最要命的一例是「重连回来的人再点 Ready 才重新成为
+合格投票人,却没有任何事件说过这件事」,票就此永久卡住(BUG-9)。
+
 同一条理由适用于**下注态**(0087):`HandStarted` 带 `pot`(开局即盲注之和,不是 0),`HandStatusChanged` 带 `last_bet` 与本街起点的 `players[]`。此前这两样都靠客户端推——「开局底池是 0」「换街了所以本街投入全清零」——而开局那条 `HandStatusChanged(PRE_FLOP)` 紧跟 `HandStarted`、盲注**已经下了**,推断在这里恰好是错的,后果是整轮 preflop 的跟注都发成 `bet_amount=0` 被 `ILLEGAL_ACTION` 拒。规则输出由服务器说,客户端只显示。
 
 载荷约定:

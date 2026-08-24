@@ -120,16 +120,16 @@
 
 | `type` | 关键字段 | 渲染 |
 |---|---|---|
-| `hand_started` | `players[]`(行动序快照)、`button_position`、`small_blind`/`big_blind`、`acting_position`、`pot` | 开局铺桌。**`pot` 不是 0**:盲注已经下了,它就是盲注之和(0087)|
+| `hand_started` | `players[]`(行动序快照)、`button_position`、`small_blind`/`big_blind`、`acting_position`、`pot`、`last_bet`、`min_raise_to` | 开局铺桌。**`pot` 不是 0**:盲注已经下了,它就是盲注之和(0087)|
 | `hole_cards` | `cards`(你自己的两张) | 私发本人;摆你的手牌 |
-| `hand_status_changed` | `status`(街)、`board`(已发公共牌)、`last_bet`、`players[]` | 翻 flop/turn/river。**本街下注态照抄,别自己推「换街了所以清零」**:开局那条 `status:"pre_flop"` 紧跟 `hand_started`,盲注**已经在桌上**(0087)|
-| `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`acting_position` | 某人动作 + 推进后底池/下一行动位 |
+| `hand_status_changed` | `status`(街)、`board`(已发公共牌)、`last_bet`、`min_raise_to`、`players[]` | 翻 flop/turn/river。**本街下注态照抄,别自己推「换街了所以清零」**:开局那条 `status:"pre_flop"` 紧跟 `hand_started`,盲注**已经在桌上**(0087)|
+| `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`min_raise_to`、`acting_position` | 某人动作 + 推进后底池/下一行动位/加注下限 |
 | `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
 | `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
 | `user_status_changed` | `nickname`/`status`/`seat_position`/`new_here` | 谁就座/ready/坐出/离线/起身/重连;`new_here`=该座位下一手是否仍需付入局费(未就座为 `null`),**开局末尾重标时也会补发**(0084)|
 | `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
-| `state_snapshot` | `seats`/`max_seats`/`watchers`/`button_position`/`small_blind`/`big_blind`/`buy_in`/`board`/`pot`/`acting_position`/`players`/`your_hole_cards`… | 私发:进房/重连一次性对齐整桌。`seats` 仅已占座、各带 `seat_position`,空座由 `max_seats` 渲染;`players` 按行动序、不含底牌;`your_hole_cards` 只你自己的牌,在手才有。一次带齐当前注码与买入额,所以进房/重连不用再补拉 |
+| `state_snapshot` | `seats`/`max_seats`/`watchers`/`button_position`/`small_blind`/`big_blind`/`buy_in`/`board`/`pot`/`last_bet`/`min_raise_to`/`acting_position`/`players`/`your_hole_cards`/`free_entry_vote`… | 私发:进房/重连一次性对齐整桌。`seats` 仅已占座、各带 `seat_position`,空座由 `max_seats` 渲染;`players` 按行动序、不含底牌;`your_hole_cards` 只你自己的牌,在手才有。一次带齐当前注码与买入额,所以进房/重连不用再补拉 |
 | `room_config_changed` | `small_blind`/`big_blind`/`buy_in` | 某在房成员改了房间参数;带的是完整当前配置快照,不是差量(见 0043/0044) |
 | `room_chat_history` | `room`、`messages[]` | 私发:`fetch_room_chat` 的回应,渲进聊天区;`messages[]` 是该房最近 N 条 `chat_message`,顺序旧→新 |
 | `dm_delivered` | `msg_id`/`from_nick`/`text`/`created_at` | 私发:收到一条私信。在线实时投递与登录后补收离线消息同形,按 `msg_id` 去重 |
@@ -145,6 +145,14 @@
 >
 > - `hand_started.players` 按行动序排:`[0]` = 小盲,`[1]` = 大盲。
 > - `hand_status_changed.players` 是**本街起点**的同款快照(开局带盲注,换街已归零)。
+
+> **`min_raise_to` 是「自愿加注的合法下限」,直接用,别自己套公式。**
+>
+> - 规则是 `last_bet + max(last_raise_size, BB)`([rules.md](rules.md) ②),但 `last_raise_size` **不上 wire**:
+>   给你公式的原料等于请你重算一遍规则,而客户端重算规则正是本仓反复出事的地方(0084 / 0087 / BUG-19)。
+> - 服务端校验用的就是这同一个数(`betting.min_raise_target`),所以广播的下限与判定的下限不可能分叉。
+> - **all-in 不受它限制**:筹码不够时把本街目标总额设成自己的全部即可,即便低于 `min_raise_to` 也合法。
+> - 进新街后 `last_bet=0`、`last_raise_size` 重置为 BB ⇒ `min_raise_to` = BB。
 > - 「轮到谁」= `players[acting_position]`,它的座位是 `.seat_position`;为 `null` 表示无人可行动,即手已结束或全员 all-in。
 
 > **聊天正文的表情是 `[code]` 文本 token**,房聊与私聊同规则,后端纯透传(见 0034/0035)。

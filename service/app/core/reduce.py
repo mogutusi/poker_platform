@@ -41,6 +41,7 @@ from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadc
     ChatMessage,
     FreeEntryVoteClosed,
     FreeEntryVoteUpdated,
+    FreeEntryVoteView,
     HandEnded,
     HandShowDown,
     HandStarted,
@@ -302,6 +303,8 @@ def _start_hand_events(
         players=views,
         acting_position=hand.acting_position,
         pot=_pot(hand),  # 盲注已下:开局底池不是 0(0087 在浏览器里发现界面开局显示底池 0,与快照的 3 矛盾)
+        last_bet=hand.last_bet,
+        min_raise_to=betting.min_raise_target(hand, big_blind),
     )
     events: list[Event] = [Broadcast(room=room_name, msg=started)]
     for p in hand.players:
@@ -311,7 +314,13 @@ def _start_hand_events(
         Broadcast(
             room=room_name,
             # 开局这条带的是**盲注已下**的下注态:last_bet=BB、各家 bet_amount 是刚下的盲。
-            msg=HandStatusChanged(status=hand.status, board=(), last_bet=hand.last_bet, players=views),
+            msg=HandStatusChanged(
+                status=hand.status,
+                board=(),
+                last_bet=hand.last_bet,
+                min_raise_to=betting.min_raise_target(hand, big_blind),
+                players=views,
+            ),
         )
     )
     if hand.acting_position is not None:
@@ -347,7 +356,7 @@ def _acted_events(
     # 先快照行动结果(街若关闭 settle_street 会清零 bet_amount),再推进,产 Broadcast(PlayerActed) + 推进事件。
     snapshot = (actor.bet_amount, actor.points, actor.status)
     follow = _advance(work, hand, big_blind)
-    return [_acted_broadcast(work, hand, actor, action, snapshot), *follow]
+    return [_acted_broadcast(work, hand, actor, action, snapshot, big_blind), *follow]
 
 
 def _acted_broadcast(
@@ -356,6 +365,7 @@ def _acted_broadcast(
     actor: Player,
     action: PlayerActionType,
     snapshot: tuple[int, int, PlayerStatus],
+    big_blind: int,
 ) -> Broadcast:
     # 把行动结果(快照于推进前)+ 推进后底池/行动者投影为 Broadcast(PlayerActed)。
     bet_amount, points, status = snapshot
@@ -369,6 +379,7 @@ def _acted_broadcast(
             points=points,
             status=status,
             last_bet=hand.last_bet,
+            min_raise_to=betting.min_raise_target(hand, big_blind),  # 与校验共用一份公式(0088)
             pot=_pot(hand),
             acting_position=hand.acting_position,
         ),
@@ -417,6 +428,7 @@ def _close_street(work: Work, hand: Hand, big_blind: int) -> list[Event]:
                 status=nxt,
                 board=tuple(_board(hand)),
                 last_bet=hand.last_bet,
+                min_raise_to=betting.min_raise_target(hand, big_blind),
                 players=_player_views(hand),
             ),
         ),
@@ -712,7 +724,9 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
             room=room_name, max_seats=len(room.seats), button_position=room.button_position,
             small_blind=room.small_blind, big_blind=big_blind, buy_in=room.buy_in, room_status=room.status,
             seats=seats, watchers=watchers, hand_status=None, board=(), pot=0,
+            last_bet=0, min_raise_to=0,  # 无手可下注
             acting_position=None, players=(), your_hole_cards=None,
+            free_entry_vote=_entry_vote_view(room),
         )
     players = _player_views(hand)
     own = in_hand[for_nick].hole_cards if for_nick in in_hand else None
@@ -720,7 +734,10 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
         room=room_name, max_seats=len(room.seats), button_position=room.button_position,
         small_blind=room.small_blind, big_blind=big_blind, buy_in=room.buy_in, room_status=room.status,
         seats=seats, watchers=watchers, hand_status=hand.status, board=tuple(_board(hand)),
-        pot=_pot(hand), acting_position=hand.acting_position, players=players, your_hole_cards=own,
+        pot=_pot(hand), last_bet=hand.last_bet,
+        min_raise_to=betting.min_raise_target(hand, big_blind),
+        acting_position=hand.acting_position, players=players, your_hole_cards=own,
+        free_entry_vote=_entry_vote_view(room),
     )
 
 
@@ -797,8 +814,8 @@ def _begin_leave(work: Work, room: Room, nick: str) -> list[Event]:
     live = [p for p in hand.players if p.status is not PlayerStatus.FOLDED]
     if len(live) == 1:
         follow = _close_street(work, hand, big_blind)
-        return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot), *follow]
-    return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot)]
+        return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot, big_blind), *follow]
+    return [_acted_broadcast(work, hand, player, PlayerActionType.FOLD, snapshot, big_blind)]
 
 
 def _release_seat(work: Work, room: Room, nick: str) -> Persist | None:
@@ -929,12 +946,10 @@ def _vote_free_entry(work: Work, cmd: VoteFreeEntry) -> ReduceResult:
     if closed is not None:
         return closed, None
     # 未终结 → 广播当前进度(候选取「开票冻结集 ∩ 仍在的 new_here」;赞成只算仍合格投票人,剔除已离场的陈旧 approval)
-    voters = _voters(room)
-    msg = FreeEntryVoteUpdated(
-        candidates=tuple(sorted(vote.candidates & _free_entry_candidates(room))),
-        voters=tuple(sorted(voters)),
-        approvals=tuple(sorted(vote.approvals & voters)),
-    )
+    projection = _entry_vote_projection(room)
+    assert projection is not None  # 未终结 ⇒ entry_vote 还在
+    candidates_now, voters_now, approvals_now = projection
+    msg = FreeEntryVoteUpdated(candidates=candidates_now, voters=voters_now, approvals=approvals_now)
     return [Broadcast(room=work.room_name, msg=msg)], None
 
 
@@ -952,6 +967,31 @@ def _voters(room: Room) -> set[str]:
 def _free_entry_candidates(room: Room) -> set[str]:
     # 受这次入局盲影响的新玩家 = 当前 new_here 座位;通过时快照进 waive_entry_for(rules.md ① / ①.14 防蹭车)。
     return {s.nickname for s in room.seats if s is not None and s.new_here}
+
+
+def _entry_vote_view(room: Room) -> FreeEntryVoteView | None:
+    # 同一份投影包成 StateSnapshot 的嵌套值对象(BUG-9:重连/顶替只发快照,不重发投票事件)。
+    projection = _entry_vote_projection(room)
+    if projection is None:
+        return None
+    candidates_now, voters_now, approvals_now = projection
+    return FreeEntryVoteView(candidates=candidates_now, voters=voters_now, approvals=approvals_now)
+
+
+def _entry_vote_projection(room: Room) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None:
+    # 进行中免盲投票的公开态 (candidates, voters, approvals);无投票为 None。
+    # 三处共用(开票广播 / 进度广播 / StateSnapshot 投影),所以候选与赞成的口径不会各说各话:
+    # 候选 = 开票冻结集 ∩ 仍在的 new_here(后来者不蹭车、离场者失对象);投票人**每次实时重算**
+    # (rules.md ①),赞成只算仍合格的那些。快照因此必须现算,不能存一份(见 changes/0088)。
+    vote = room.entry_vote
+    if vote is None:
+        return None
+    voters = _voters(room)
+    return (
+        tuple(sorted(vote.candidates & _free_entry_candidates(room))),
+        tuple(sorted(voters)),
+        tuple(sorted(vote.approvals & voters)),
+    )
 
 
 def _finish_entry_vote(work: Work, room: Room) -> list[Event] | None:
@@ -977,10 +1017,28 @@ def _finish_entry_vote(work: Work, room: Room) -> list[Event] | None:
 
 
 def _maybe_resolve_entry_vote(work: Work, room: Room) -> list[Event]:
-    # 投票人集合缩小(离场/坐出/起身)后重算(rules.md ①.15):仅当因此达成全票才通过(产 Closed),否则不产事件。
+    # 投票人集合变了(离场/坐出/起身/准备)之后重算(rules.md ①.15):
+    #   - 因此达成全票 → 通过,产 Closed;
+    #   - 否则票还在 → **补一条 FreeEntryVoteUpdated**,把新的公开态告诉全房(0088)。
+    # 后半条是 BUG-9 的另一半:客户端的 voters 是收到事件时的那一份,不补发就会永久过期——
+    # 最要命的一例是「重连回来的人再点 Ready」:他这才成为合格投票人,而没有任何事件说过这件事,
+    # 于是他的面板一直显示「你不是本次的投票人」,全票制下这张票就此卡死。
     if room.entry_vote is None:
         return []
-    return _finish_entry_vote(work, room) or []
+    closed = _finish_entry_vote(work, room)
+    if closed is not None:
+        return closed
+    projection = _entry_vote_projection(room)
+    assert projection is not None  # 未终结 ⇒ entry_vote 还在
+    candidates_now, voters_now, approvals_now = projection
+    return [
+        Broadcast(
+            room=work.room_name,
+            msg=FreeEntryVoteUpdated(
+                candidates=candidates_now, voters=voters_now, approvals=approvals_now
+            ),
+        )
+    ]
 
 
 # ── 房间聊天(RoomChat)── messaging.md §房间聊天:只读命令,产 Broadcast(ChatMessage)

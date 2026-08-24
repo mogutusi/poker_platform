@@ -5,12 +5,21 @@
 任一 reject → 失败;投票人离场/坐出 → 重算(①.15)。投票不动积分/座位/底牌。SB=1、BB=2。
 """
 
-from app.core.commands import Disconnect, LeaveRoom, OpenFreeEntryVote, SetUserStatus, SitDown, StartHand, VoteFreeEntry
+from app.core.commands import (
+    Connect,
+    Disconnect,
+    LeaveRoom,
+    OpenFreeEntryVote,
+    SetUserStatus,
+    SitDown,
+    StartHand,
+    VoteFreeEntry,
+)
 from app.core.domain import UserState
 from app.core.enums import UserStatus
 from app.core.errors import ErrorCode
-from app.core.events import Broadcast, Persist
-from app.wire.server import FreeEntryVoteClosed, FreeEntryVoteUpdated
+from app.core.events import Broadcast, Personal, Persist
+from app.wire.server import FreeEntryVoteClosed, FreeEntryVoteUpdated, StateSnapshot
 from tests.builders import DECK, T0, make_table, run, seat
 
 SB = 1
@@ -337,6 +346,53 @@ def test_progress_prunes_departed_voter_approval():
     upd = _updated(ev)
     assert upd is not None and upd.approvals == ("A", "B")  # E 已离场 → 陈旧 approval 被剔除
     assert "E" not in upd.voters
+
+
+# ── BUG-9(0088):重连拿到的 StateSnapshot 要带着进行中的投票,否则面板凭空消失、投票卡死 ──
+def test_snapshot_projects_running_entry_vote():
+    world = make_table(
+        {
+            0: seat("A", 100, new_here=False),
+            1: seat("B", 100, new_here=False),
+            2: seat("C", 100, new_here=False),
+            3: seat("D", 100, new_here=True),  # 候选
+        },
+        button=0,
+    )
+    world, _, err = run(world, OpenFreeEntryVote(origin="A"))
+    assert err is None
+    world, _, err = run(world, VoteFreeEntry(origin="A", approve=True))  # 未达全票,票还在
+    assert err is None and _room(world).entry_vote is not None
+
+    # B 掉线再重连:重连臂私发 StateSnapshot —— 它必须带着这张还在等 B 表态的票
+    world, _, err = run(world, Disconnect(origin=None, nick="B"))
+    assert err is None
+    world, events, err = run(world, Connect(origin=None, nick="B"))
+    assert err is None
+    snap = next(e.msg for e in events if isinstance(e, Personal) and isinstance(e.msg, StateSnapshot))
+    assert snap.free_entry_vote is not None
+    assert snap.free_entry_vote.candidates == ("D",)
+    assert snap.free_entry_vote.approvals == ("A",)
+    # 此刻 B 还不是投票人:重连恢复到 SITTING_IN,不是 READY_TO_PLAY(见 _restore_status)。
+    assert "B" not in snap.free_entry_vote.voters
+
+    # 他再点一次 Ready 才重新成为合格投票人 —— 而这件事必须有事件说出来,否则他的面板永远显示
+    # 「你不是本次的投票人」,全票制下这张票就此卡死(0088 补的另一半)。
+    world, events, err = run(world, SetUserStatus(origin="B", status=UserStatus.READY_TO_PLAY, seat=1))
+    assert err is None
+    upd = _updated(events)
+    assert upd is not None and "B" in upd.voters and upd.approvals == ("A",)
+
+
+def test_snapshot_has_no_vote_when_none_running():
+    world = make_table(
+        {0: seat("A", 100, new_here=False), 1: seat("B", 100, new_here=False)},
+        button=0,
+    )
+    world, events, err = run(world, Connect(origin=None, nick="B"))
+    assert err is None
+    snap = next(e.msg for e in events if isinstance(e, Personal) and isinstance(e.msg, StateSnapshot))
+    assert snap.free_entry_vote is None
 
 
 # ── 多候选:waive 快照按 nick 排序产出 ──

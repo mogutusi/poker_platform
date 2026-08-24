@@ -37,6 +37,8 @@ function snapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
     hand_status: 'pre_flop',
     board: [],
     pot: 30,
+    last_bet: 20,
+    min_raise_to: 40,
     acting_position: 1,
     players: [
       { seat_position: 3, nickname: 'alice', points: 490, bet_amount: 10, status: 'active' },
@@ -46,6 +48,7 @@ function snapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
       { rank: 'A', suit: 'h' },
       { rank: 'K', suit: 's' },
     ],
+    free_entry_vote: null,
     ...over,
   }
 }
@@ -95,6 +98,7 @@ describe('街道推进', () => {
         { rank: 'T', suit: 'h' },
       ],
       last_bet: 0,
+      min_raise_to: 20,
       players: [
         { seat_position: 3, nickname: 'alice', points: 490, bet_amount: 0, status: 'active' },
         { seat_position: 5, nickname: 'bob', points: 680, bet_amount: 0, status: 'active' },
@@ -118,6 +122,7 @@ describe('街道推进', () => {
       status: 'pre_flop',
       board: [],
       last_bet: 20,
+      min_raise_to: 40,
       players: [
         { seat_position: 3, nickname: 'alice', points: 490, bet_amount: 10, status: 'active' },
         { seat_position: 5, nickname: 'bob', points: 680, bet_amount: 20, status: 'active' },
@@ -126,6 +131,53 @@ describe('街道推进', () => {
     const s = getRoomState()
     expect(s.lastBet).toBe(20)
     expect(s.players.map((p) => p.bet_amount)).toEqual([10, 20])
+  })
+})
+
+describe('加注下限与免盲投票投影(0088)', () => {
+  it('下限一律用服务器给的数,不自己套公式', () => {
+    applyServerMessage(snapshot({ last_bet: 20, min_raise_to: 60 }))
+    // 60 不等于 lastBet + bigBlind(40),也不等于 callAmount*2 —— 正是前端旧式子会算错的那种局面
+    expect(getRoomState().minRaiseTo).toBe(60)
+    applyServerMessage({
+      type: 'player_acted',
+      seat_position: 5,
+      nickname: 'bob',
+      action: 'bet',
+      bet_amount: 60,
+      points: 640,
+      status: 'active',
+      last_bet: 60,
+      min_raise_to: 100,
+      pot: 70,
+      acting_position: 0,
+    })
+    expect(getRoomState().minRaiseTo).toBe(100)
+  })
+
+  it('快照带着进行中的免盲投票,重连之后面板还在(BUG-9)', () => {
+    applyServerMessage(
+      snapshot({
+        free_entry_vote: { candidates: ['dave'], voters: ['alice', 'bob'], approvals: ['alice'] },
+      }),
+    )
+    expect(getRoomState().freeEntryVote).toEqual({
+      candidates: ['dave'],
+      voters: ['alice', 'bob'],
+      approvals: ['alice'],
+    })
+  })
+
+  it('没有投票进行时快照把面板清掉,不留上一轮的残影', () => {
+    applyServerMessage({
+      type: 'free_entry_vote_updated',
+      candidates: ['dave'],
+      voters: ['alice'],
+      approvals: [],
+    })
+    expect(getRoomState().freeEntryVote).not.toBeNull()
+    applyServerMessage(snapshot())
+    expect(getRoomState().freeEntryVote).toBeNull()
   })
 })
 
@@ -141,6 +193,7 @@ describe('PlayerActed', () => {
       points: 640,
       status: 'active',
       last_bet: 60,
+      min_raise_to: 100,
       pot: 70,
       acting_position: 0,
     })
@@ -321,6 +374,8 @@ describe('结算面板的生命周期', () => {
       players: [],
       acting_position: null,
       pot: 0,
+      last_bet: 20,
+      min_raise_to: 40,
     })
     expect(getRoomState().lastResult).toBeNull()
   })
@@ -336,6 +391,8 @@ describe('结算面板的生命周期', () => {
       players: [],
       acting_position: null,
       pot: 30,
+      last_bet: 20,
+      min_raise_to: 40,
     })
     expect(getRoomState().pot).toBe(30)
   })

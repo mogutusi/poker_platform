@@ -245,6 +245,9 @@ def test_hand_started_carries_pot_of_blinds():
     # 开局 contributed 还是空的,所以底池就是各家本街投入之和 = SB + BB
     assert started.pot == SB + BB
     assert started.pot == sum(v.bet_amount for v in started.players)
+    # 下注态也一并上 wire(0088):开局需跟到大盲,自愿加注下限 = last_bet + max(last_raise_size, BB) = 2×BB
+    assert started.last_bet == BB
+    assert started.min_raise_to == BB + BB
 
 
 # ── 事件投影 + 隐私:HandStarted → 每人 HoleCards → HandStatusChanged → TurnChanged;广播不含底牌 ──

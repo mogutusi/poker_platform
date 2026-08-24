@@ -173,6 +173,11 @@ wire:出站 `FreeEntryVoteUpdated` 报开票与进度,`FreeEntryVoteClosed` 报�
 ## min-raise 与重开
 
 - 自愿加注(非 all-in)的合法下限:`amount ≥ last_bet + max(last_raise_size, BB)`,否则 `Err`(加注不够)。
+  - **这个下限要上 wire**(0088):`betting.min_raise_target(hand, big_blind)` 是唯一一份公式,校验用它、
+    投影也用它,所以「广播的下限」与「判定的下限」不可能分叉。`last_raise_size` 本身**不上 wire**——
+    给客户端原料等于请它重算规则,而那正是本仓反复出事的地方(见 [changes/0084](refactor/changes/0084-new-here-channel.md) /
+    [0087](refactor/changes/0087-reconnect-and-displacement-in-browser.md))。携带它的消息见
+    [wire-protocol-guide.md](wire-protocol-guide.md) §4。
 - 加注 / all-in 超过 `last_bet` ⇒ 重开:`last_bet = amount`;`last_raise_size = amount - 旧 last_bet`,取 `max` 不缩小;加注者 `has_acted=True`;其余所有 `ACTIVE` 玩家 `has_acted=False`,必须回应。
 - all-in 但 `amount ≤ last_bet`(短 all-in,跟不满):置 `ALLIN`、`has_acted=True`,不重开、不改 `last_bet`。
 

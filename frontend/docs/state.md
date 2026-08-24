@@ -84,8 +84,10 @@ leave_room               → 退分离桌回大厅
 `bet_amount` 是**本街目标总额**,不是这次要加多少。所以:
 
 - 跟注 = `bet_amount = last_bet`
-- 加注到 X = `bet_amount = X`,且必须满足 `X ≥ last_bet + max(last_raise_size, BB)`
-- all-in = `bet_amount = 自己的 points + 本街已下注`
+- 加注到 X = `bet_amount = X`,下限**用服务器给的 `min_raise_to`**,不要自己套 `last_bet + max(last_raise_size, BB)`
+  ——`last_raise_size` 根本不上 wire,自编式子必然在别人大额加注之后算错(BUG-19 就是这么来的,见
+  [changes/0088](../../service/docs/refactor/changes/0088-betting-floor-and-vote-on-the-wire.md))
+- all-in = `bet_amount = 自己的 points + 本街已下注`;**all-in 不受 `min_raise_to` 限制**
 
 前端可以按这个规则**灰掉**不合法的按钮以改善体验,但**不能据此认定合法**——最终判定在服务器,被拒了就按返回的 `ErrorCode` 提示。
 

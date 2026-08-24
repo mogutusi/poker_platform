@@ -42,8 +42,12 @@ export interface RoomState {
   pot: number
   actingPosition: number | null
   players: PlayerView[]
-  /** 本街当前需要跟到的额度,由 PlayerActed 带来;新一手/新街道归零。 */
+  /** 本街当前需要跟到的额度。服务器给的,前端不推(见 changes/0087)。 */
   lastBet: number
+  /** 自愿加注的合法下限(本街目标总额)。规则是 `last_bet + max(last_raise_size, BB)`,
+   *  但**公式在服务器**——前端只显示这个数,不自己套式子(见 changes/0088 / BUG-19)。
+   *  all-in 不受它限制:筹码不够时可以直接推全部。 */
+  minRaiseTo: number
   /** 只有自己的底牌;别人的底牌只在摊牌时经 HandShowDown 出现。 */
   yourHoleCards: [Card, Card] | null
 
@@ -75,6 +79,7 @@ const EMPTY: RoomState = {
   actingPosition: null,
   players: [],
   lastBet: 0,
+  minRaiseTo: 0,
   yourHoleCards: null,
   reveals: [],
   lastResult: null,
@@ -178,8 +183,17 @@ export function applyServerMessage(msg: ServerMessage): void {
         actingPosition: msg.acting_position,
         players: msg.players,
         yourHoleCards: msg.your_hole_cards,
-        // 快照不带 last_bet:本街要跟多少可由各家 bet_amount 的最大值还原。
-        lastBet: msg.players.reduce((max, p) => Math.max(max, p.bet_amount), 0),
+        lastBet: msg.last_bet,
+        minRaiseTo: msg.min_raise_to,
+        // 进行中的免盲投票也在快照里(0088 / BUG-9):重连和顶替只发快照、不重发投票事件,
+        // 不投影的话面板会凭空消失,而全票制下少一个人表态就是永久卡住。
+        freeEntryVote: msg.free_entry_vote
+          ? {
+              candidates: msg.free_entry_vote.candidates,
+              voters: msg.free_entry_vote.voters,
+              approvals: msg.free_entry_vote.approvals,
+            }
+          : null,
         reveals: [],
         lastResult: null,
       })
@@ -198,7 +212,8 @@ export function applyServerMessage(msg: ServerMessage): void {
         // 盲注已经下了,开局底池不是 0。这里曾硬写 0,于是界面整条 preflop 都显示「底池 0」,
         // 而同一时刻重连拿到的快照写着 3 —— 0087 在浏览器里正是被这个矛盾抓出来的。
         pot: msg.pot,
-        lastBet: msg.big_blind,
+        lastBet: msg.last_bet,
+        minRaiseTo: msg.min_raise_to,
         yourHoleCards: null,
         reveals: [],
         lastResult: null,
@@ -218,6 +233,7 @@ export function applyServerMessage(msg: ServerMessage): void {
         handStatus: msg.status,
         board: msg.board,
         lastBet: msg.last_bet,
+        minRaiseTo: msg.min_raise_to,
         players: msg.players,
       })
       break
@@ -231,6 +247,7 @@ export function applyServerMessage(msg: ServerMessage): void {
         ),
         pot: msg.pot,
         lastBet: msg.last_bet,
+        minRaiseTo: msg.min_raise_to,
         actingPosition: msg.acting_position,
       })
       break

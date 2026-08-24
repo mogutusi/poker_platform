@@ -32,7 +32,15 @@ from app.core.enums import HandStatus, PlayerActionType, PlayerStatus, RoomStatu
 from app.core.errors import ErrorCode
 from app.wire.client import CLIENT_MESSAGES
 from app.wire.emoji import EMOJI_CATALOG, EmojiCode, EmojiMeta
-from app.wire.server import NickAmount, PlayerView, SeatView, ServerMessage, ShowdownReveal, SERVER_MESSAGES
+from app.wire.server import (
+    FreeEntryVoteView,
+    NickAmount,
+    PlayerView,
+    SeatView,
+    ServerMessage,
+    ShowdownReveal,
+    SERVER_MESSAGES,
+)
 
 # 产物路径(相对本脚本:service/scripts/ → ../../frontend/src/types/wire.gen.ts)
 OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "wire.gen.ts"
@@ -49,7 +57,7 @@ _ENUM_ORDER: list[type[enum.Enum]] = [
     RoomStatus,
     ErrorCode,
 ]
-_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount, SeatView]
+_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount, SeatView, FreeEntryVoteView]
 
 _HEADER = """\
 // ⚠️ GENERATED — DO NOT EDIT BY HAND.

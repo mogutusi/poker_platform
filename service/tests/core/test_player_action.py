@@ -116,6 +116,7 @@ def test_preflop_bb_option_then_flop():
     assert len(status_msgs) == 1 and status_msgs[0].status is HandStatus.FLOP and len(status_msgs[0].board) == 3
     # 换街这条要自带新街的下注态(0087):客户端不该自己推「换街了所以清零」
     assert status_msgs[0].last_bet == 0
+    assert status_msgs[0].min_raise_to == 2  # 新街 last_bet=0、last_raise_size 重置为 BB ⇒ 下限 = BB
     assert {v.nickname: v.bet_amount for v in status_msgs[0].players} == {"A": 0, "B": 0, "C": 0}
     assert isinstance(events[-1], TurnChanged)
 

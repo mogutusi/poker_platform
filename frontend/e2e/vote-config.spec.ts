@@ -3,6 +3,7 @@
 // 前置:后端在跑。
 
 import { expect, test, type Page } from '@playwright/test'
+import { dropGameSocket, gameSockets, installWsProbe } from './helpers'
 
 const K_USER = '00112233445566778899aabbccddeeff'
 const PASSWORD = 'devpass123'
@@ -57,6 +58,7 @@ test.describe('免盲投票', () => {
     const room = `vote-${Date.now().toString(36)}`
     const ctxA = await browser.newContext()
     const ctxB = await browser.newContext()
+    await ctxB.addInitScript(installWsProbe)  // 下面要在 B 上制造一次掉线(BUG-9)
     const a = await ctxA.newPage()
     const b = await ctxB.newPage()
     const errors: string[] = []
@@ -125,6 +127,30 @@ test.describe('免盲投票', () => {
         await agree.click()
         await expect(panel.getByText(/你已同意/)).toBeVisible({ timeout: 10_000 })
       }
+
+      // ── BUG-9(0088):掉线重连之后这张票必须还在 ──
+      // 服务器重连只私发 StateSnapshot、不重发投票事件,所以快照不投影投票的话面板会凭空消失。
+      // 全票制下,消失的那一份恰恰属于「还没表态、正被等着的人」,票就此永久卡住。
+      const panelB = b.getByRole('dialog', { name: '免盲投票' })
+      await expect(panelB).toBeVisible({ timeout: 10_000 })  // 断线前 B 也看得见这张票
+      const socketsBefore = await dropGameSocket(b)
+      await expect
+        .poll(async () => (await gameSockets(b)).length, { timeout: 20_000 })
+        .toBeGreaterThan(socketsBefore)
+
+      // 面板还在,而且还是同一张票(候选没变)。这就是 BUG-9 的正题:此前重连之后它会凭空消失。
+      await expect(panelB).toBeVisible({ timeout: 15_000 })
+      await expect(panelB.getByText(/carol/)).toBeVisible()
+
+      // 但**投票权确实没了**,而且这是对的:重连恢复到 SITTING_IN 而不是 READY_TO_PLAY
+      // (见 service/docs/connection.md 重连臂),所以他此刻不是合格投票人。
+      await expect(panelB.getByText(/你不是本次的投票人/)).toBeVisible({ timeout: 10_000 })
+
+      // 他重新点 Ready 才又成为投票人 —— 而这件事必须有事件说出来(0088 给 _maybe_resolve_entry_vote
+      // 补的那条 FreeEntryVoteUpdated)。没有它,面板会一直停在「你不是本次的投票人」,
+      // 全票制下这张票就永远等不到他,卡死。
+      await b.getByRole('button', { name: /^Ready$/ }).click()
+      await expect(panelB.getByRole('button', { name: '同意' })).toBeVisible({ timeout: 10_000 })
 
       expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
     } finally {

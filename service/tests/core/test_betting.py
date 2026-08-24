@@ -95,6 +95,24 @@ def test_min_raise_violation_rejected():
     assert h.players[1].bet_amount == 0  # 非法不改状态
 
 
+# ── min_raise_target:校验用的下限与上 wire 的下限是同一份(0088)──
+def test_min_raise_target_is_the_boundary_used_by_validation():
+    players = [player("A", 100, seat=0, bet_amount=4), player("B", 100, seat=1)]
+    h = hand(players, last_bet=4, last_raise_size=8, acting_position=1)
+    target = betting.min_raise_target(h, BB)
+    assert target == 4 + 8  # last_bet + max(last_raise_size, BB),BB 这里更小
+    # 下限本身合法,差一分就非法 —— 钉住「上 wire 的那个数就是判定用的那个数」
+    assert betting.apply_action(h, h.players[1], BET, target - 1, BB) is not None
+    assert betting.apply_action(h, h.players[1], BET, target, BB) is None
+
+
+def test_min_raise_target_floors_at_big_blind():
+    # last_raise_size 比 BB 小时取 BB(rules.md ② 的 max)
+    players = [player("A", 100, seat=0, bet_amount=4), player("B", 100, seat=1)]
+    h = hand(players, last_bet=4, last_raise_size=1, acting_position=1)
+    assert betting.min_raise_target(h, BB) == 4 + BB
+
+
 # ── 测试 ②.7 短 all-in 不重开 ──
 def test_short_all_in_does_not_reopen():
     players = [

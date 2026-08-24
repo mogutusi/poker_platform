@@ -55,6 +55,12 @@ export interface SeatView {
   new_here: boolean;
 }
 
+export interface FreeEntryVoteView {
+  candidates: string[];
+  voters: string[];
+  approvals: string[];
+}
+
 // ── server → client messages ──
 
 export interface HandStarted {
@@ -66,6 +72,8 @@ export interface HandStarted {
   players: PlayerView[];
   acting_position: number | null;
   pot: number;
+  last_bet: number;
+  min_raise_to: number;
 }
 
 export interface HoleCards {
@@ -78,6 +86,7 @@ export interface HandStatusChanged {
   status: HandStatus;
   board: Card[];
   last_bet: number;
+  min_raise_to: number;
   players: PlayerView[];
 }
 
@@ -90,6 +99,7 @@ export interface PlayerActed {
   points: number;
   status: PlayerStatus;
   last_bet: number;
+  min_raise_to: number;
   pot: number;
   acting_position: number | null;
 }
@@ -154,9 +164,12 @@ export interface StateSnapshot {
   hand_status: HandStatus | null;
   board: Card[];
   pot: number;
+  last_bet: number;
+  min_raise_to: number;
   acting_position: number | null;
   players: PlayerView[];
   your_hole_cards: [Card, Card] | null;
+  free_entry_vote: FreeEntryVoteView | null;
 }
 
 export interface ChatMessage {

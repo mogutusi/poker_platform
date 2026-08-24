@@ -49,6 +49,14 @@ class NickAmount(_Frozen):
     amount: int  # 金额(赢得 / 退还)
 
 
+class FreeEntryVoteView(_Frozen):
+    # 进行中免盲投票的公开态(与 FreeEntryVoteUpdated 三字段同义同源,由同一个 core 投影算出)。
+    # 存在的理由:重连/顶替只发 StateSnapshot,不重发 FreeEntryVoteUpdated,面板会凭空消失(BUG-9)。
+    candidates: tuple[str, ...]  # 受这次入局盲影响的 new_here 玩家(通过则免费入局)
+    voters: tuple[str, ...]  # 合格投票人 nick(已入局且 READY_TO_PLAY);**每次实时重算**,不是开票时的快照
+    approvals: tuple[str, ...]  # 当前已 approve 的投票人(只算仍合格的)
+
+
 class SeatView(_Frozen):
     seat_position: int  # 座位号
     nickname: str  # 占座者
@@ -69,6 +77,8 @@ class HandStarted(ServerMessage):
     players: tuple[PlayerView, ...]  # 行动序座位快照([0]=SB、[1]=BB);不含底牌
     acting_position: int | None  # players 下标:preflop 首行动者;无人可行动为 None
     pot: int  # 开局即时总底池(contributed + 各人本街 bet_amount,开局即盲注之和)
+    last_bet: int  # 本街需跟到的额度(开局 = 大盲)
+    min_raise_to: int  # 自愿加注的合法下限(本街目标总额,rules.md ②);all-in 不受此限
 
 
 class HoleCards(ServerMessage):
@@ -84,6 +94,7 @@ class HandStatusChanged(ServerMessage):
     status: HandStatus  # 当前街(开局为 PRE_FLOP)
     board: tuple[Card, ...]  # 已发公共牌;PRE_FLOP 为空,逐街追加
     last_bet: int  # 本街需跟到的额度(新街为 0;开局 PRE_FLOP 为大盲)
+    min_raise_to: int  # 本街自愿加注的合法下限(rules.md ②);all-in 不受此限
     players: tuple[PlayerView, ...]  # 本街起点的在手玩家快照(bet_amount 已按本街计;不含底牌)
 
 
@@ -96,6 +107,7 @@ class PlayerActed(ServerMessage):
     points: int  # 行动后本人剩余筹码
     status: PlayerStatus  # 行动后本人状态(ACTIVE / FOLDED / ALLIN)
     last_bet: int  # 推进后本街需跟到的额度(进新街为 0)
+    min_raise_to: int  # 推进后自愿加注的合法下限(rules.md ②;加注重开会抬高它);all-in 不受此限
     pot: int  # 推进后总底池(contributed + 各人本街 bet_amount)
     acting_position: int | None  # 推进后下一行动者(players 下标);手牌结束为 None
 
@@ -164,9 +176,12 @@ class StateSnapshot(ServerMessage):
     hand_status: HandStatus | None  # 进行中手牌的街;无手为 None
     board: tuple[Card, ...]  # 已发公共牌;无手为空
     pot: int  # 总底池(contributed + 各人本街 bet_amount);无手为 0
+    last_bet: int  # 本街需跟到的额度;无手为 0
+    min_raise_to: int  # 自愿加注的合法下限(rules.md ②);无手为 0;all-in 不受此限
     acting_position: int | None  # players 下标:当前行动者;无手/无人可行动为 None
     players: tuple[PlayerView, ...]  # 行动序在手玩家(不含底牌);无手为空
     your_hole_cards: tuple[Card, Card] | None  # 收件人自己的底牌(仅其在手时);他人底牌结构性缺位
+    free_entry_vote: FreeEntryVoteView | None  # 进行中的免盲投票公开态;没有投票为 None(BUG-9:重连不重发投票事件)
 
 
 class ChatMessage(ServerMessage):

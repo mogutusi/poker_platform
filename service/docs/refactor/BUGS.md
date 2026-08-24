@@ -87,9 +87,9 @@
 - **机理**:`SessionStore.revoke` 全仓零调用者——既没有登出端点,也没有管理员吊销通道。
 - **修法**:补吊销通道(登出端点,或建 `name→sessions` 索引供改密/reset 时撤销)。若确认 v1 就是不做,则要在 [auth.md](../auth.md) 显式记档「不吊销,靠 TTL + 重启」,不能留成隐性缺口。
 
-### BUG-9 · 重连/顶替后免盲投票面板消失
+### ~~BUG-9 · 重连/顶替后免盲投票面板消失~~ —— **0088 已修**
 
-- **来源**:[0072·N9](changes/0072-architecture-audit.md)
+- **来源**:[0072·N9](changes/0072-architecture-audit.md) · **修于 [0088](changes/0088-betting-floor-and-vote-on-the-wire.md)**(`StateSnapshot` 加 `free_entry_vote` 投影;**并补上登记时没看到的另一半**:投票人集合变了要补发 `FreeEntryVoteUpdated`,否则「重连回来的人再点 Ready」这件事没有任何事件承载,他的面板一直显示「你不是本次的投票人」,票照样卡死)
 - **症状**:重连或顶替后,进行中的免盲投票在客户端消失;重连回来的必需投票人根本不知道有一张票在等他。投票因此卡住。
 - **机理**:`StateSnapshot` 不投影 `room.entry_vote`。
 - **修法**:给 `StateSnapshot` 加投票公开态的投影;或在 reduce 的重连臂补发一条 `FreeEntryVoteUpdated`。
@@ -103,15 +103,15 @@
 
 ---
 
-### BUG-19 · 前端自己编了一个 min-raise 下限,别人大额加注之后就发不出合法的加注
+### ~~BUG-19 · 前端自己编了一个 min-raise 下限,别人大额加注之后就发不出合法的加注~~ —— **0088 已修**
 
-- **来源**:[0085](changes/0085-raise-and-sidepot-verification.md)(写加注冒烟时**实测**出来的,不是推断)
+- **来源**:[0085](changes/0085-raise-and-sidepot-verification.md)(写加注冒烟时**实测**出来的,不是推断)· **修于 [0088](changes/0088-betting-floor-and-vote-on-the-wire.md)**(上 wire 的是**下限本身** `min_raise_to`,不是 `last_raise_size` —— 给原料等于请客户端重算规则;校验与投影共用 `betting.min_raise_target` 一份公式)
 - **症状**:有人大额加注之后,点「Raise」而不手动改金额,发出去的注会被服务器以 `ILLEGAL_ACTION` 拒掉;金额输入框上的 `min` 也是个假下限,照它填一样被拒。
 - **机理**:[rules.md](../rules.md) ② 的合法下限是 `last_bet + max(last_raise_size, BB)`,而 **`last_raise_size` 只在 `core/domain.py` 的 `Hand` 里,从来没上过 wire**。前端够不着它,于是自己编了两个式子:输入框 `min={callAmount * 2}`(规则里根本没有这个式子),留空时回退 `state.lastBet + state.bigBlind`(只在 `last_raise_size ≤ BB` 时才等于真下限)。
 - **实测证据**(`npm run smoke:raise`):`last_bet=2` 时加注到 10 ⇒ `last_raise_size=8`;此后下限是 `10+8=18`,而前端那个式子给的是 `10+2=12` —— 12 被 `ILLEGAL_ACTION` 拒,18 被接受。
 - **这是 [0084](changes/0084-new-here-channel.md) 那类病的第二例**:客户端需要的一个规则输入没有传达渠道,于是前端只好猜。修法同款——把下限(或 `last_raise_size`)放上 wire,让服务器说,前端只显示不推算。要碰的消息是 `last_bet` 会变的那几处:`HandStarted` / `PlayerActed` / `HandStatusChanged` / `StateSnapshot`。
 - **为什么本批不修**:0085 是验证批,它的职责是把这条路走通并留下证据;改协议要动 4 条消息 + codegen + 前端,值得单独一篇变更记录。**已有回归护栏**:`smoke:raise` 会一直钉住服务端这一侧的下限语义。
-- **0087 进展**:同一批消息里,`last_bet` 这一半已经补齐了——`HandStatusChanged` 现在带 `last_bet` + 本街 `players[]`,`HandStarted` 带 `pot`(修的是另一个缺陷:前端自己推「换街即清零」,把开局盲注也清了,整轮 preflop 的跟注因此发成 `bet(0)` 被拒)。**本条剩下的是 `last_raise_size`(加注下限)那一半**:`HandStarted` / `PlayerActed` / `StateSnapshot` 仍不带它,前端那两个自编式子(`min={callAmount*2}`、回退 `lastBet+bigBlind`)也还在。
+- **0087 先补了 `last_bet` 那一半**:同一批消息里——`HandStatusChanged` 现在带 `last_bet` + 本街 `players[]`,`HandStarted` 带 `pot`(修的是另一个缺陷:前端自己推「换街即清零」,把开局盲注也清了,整轮 preflop 的跟注因此发成 `bet(0)` 被拒)。**本条剩下的是 `last_raise_size`(加注下限)那一半**:`HandStarted` / `PlayerActed` / `StateSnapshot` 仍不带它,前端那两个自编式子(`min={callAmount*2}`、回退 `lastBet+bigBlind`)也还在。
 
 ---
 
@@ -162,6 +162,8 @@
 | 0072·N3(BUG-7)| GameLoop 兜底只罩 `reduce()`,且常驻协程死了无人告警(潜在缺口,非活路径)| 0083 |
 | 0074·F(BUG-4)| 改昵称窗内 ws 顶替 → `rekey` 只改死对象,活连接永久挂旧键 | 0083 |
 | 0074·I/J(BUG-5)| `_cancel_and_await` 吞自己的取消;lifespan `yield` 无 `try/finally` → drain 整体跳过 | 0083 |
+| 0072·N9(BUG-9)| `StateSnapshot` 不投影 `entry_vote` → 重连/顶替后投票面板消失、全票制下卡死 | 0088 |
+| 0085(BUG-19)| 前端自编 min-raise 下限 → 别人大额加注之后发不出合法加注 | 0088 |
 
 ## 误报留档(别再「发现」一次)
 

@@ -35,6 +35,13 @@ def apply_action(
     return Err(ErrorCode.ILLEGAL_ACTION, f"未知动作 {action}")
 
 
+def min_raise_target(hand: Hand, big_blind: int) -> int:
+    # 自愿加注的合法下限(本街目标总额),rules.md ②:`last_bet + max(last_raise_size, BB)`。
+    # **校验与上 wire 的投影共用这一份**(见 changes/0088):公式只此一处,显示的下限与判定的下限
+    # 不可能对不上。注意 all-in 不受此限(amount == stack 即便不足一个完整加注也放行,决策 2)。
+    return hand.last_bet + max(hand.last_raise_size, big_blind)
+
+
 def _apply_bet(hand: Hand, player: Player, bet_amount: int | None, big_blind: int) -> Err | None:
     if bet_amount is None:
         return Err(ErrorCode.ILLEGAL_ACTION, "BET 必须带 bet_amount")
@@ -50,7 +57,7 @@ def _apply_bet(hand: Hand, player: Player, bet_amount: int | None, big_blind: in
     if amount > old_last_bet:
         # 自愿加注须够 min-raise;all-in 超注即便不足完整加注也放行并重开(决策 2)
         if not is_all_in:
-            min_target = old_last_bet + max(hand.last_raise_size, big_blind)
+            min_target = min_raise_target(hand, big_blind)  # 此时 hand.last_bet 仍是 old_last_bet
             if amount < min_target:
                 return Err(ErrorCode.ILLEGAL_ACTION, f"加注须到 {min_target}(min-raise)")
         hand.last_raise_size = max(hand.last_raise_size, amount - old_last_bet)  # 取 max 不缩小
