@@ -101,12 +101,14 @@ alembic downgrade head
 Working directory: `~/service`
 
 The legacy prototype entrypoint (`app.main`) was removed in refactor 0027.
-The current runnable target is the **plaintext dev shell** (dev-only, no auth/encryption):
+The current runnable target is the shell in `app.shell.lifespan`. Every connection is
+encrypted: `POST /user/login` to get a `sid`, then open `ws://<host>/ws?sid=<sid>`.
+The unauthenticated `/dev/ws?nick=` shortcut was retired in refactor 0086.
 
 ```bash
 poetry env activate
 uvicorn app.shell.lifespan:app
-# → ws://127.0.0.1:8000/dev/ws?nick=alice  (preset dev users: alice/bob/carol/dave/eve/frank)
+# → http://127.0.0.1:8000  (preset dev users: alice/bob/carol/dave/eve/frank)
 ```
 
 If this does not work, **open a new terminal** and try again.

@@ -74,6 +74,15 @@ case BuyIn(seat=s, amount=amt):                 # 模型 2:命令不带 room/nic
 - `user` 和 `room` 在同一份副本里,一起 commit 或一起 discard,不存在「user 改了、room 没改」的中间态。
 - 只读命令直接读 `work.users[nick]`,不产出 `Persist`;`Persist` 带快照值而非引用,`PointsWrite` 装的是一个 `int`。
 
+## 账号从哪来:**内部注册,没有开户接口**(用户定案,0086)
+
+**这是有意的设计,不是缺口——别去实现「注册端点」。** 开户由内部人**直接往 `user` 表插一行**完成(`name` 登录名、`nickname` 昵称、`hash_password`、`k_cur`);dev 环境下这件事由 `seed_dev_users` 幂等做掉。`K_user` 由管理员 CLI `scripts/kuser_admin.py issue` 生成并**带外**交给用户(新钥进日志会破脱敏红线,见 [auth.md](auth.md) / [changes/0066](refactor/changes/0066-p5-kuser-rotation.md))。
+
+由此推出两条,读代码时不要误判成 bug:
+
+- **登录端点不创建用户**:`POST /user/login` 查不到 `name` 就 401,与密码错、blob 坏一律不区分(fail-closed,见 [changes/0059](refactor/changes/0059-p5-login-endpoint.md))。
+- **`world.users` 的载入永远能在 DB 找到行**:`_build_join` 读不到行时回的是 `INTERNAL`「无 DB 账号行」而不是建号——鉴权说有、DB 说无,那是内部不一致,不是新用户。
+
 ## 生命周期:何时载入、何时驱逐
 
 载入要读 DB,属于 IO,只能在 shell 做。模型 2 下载入发生在 `JoinRoom` 而非连接握手——大厅用户不进 `world.users`,见 [lobby.md](lobby.md)。

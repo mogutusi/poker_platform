@@ -32,7 +32,7 @@ poetry add <pkg>
 poetry add --group dev pytest pytest-asyncio   # 开发依赖(见 testing.md)
 
 # 跑东西(工作目录 service/)。原型入口 app.main 已于 0027 删;当前可跑的是明文 dev shell。
-poetry run uvicorn app.shell.lifespan:app   # 推荐;→ ws://127.0.0.1:8000/dev/ws?nick=alice
+poetry run uvicorn app.shell.lifespan:app   # 推荐;先 POST /user/login 换 sid,再连 ws://127.0.0.1:8000/ws?sid=<sid>
 poetry env activate                          # 或先激活、再裸跑命令
 .venv/bin/uvicorn app.shell.lifespan:app     # 或直接点名 venv 可执行(等价)
 ```

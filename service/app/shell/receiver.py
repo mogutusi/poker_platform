@@ -1,7 +1,7 @@
 # Receiver:一条连接的一生(见 connection.md「连接生命周期」):
 # 登记(可能顶替)→ 起 Sender → 投 Connect → 收帧循环(收→[解密]→parse→Command 盖 origin→inbox + heartbeat)→ 退出清理。
 # 帧编解按 conn.channel 分流(dispatch/GameLoop/reduce 全程不知有加密,守分层):
-#   channel None(dev ?nick=)→ 明文文本帧 receive_text → parse;
+#   channel None → 明文文本帧 receive_text → parse(**测试接缝**;明文端点已 0086 退役,生产恒非 None);
 #   channel 非 None(加密 ?sid=)→ 二进制帧 receive_bytes → channel.open(验 MAC→解密→验 seq)→ 明文 → parse(见 changes/0061)。
 # FrameError(伪造/重放/损坏)= 安全信号 → 关连接(区别于「解密成功但 JSON/type 非法」的 INVALID_MESSAGE 续跑)。
 
@@ -96,7 +96,7 @@ async def run_receiver(
 
 async def _recv_frame(conn: Connection) -> str | bytes | None:
     # 收一帧并归一成「明文载荷(str/bytes)」交 parse:
-    #   channel None(dev)→ 明文文本帧,原样返回;
+    #   channel None → 明文文本帧,原样返回。**生产走不到**(0086 退役明文端点后唯一入口必带 channel),留作测试接缝;
     #   channel 非 None(加密)→ 会话未过期(exp 兜底强制到活连接,0070)→ 二进制帧 → channel.open
     #   (结构→验 MAC→解密→验 seq,见 auth/channel.py)→ 明文 bytes。
     # 返回 None = FrameError(伪造/重放/损坏)或会话过期:log.warning(只 reason,不含明文/密钥,脱敏红线)

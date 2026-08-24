@@ -14,6 +14,9 @@
 
 import { BASE, connectAs, ensureInRoom, sleep } from './smoke-client.mjs'
 
+// 专属冒烟账号,不与浏览器用例共用(理由见 smoke-e2e.mjs 顶部)。
+const [A, B, C] = ['smoke1', 'smoke2', 'smoke3']
+
 const SB = 1
 const BB = 2
 
@@ -64,8 +67,8 @@ async function main() {
   // ── ① 两人:加注 → 再加注(制造 last_raise_size > BB)→ min-raise 下限 ──
   log('① 两人局:加注与 min-raise')
   const room1 = `raise-${Date.now().toString(36)}`
-  const alice = await connectAs('alice')
-  const bob = await connectAs('bob')
+  const alice = await connectAs(A)
+  const bob = await connectAs(B)
   await seatUp(alice, room1, 0, 200)
   await seatUp(bob, room1, 1, 200)
 
@@ -133,10 +136,10 @@ async function main() {
   log('')
   log('② 三人局:短码 all-in → 边池')
   const room2 = `pot-${Date.now().toString(36)}`
-  const a2 = await connectAs('alice')
-  const b2 = await connectAs('bob')
-  const c2 = await connectAs('carol')
-  const SHORT = 20 // carol 短码:她 all-in 之后,alice/bob 之间还能继续下注 → 主池 + 边池
+  const a2 = await connectAs(A)
+  const b2 = await connectAs(B)
+  const c2 = await connectAs(C)
+  const SHORT = 20 // 短码(C):她 all-in 之后,alice/bob 之间还能继续下注 → 主池 + 边池
   await seatUp(a2, room2, 0, 200)
   await seatUp(b2, room2, 1, 200)
   await seatUp(c2, room2, 2, SHORT)
@@ -148,21 +151,21 @@ async function main() {
   const seatClient = { 0: a2, 1: b2, 2: c2 }
   const SIDE_RAISE = 60 // carol 只够到 20 ⇒ 超出的部分只能进边池
   let guard2 = 0
-  let carolAllIn = false
+  let shortStackAllIn = false
   let sideRaiseDone = false
   while (guard2++ < 80 && !a2.events.some((m) => m.type === 'hand_ended')) {
     const seat = actingSeat(a2)
     if (seat === null) { await sleep(120); continue }
     const who = seatClient[seat]
     const need = currentBet(a2)
-    if (seat === 2 && !carolAllIn) {
-      // carol 直接推完短码 → 她的可投入额封顶,后面 alice/bob 再加注就分出边池
+    if (seat === 2 && !shortStackAllIn) {
+      // 短码玩家直接推完 → 她的可投入额封顶,后面 alice/bob 再加注就分出边池
       const snap = a2.last('hand_started')
       const her = snap.players.find((p) => p.seat_position === 2)
       who.send({ type: 'player_action', action: 'bet', bet_amount: her.points + her.bet_amount })
-      carolAllIn = true
-    } else if (carolAllIn && !sideRaiseDone) {
-      // 关键一步:carol 已经推完,还有筹码的人**再加一次**——只有超出她那 20 的部分才会分出边池。
+      shortStackAllIn = true
+    } else if (shortStackAllIn && !sideRaiseDone) {
+      // 关键一步:短码已经推完,还有筹码的人**再加一次**——只有超出她那 20 的部分才会分出边池。
       // 少了这一步,大家只是跟平她的 all-in,底池根本没分层(第一版就是这么写的,于是「边池」名不副实)。
       who.send({ type: 'player_action', action: 'bet', bet_amount: SIDE_RAISE })
       sideRaiseDone = true
@@ -186,9 +189,9 @@ async function main() {
     // 分出去的总额超过它 ⇒ 超出的那部分只可能来自边池。
     check(paid > 3 * SHORT, `底池确实分了层(分配总额 ${paid} > 主池上限 ${3 * SHORT})`)
     // 短码够不着边池:无论她牌多大,赢取都不可能超过主池上限。
-    const carolWon = ended2.winnings.find((w) => w.nickname === 'carol')?.amount ?? 0
+    const carolWon = ended2.winnings.find((w) => w.nickname === C)?.amount ?? 0
     check(carolWon <= 3 * SHORT, `短码赢取不超过主池上限(${carolWon} ≤ ${3 * SHORT})`)
-    check(sideRaiseDone, '边池是由 carol all-in 之后的再加注造出来的(不是跟平)')
+    check(sideRaiseDone, '边池是由 短码 all-in 之后的再加注造出来的(不是跟平)')
   }
 
   for (const c of [a2, b2, c2]) c.send({ type: 'leave_room' })
@@ -196,7 +199,7 @@ async function main() {
 
   // 三人合计守恒(对基线,不对写死值:dev 库长期复用,见 smoke-e2e 的同款注释)
   const board = await (await fetch(`${BASE}/leaderboard`)).json()
-  const total = ['alice', 'bob', 'carol'].reduce((n, nick) => n + (board.find((e) => e.nickname === nick)?.points ?? 0), 0)
+  const total = [A, B, C].reduce((n, nick) => n + (board.find((e) => e.nickname === nick)?.points ?? 0), 0)
   check(Number.isFinite(total) && total > 0, `三人积分合计 ${total}(离桌后已全部结算回全局)`)
 
   for (const c of [a2, b2, c2]) c.ws.close()

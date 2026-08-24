@@ -185,7 +185,7 @@ wire 消息(`ServerMessage`/`ClientMessage`)只在后端 Pydantic 写一份,前�
 
 - 每条消息带一个 `type` 字面量,构成可辨识联合(discriminated union),Pydantic 与 TS 一一对应。
 - 后端 Pydantic 是唯一事实源,TS 由 codegen 产出。ws 消息走自包含的 Python 生成器 [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py),不依赖 node;REST 走 OpenAPI 加 `openapi-typescript`(P7)。治理与缘由见 [wire.md](wire.md)。消息清单在 .py 及其生成产物里,不在文档里。
-- 生成步骤进 CI 或 pre-commit;前端只消费生成产物,禁止手写或手改。
+- 漂移守门是 `pytest` 里的 [tests/wire/test_codegen_uptodate.py](../tests/wire/test_codegen_uptodate.py):改了 `.py` 不重新生成就红。**仓库目前没有 CI,也没装 pre-commit**——提交规约写在 [dev.md](dev.md)「提交」,靠人执行;要不要自动化是独立决策(见 [BUGS.md](refactor/BUGS.md) DEBT-1)。前端只消费生成产物,禁止手写或手改。
 - 多语言文案不在协议里:后端只回机器可读的 `code`(见 [error.md](error.md)),文案由前端按 `code` 映射。
 
 > **传输层另有一层加密信封**:这里的 `ServerMessage`/`ClientMessage` 是明文 JSON;在无 TLS 的前提下,外面还套一层 SM4 + HMAC-SM3 + 序号的安全帧(见 [auth.md](auth.md))。codegen 只覆盖 JSON 这层;前端除消费生成的 JSON 类型外,还要自己实现帧的加解密。

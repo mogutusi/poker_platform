@@ -135,7 +135,7 @@
 
 | ID | 事项 | 出处 |
 |---|---|---|
-| DEBT-1(C2) | [architecture.md](../architecture.md)/[wire.md](../wire.md) 声称 codegen「进 CI/pre-commit」,实际只有 pytest 守门。要么补最小 pre-commit 配置,要么把口径改成如实。取向待用户定案 | 0072·C2 |
+| ~~DEBT-1(C2)~~ | ~~architecture.md/wire.md 声称 codegen「进 CI/pre-commit」,实际只有 pytest 守门~~ —— **0086 已把口径改实**(两处都改成「pytest 守门,仓库没有 CI 也没装 pre-commit,提交规约见 dev.md」)。**要不要真搭 CI 是独立决策,未做**:仓库的提交流程本来就写在 [dev.md](../dev.md)「提交」,缺的是自动化而不是约定 | 0072·C2 |
 | DEBT-2(D2) | [architecture.md](../architecture.md) 不变量 2 写「读 DB、不读 `world`」,但已有三处**记档合规**的只读豁免(presence 0037、`GET /lobby/rooms` 0048、`FetchRoomChat` 0071)。顶层不变量没描述这个豁免家族,读者按字面会把三处合规代码误判为违规。修法:不变量 2 补一句豁免判据 | 0072·D2 |
 | DEBT-3(D3) | [connection.md](../connection.md) / [lobby.md](../lobby.md) 的「待定」段陈旧 | 0072·D3 |
 | DEBT-4(D4) | 四处陈旧注释,含两处 JWT 反事实(P5 已无 JWT) | 0072·D4 |

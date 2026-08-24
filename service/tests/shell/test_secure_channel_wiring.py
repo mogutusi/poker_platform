@@ -184,11 +184,14 @@ def _ws_endpoint(app):
     return routes[0].endpoint
 
 
-def test_secure_ws_route_registered():
-    # create_app 注册加密端点 /ws(与 dev 明文 /dev/ws 并存)。
+def test_secure_ws_route_registered_and_plaintext_one_is_gone():
+    # create_app 只注册加密端点 /ws。明文 `/dev/ws?nick=` 已于 0086 退役——它无鉴权,握手只看
+    # ?nick= 是不是 dev 用户名,谁连上都能冒充那个身份收发命令。这条断言是退役的回归护栏:
+    # 谁要是把它加回来(哪怕只为「本地方便」),这里就红。
     app = create_app()
     ws_paths = {getattr(r, "path", None) for r in app.routes}
-    assert "/ws" in ws_paths and "/dev/ws" in ws_paths
+    assert "/ws" in ws_paths
+    assert "/dev/ws" not in ws_paths
 
 
 async def test_secure_ws_unknown_sid_rejected():

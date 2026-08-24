@@ -90,7 +90,7 @@ class GameConfig(BaseSettings):
     DEV_SMALL_BLIND: int = Field(ge=1, le=100000)  # 新建房默认小盲(大盲 = 2×;建后任何在房成员可 SetSmallBlind 调)
     DEV_BUY_IN: int = Field(ge=1, le=100000000)  # 新建房默认买入额(Room.buy_in;实际买入额由 BuyIn 命令带)
     DEV_SEATS: int = Field(ge=2, le=10)  # 新建房座位数(Room.seats 长度)
-    DEV_USERS: tuple[str, ...] = Field(min_length=1)  # 预置 dev 用户名(?nick= 取其一);env 写 JSON 数组
+    DEV_USERS: tuple[str, ...] = Field(min_length=1)  # 预置 dev 用户名(env 写 JSON 数组);seed_dev_users 幂等种进 DB,uid = 序号+1(**只可追加,改序会错配已有行**)
     DEV_START_POINTS: int = Field(ge=0, le=100000000)  # 每个 dev 用户的初始全局积分
     # dev 登录脚手架(changes/0060,dev-only 非生产):dev 用户共享口令 + 共享 K_user,使 /user/login 可真跑。
     # 生产走每用户带外 K_user + 各自密码(auth.md),此处明示放宽(dev 客户端要知 K_user 才能加密登录 blob)。

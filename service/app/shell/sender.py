@@ -27,7 +27,8 @@ async def sender_loop(conn: Connection) -> None:
                 return
             payload = msg.model_dump_json()  # 明文 JSON(隐私由结构缺位保证,见 wire.md)
             if conn.channel is None:
-                await conn.ws.send_text(payload)  # 明文 dev 帧;让出点:慢客户端卡这里(只影响本连接)
+                # 生产走不到这里(0086 退役明文端点后,唯一入口必带 channel);留作测试接缝。
+                await conn.ws.send_text(payload)  # 让出点:慢客户端卡这里(只影响本连接)
             else:
                 frame = conn.channel.seal(payload.encode("utf-8"))  # 加密成帧:seq 藏 ct、encrypt-then-MAC
                 await conn.ws.send_bytes(frame)  # 让出点:慢客户端卡这里(只影响本连接)

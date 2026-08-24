@@ -292,18 +292,15 @@ async def test_ws_endpoints_wire_persistwriter(monkeypatch):
     async def _capture_run_receiver(conn, conns, inbox, timer, sessionmaker, world, persist, persistwriter=None):
         captured.append({"nick": conn.nick, "persistwriter": persistwriter})
 
-    async def _fake_load(sessionmaker, nick):
-        return (1, gameconfig.DEV_START_POINTS)  # 绕开真 DB(端点前置的行存在性检查)
-
     monkeypatch.setattr(lifespan_mod, "run_receiver", _capture_run_receiver)
-    monkeypatch.setattr(lifespan_mod, "load_user_by_nick", _fake_load)
     app = lifespan_mod.create_app()
     shell = app.state.shell
-    dev_ep = next(r for r in app.routes if getattr(r, "path", None) == "/dev/ws").endpoint
+    # 只剩加密端点一条入口(明文 /dev/ws 已于 0086 退役);两条连接都必须拿到 persistwriter,
+    # 否则 join_room 的载入屏障静默跳过(0073),会读到还没落库的陈旧积分。
     sec_ep = next(r for r in app.routes if getattr(r, "path", None) == "/ws").endpoint
-    await dev_ep(FakeWS(), nick="alice")  # 明文 dev 端点
-    sid, _session = shell.session_store.create("alice", "alice", _time.time())
-    await sec_ep(FakeWS(), sid=sid)  # 加密端点
+    for nick in ("alice", "bob"):
+        sid, _session = shell.session_store.create(nick, nick, _time.time())
+        await sec_ep(FakeWS(), sid=sid)
     assert len(captured) == 2
     for c in captured:
         assert c["persistwriter"] is shell.persistwriter and c["persistwriter"] is not None  # 生产必传

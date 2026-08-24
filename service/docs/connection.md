@@ -38,8 +38,8 @@ class Connection:                    # 一条物理 ws 的全部 shell 状态;�
     session_id: str                  # 会话句柄(公开 selector):审计/日志关联,加密路查会话
     ws: WebSocket
     outbound: asyncio.Queue          # 有界,满 = 慢客户端(见「队列满」);装明文 ServerMessage,由 Sender 加密
-    channel: SecureChannel | None    # 引用会话的信道;None = 明文 dev 帧(?nick=),非 None = 加密帧(?sid=,0061)
-    session: Session | None          # 所属会话引用;收/发帧前比对 expires_at 做 exp 兜底(0070);dev 明文为 None
+    channel: SecureChannel | None    # 引用会话的信道;**生产恒非 None**(0086 退役明文端点后),None 只剩测试接缝
+    session: Session | None          # 所属会话引用;收/发帧前比对 expires_at 做 exp 兜底(0070);同 channel,生产恒非 None
     sender_task: asyncio.Task | None = None
     receiver_task: asyncio.Task | None = None   # 本连接的 ws handler 自身;慢客户端被丢弃时据此终结它(0083)
     # 注:用户在哪个房间是 world 状态(world.users[nick].room),不是连接字段。
@@ -82,12 +82,12 @@ class ConnectionManager:
 
 | `channel` | 端点 | 收发 |
 |---|---|---|
-| None | `?nick=`(明文 dev 帧) | 收发明文 JSON |
-| 非 None | `?sid=`(加密帧) | Sender `seal` 出二进制;Receiver `receive_bytes` → `channel.open` → `parse` |
+| 非 None | `?sid=`(加密帧)——**唯一入口** | Sender `seal` 出二进制;Receiver `receive_bytes` → `channel.open` → `parse` |
+| None | 无端点(**测试接缝**) | 收发明文 JSON;shell 接线测试用,加密本身在 `tests/crypto` 穷举 |
 
 - 信道逐会话、跨重连复用、seq 连续,细节见 [auth.md](auth.md);每连接限速桶 `chat_bucket` / `dm_bucket`(`TokenBucket`)随房聊 [0033](refactor/changes/0033-room-chat-text-guard.md)、私聊 [0038](refactor/changes/0038-dm-send-deliver.md) 加入。
 - 其他相关落地:REST 信封 [0062](refactor/changes/0062-p5-rest-envelope-user-me.md);登录重放守卫 [0063](refactor/changes/0063-p5-login-replay-guard.md);K_user 双钥轮换 [0066](refactor/changes/0066-p5-kuser-rotation.md),该轮换不动会话密钥。
-- P5 已全部落地。仅剩一项:前端切加密后退役明文 `?nick=` 端点。
+- **P5 已全部落地并收尾**:明文 `/dev/ws?nick=` 端点已于 [0086](refactor/changes/0086-retire-plaintext-endpoint.md) 退役——前端加解密落地(29/29 向量 + 三条冒烟 + 浏览器用例全走加密)即满足既定退役条件。它无鉴权,握手只看 `?nick=` 是不是 dev 用户名,谁连上都能冒充那个身份;「标着 dev-only」不是防线,注册着的路由才是。`tests/shell/test_secure_channel_wiring.py` 有一条断言钉住它不再注册。
 
 ## 广播成员 = world 房间成员,按 nick 解析连接
 
@@ -191,7 +191,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 单帧流程:`while: 收帧 → [会话 exp 检查(0070)] → 验+解 → ClientMessage → Command(盖 origin=nick)→ inbox.put`。
 
 - 命令不带 room,房间由 `world.users[nick].room` 推定;协议/解析错误直接构 `ErrorMessage` 投本连接 `outbound`。
-- 加密连接收/发帧前各比对一次会话 `expires_at`,过期关连接(4401);dev 明文无会话,不查。
+- 收/发帧前各比对一次会话 `expires_at`,过期关连接(4401)。
 - 不做每帧续命。占座窗口改为断线装表(0070,见 [timer.md](timer.md))。
 
 `JoinRoom` 是例外,因为报文只带 `room`:

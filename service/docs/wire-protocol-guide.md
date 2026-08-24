@@ -232,7 +232,7 @@
 
 一句话:两个 WS 端点并存,dev 用明文,正式用加密;载荷 JSON 一模一样。前端切到加密后,明文端点退役。
 
-**明文 dev**:`ws://<host>/dev/ws?nick=<你的昵称>`,dev-only、无加密。
+**明文 dev 端点已退役(0086)**:`/dev/ws?nick=` 曾是无加密的开发捷径,前端加解密落地后按 [connection.md](connection.md) 的既定条件关掉了——它无鉴权,谁连上都能冒充那个 nick。现在只有加密端点一条路。
 
 - 连上即用上面的报文收发,用文本帧,直接 `JSON.stringify` / `JSON.parse`。搭 UI / 联调最省事。
 

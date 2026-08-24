@@ -28,7 +28,7 @@
 - 生成器 `_emit_emoji_catalog` 无条件吐 `EmojiCode`/`EmojiMeta`/`EMOJI_CATALOG` 进 `wire.gen.ts`。「无条件」是因为它不被任何消息引用,走不到 `_discover` 的 ref_set 断言路径。
 - 供前端渲染 `[code]`:表情 token 后端纯透传(就在聊天正文 `text` 里),目录本身不作为消息字段、不新增 wire 字段(见 [messaging.md](messaging.md)「表情」);漂移由 `test_codegen_uptodate` + `test_emoji` 兜。
 
-**生成步骤进 CI / pre-commit**:改了 .py 不重新生成 → CI 红。
+**漂移守门在 `pytest` 里**:改了 .py 不重新生成 → 测试红。(仓库没有 CI 也没装 pre-commit,靠跑测试和 [dev.md](dev.md) 的提交规约;见 [BUGS.md](refactor/BUGS.md) DEBT-1。)
 
 - 守门测试是 [tests/wire/test_codegen_uptodate.py](../tests/wire/test_codegen_uptodate.py),在 `pytest` 里逐字节比对,无 node 也能跑;`gen_wire_ts.py --check` 是同义命令,供 pre-commit 用。
 - 前端改动只能改 .py 再生成,不碰产物。
@@ -106,7 +106,7 @@
 ## 契约(必须守住)
 
 1. 消息只在后端 Pydantic 写一份,TS 是 codegen 产物;前端禁止手写/手改 wire 类型。
-2. codegen 进 CI / pre-commit:.py 变更必须连带重新生成,产物与源一致。
+2. codegen 有守门测试:.py 变更必须连带重新生成,产物与源一致(由 `pytest` 兜,非 CI)。
 3. 每条消息带 `type` 字面量,构成可辨识联合;扁平信封、`snake_case`、强类型、用后端 enum。
 4. 身份不进报文:身份来自连接,报文只带动作参数。
 5. `hole_cards`/`deck` 默认隐藏,仅 `HoleCards`/`HandShowDown`/自己的 `StateSnapshot` 显式揭示。

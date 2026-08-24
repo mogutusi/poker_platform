@@ -97,7 +97,7 @@
 ## P8 · 收尾
 
 - [x] `shell/lifespan.py` drain:关闭反序 drain(超 `DB_DRAIN_TIMEOUT_MS` 落 CRITICAL)— 0046:有界 drain 本体(timeout CRITICAL/毒丸/取消回灌)早随 0025 落 `PersistWriter.drain()` + 穷举测;本批补 `DevShell.stop()` **反序四步**(cancel Timer+GameLoop → 同步排空 inbox 在途命令 → cancel PersistWriter 循环 + `drain()` → cancel 各 Sender + `dispose()`)+ 集成测 `test_lifespan_drain`(inbox 排空落 DB / 缓冲 drain 落 DB / start→stop 不挂死 / 未 start 安全 / Sender-cancel / 并发交接 exactly-once,6 测,共 432)。**余**:端到端冒烟(前端↔后端一手牌,见下)
-- [ ] 端到端冒烟:前端 ↔ 后端(先明文 dev、后国密)走通一手牌全程
+- [x] 端到端冒烟:前端 ↔ 后端走通一手牌全程 — 0078 落地(`npm run smoke`),0085 扩到加注/min-raise/三人边池(`npm run smoke:raise`);**明文 dev 那半已作废**:端点随 0086 退役,三条冒烟全走国密加密信道
 
 ---
 
@@ -106,7 +106,7 @@
 - [~] **0072·R1** 手牌记录跨房间世代撞键(**用户定案暂缓,2026-07-28**:「先不修」;已确认未修非接受,方案两案留档 0072):`dedupe_key="room:seq"` 同名房销毁重建/进程重启后与旧世代撞键 → 幂等 INSERT 静默丢新记录;启动时须带「销房重建 + 重启两路径」回归测试 —— 详见 [BUGS.md#BUG-2](BUGS.md)
 - [ ] **0072·R2** Timeout staleness 跨手失效:epoch 每手归零,`Timeout` 补带 `hand.seq` 双键校验 + 构造交错的回归测试(可与 R1 同批) —— 详见 [BUGS.md#BUG-3](BUGS.md)
 - [ ] **0072·D2-D5** 文档 truth-up 一批(仿 0047/0067):~~messaging.md §房聊历史 0071 残留旧段(D1)~~ **D1 已由 0075 文档重写连带解决**(四处反事实全消失)/ architecture.md 不变量 2 补「只读 committed world 豁免」判据(D2)/ connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
-- [ ] **0072·C2** codegen 守门兑现:补最小 pre-commit 配置,或把 architecture.md/wire.md「进 CI/pre-commit」口径改为如实(pytest 守门)——取向待定案
+- [x] **0072·C2** codegen 守门口径 — **0086 改实**:architecture.md/wire.md 两处都改成「pytest 守门;仓库没有 CI 也没装 pre-commit,提交规约见 dev.md」。**搭 CI 与否是独立决策,未做**(用户指出:提交规约本来就有文档,缺的是自动化不是约定)
 - [ ] **0072·C3** `rest/lobby.py` 的 `big_blind=2*` 改引 `blinds.BIG_BLIND_MULTIPLE`(一行,可并入任意批)
 - 注:0072·C1(前端消费 wire.gen.ts)已有 W 段既有项,不重复登记
 

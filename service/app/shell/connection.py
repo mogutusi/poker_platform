@@ -1,5 +1,6 @@
 # 连接登记/路由/顶替(见 connection.md)。连接绑 nick、不绑房间(模型 2);
-# channel=None ⇒ 明文 dev 帧(?nick=);channel 非 None ⇒ 加密 ws 帧(?sid=,逐会话信道,见 changes/0061)。
+# channel 非 None ⇒ 加密 ws 帧(?sid=,逐会话信道,见 changes/0061);生产唯此一路。
+# channel=None 是明文帧,0086 退役 `/dev/ws?nick=` 后只剩测试接缝(见 Connection.channel)。
 
 import asyncio
 import logging
@@ -18,11 +19,11 @@ log = logging.getLogger(__name__)
 @dataclass
 class Connection:
     nick: str  # 会话身份;一个 nick 全局一条有效连接
-    session_id: str  # 会话句柄(公开 selector / dev 用 nick),审计/日志关联
+    session_id: str  # 会话句柄(公开 selector),审计/日志关联
     ws: Any  # 物理 ws(FastAPI WebSocket 或测试 fake)
     outbound: "asyncio.Queue[Any]"  # 有界;装明文 ServerMessage,满 = 慢客户端(见 dispatch._enqueue)
-    channel: SecureChannel | None = None  # 逐会话安全信道(引用会话的 SecureChannel);None=明文 dev 帧、非 None=加密帧(Sender seal / Receiver open,见 changes/0061)
-    session: Session | None = None  # 所属会话引用(exp 兜底强制到活连接:收/发帧前比对 expires_at,0070);dev 明文为 None
+    channel: SecureChannel | None = None  # 逐会话安全信道(引用会话的 SecureChannel)。**生产恒非 None**:唯一入口 /ws?sid= 必给(明文 dev 端点已 0086 退役);None 只剩测试接缝——shell 接线测试走明文帧,加密本身在 tests/crypto 穷举
+    session: Session | None = None  # 所属会话引用(exp 兜底强制到活连接:收/发帧前比对 expires_at,0070);同 channel,生产恒非 None
     sender_task: asyncio.Task | None = None  # 本连接 Sender 协程句柄;起 Sender 前为 None,退出/顶替时 cancel
     receiver_task: asyncio.Task | None = None  # 本连接 Receiver(= ws endpoint)协程句柄;run_receiver 进门自填,慢客户端被丢弃时 cancel(见 dispatch._drop_connection,0083)
     chat_bucket: TokenBucket | None = None  # 房聊发件人维度令牌桶(每连接,见 messaging.md / ratelimit);create 时建满桶
@@ -44,8 +45,8 @@ class Connection:
             session_id=session_id,
             ws=ws,
             outbound=asyncio.Queue(maxsize=gameconfig.OUTBOUND_MAX),
-            channel=channel,  # None = 明文 dev(?nick=);非 None = 加密会话信道(?sid=)
-            session=session,  # 加密路传会话引用(exp 逐帧兜底,0070);dev 明文 None
+            channel=channel,  # 生产必给(加密会话信道);None 只出现在测试
+            session=session,  # 会话引用(exp 逐帧兜底,0070)
             chat_bucket=TokenBucket.create(
                 gameconfig.ROOM_CHAT_RATE_BURST, gameconfig.ROOM_CHAT_RATE_PER_SEC, now
             ),

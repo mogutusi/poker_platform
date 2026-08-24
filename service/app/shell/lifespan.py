@@ -1,8 +1,8 @@
-# lifespan:dev shell 装配 + 明文 ws 端点(见 connection.md「lifespan」,最小 dev 版)。
-# dev-only:无鉴权 / 无加密;接真 async DB(sqlite+aiosqlite)——幂等种子 dev 用户进 DB + OrmPersister 落库。
-# 用户连接 → 进大厅 → 主动 join_room → Receiver 读 DB 载入(per-join,0030);dev 房空预置。
-# 运行:cd service && .venv/bin/uvicorn app.shell.lifespan:app  → ws://<host>/dev/ws?nick=alice
-# P5 国密信道落地即替换握手/帧;P8 lifespan drain 收尾。
+# lifespan:shell 装配 + 加密 ws 端点(见 connection.md「lifespan」)。
+# 接真 async DB(sqlite+aiosqlite)——幂等种子 dev 用户进 DB + OrmPersister 落库。
+# 用户登录换会话 → 连 /ws?sid= → 进大厅 → 主动 join_room → Receiver 读 DB 载入(per-join,0030);房间动态创建。
+# 运行:cd service && .venv/bin/uvicorn app.shell.lifespan:app → POST /user/login 换 sid,再连 ws://<host>/ws?sid=
+# 明文 `/dev/ws?nick=` 已于 0086 退役:它无鉴权,谁连上都能冒充那个 nick;前端加解密落地后退役条件即满足。
 
 import asyncio
 import logging
@@ -23,7 +23,6 @@ from app.core.domain import World
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.orm_persister import OrmPersister
-from app.db.queries import load_user_by_nick
 from app.auth.session import Session, SessionStore
 from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
@@ -245,25 +244,6 @@ def create_app() -> FastAPI:
     app.include_router(
         make_nickname_router(lambda: shell.sessionmaker, shell.session_store, lambda: shell.presence, shell.conns)
     )
-
-    @app.websocket("/dev/ws")
-    async def dev_ws(ws: WebSocket, nick: str = Query(...)):  # type: ignore[valid-type]
-        # dev 明文握手:?nick= 必须是预置 dev 用户(连接绑 nick,模型 2)。无 MAC / 无加密(dev-only 脚手架)。
-        # 与加密端点 /ws 并存;前端切到加密后再退役本端点(见 changes/0061 决策 4)。
-        await ws.accept()
-        if nick not in gameconfig.DEV_USERS:
-            await ws.close(code=4404)  # 未知 dev 用户:拒,不建 Connection
-            return
-        # 名下须仍有 DB 行:dev 用户改名后旧名无行——放行会造出「无 DB 背书的孤儿连接键」,
-        # 与后续改名撞键、_build_join 还会按 nick 错配他人行(0065 自 review 抓修;正路走 /ws?sid=)。
-        if await load_user_by_nick(shell.sessionmaker, nick) is None:
-            await ws.close(code=4404)
-            return
-        conn = Connection.create(nick=nick, session_id=nick, ws=ws)  # channel=None → 明文帧
-        await run_receiver(
-            conn, shell.conns, shell.inbox, shell.timer, shell.sessionmaker, shell.world, shell.persist,
-            persistwriter=shell.persistwriter,  # 载入屏障接线(0073):生产路必传
-        )
 
     @app.websocket("/ws")
     async def secure_ws(ws: WebSocket, sid: str = Query(...)):  # type: ignore[valid-type]

@@ -12,6 +12,12 @@
 
 import { BASE, Client, ensureInRoom, login } from './smoke-client.mjs'
 
+// **冒烟用专属账号,不与浏览器用例共用**(0086 实测教训):共用时,浏览器那边留在桌上的筹码会在
+// 冒烟跑到一半时被占座清理退回全局积分,凭空改变「两人合计」,把守恒断言打红——查半天才发现
+// 是别的测试在动同一批账号。dev 种子里 smoke1/2/3 就是为此预留的。
+const SMOKE_A = 'smoke1'
+const SMOKE_B = 'smoke2'
+
 function log(...a) { console.log(...a) }
 
 // 每轮用独立房名:断线后座位会保留一个占座窗口(~90s),复用房名会撞上一轮的座位。
@@ -29,14 +35,14 @@ function check(cond, label) {
 // 而真正的不变量——「这一趟跑下来两人合计不变」——照样成立。
 async function pairPoints() {
   const board = await (await fetch(`${BASE}/leaderboard`)).json()
-  return ['alice', 'bob'].map((nick) => [nick, board.find((e) => e.nickname === nick)?.points ?? 0])
+  return [SMOKE_A, SMOKE_B].map((nick) => [nick, board.find((e) => e.nickname === nick)?.points ?? 0])
 }
 const baseline = await pairPoints()
 const baselineSum = baseline.reduce((n, [, p]) => n + p, 0)
 
 log('① 登录 alice / bob')
-const alice = new Client('alice', await login('alice'))
-const bob = new Client('bob', await login('bob'))
+const alice = new Client(SMOKE_A, await login(SMOKE_A))
+const bob = new Client(SMOKE_B, await login(SMOKE_B))
 check(!!alice.session.session_id && !!alice.session.session_token, '登录换回 session_id + session_token')
 
 log('② ws 握手')
@@ -59,16 +65,16 @@ check(true, 'bob 也进房')
 log('④ 入座 + 买入')
 alice.send({ type: 'sit_down', seat: 0, wait_for_big_blind: false })
 bob.send({ type: 'sit_down', seat: 1, wait_for_big_blind: false })
-await alice.wait((m) => m.type === 'user_status_changed' && m.nickname === 'bob', 'bob 入座广播')
+await alice.wait((m) => m.type === 'user_status_changed' && m.nickname === SMOKE_B, 'bob 入座广播')
 alice.send({ type: 'buy_in', seat: 0, amount: 500 })
 bob.send({ type: 'buy_in', seat: 1, amount: 500 })
-const bought = await alice.wait((m) => m.type === 'player_bought_in' && m.nickname === 'bob', 'bob 买入')
+const bought = await alice.wait((m) => m.type === 'player_bought_in' && m.nickname === SMOKE_B, 'bob 买入')
 check(bought.seat_points === 500, `买入到账(bob 桌上 ${bought.seat_points})`)
 
 log('⑤ 准备 + 开局')
 alice.send({ type: 'set_user_status', status: 'ready_to_play', seat: 0 })
 bob.send({ type: 'set_user_status', status: 'ready_to_play', seat: 1 })
-await alice.wait((m) => m.type === 'user_status_changed' && m.nickname === 'bob' && m.status === 'ready_to_play', 'bob 准备')
+await alice.wait((m) => m.type === 'user_status_changed' && m.nickname === SMOKE_B && m.status === 'ready_to_play', 'bob 准备')
 alice.send({ type: 'start_hand', seat: 0 })
 const started = await alice.wait((m) => m.type === 'hand_started', '开局')
 check(started.players.length === 2, `开局(${started.players.length} 人,button=${started.button_position})`)
@@ -149,7 +155,7 @@ check(!!showdown && showdown.reveals.length === 2, showdown ? `摊牌亮 ${showd
 log('⑧ 房间聊天')
 alice.send({ type: 'room_chat', text: 'gg' })
 const chat = await bob.wait((m) => m.type === 'chat_message' && m.text === 'gg', '聊天送达')
-check(chat.from_nick === 'alice', `bob 收到 alice 的聊天`)
+check(chat.from_nick === SMOKE_A, `bob 收到 alice 的聊天`)
 
 log('⑨ seq 单调性(全程无不新鲜帧)')
 check(alice.seenSeq > 0n && bob.seenSeq > 0n, `alice 收 ${alice.seenSeq} 帧, bob 收 ${bob.seenSeq} 帧,均严格递增`)
