@@ -195,7 +195,9 @@ export function applyServerMessage(msg: ServerMessage): void {
         players: msg.players,
         actingPosition: msg.acting_position,
         board: [],
-        pot: 0,
+        // 盲注已经下了,开局底池不是 0。这里曾硬写 0,于是界面整条 preflop 都显示「底池 0」,
+        // 而同一时刻重连拿到的快照写着 3 —— 0087 在浏览器里正是被这个矛盾抓出来的。
+        pot: msg.pot,
         lastBet: msg.big_blind,
         yourHoleCards: null,
         reveals: [],
@@ -208,12 +210,15 @@ export function applyServerMessage(msg: ServerMessage): void {
       break
 
     case 'hand_status_changed':
-      // 街道推进:各家本街投入清零、需跟额归零(见 service/docs/rules.md ③)。
+      // 本街的下注态一律照服务器给的填。这里曾经自己推「换街了所以全清零」,而开局那条
+      // status=PRE_FLOP 紧跟在 HandStarted 之后、盲注**已经下了** —— 一清零,整轮 preflop 的
+      // lastBet 就是 0,Call 按钮发出去的 bet(0) 全被 ILLEGAL_ACTION 拒(0087 在浏览器里抓到)。
+      // 推规则本来就是前端不该做的事(见 docs/architecture.md 不变量 1)。
       set({
         handStatus: msg.status,
         board: msg.board,
-        lastBet: 0,
-        players: state.players.map((p) => ({ ...p, bet_amount: 0 })),
+        lastBet: msg.last_bet,
+        players: msg.players,
       })
       break
 

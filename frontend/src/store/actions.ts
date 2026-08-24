@@ -3,7 +3,7 @@
 
 import { fetchProfile } from '@/transport/rest'
 import { decideJoinMessage } from './joinFlow'
-import { connect, disconnect, send, type ConnectionState } from '@/transport/ws'
+import { connect, disconnect, send, type AuthLostReason, type ConnectionState } from '@/transport/ws'
 import { applyServerMessage, getRoomState, resetRoom, setConnection, setMe } from './room'
 import { resetDm } from './dm'
 
@@ -22,7 +22,7 @@ import { resetDm } from './dm'
  */
 export async function enterRoom(
   room: string,
-  onAuthLost: () => void,
+  onAuthLost: (reason: AuthLostReason) => void,
   isCancelled: () => boolean = () => false,
 ): Promise<void> {
   const profile = await fetchProfile()
@@ -31,6 +31,9 @@ export async function enterRoom(
 
   // 「先退再进」只做一次。做不成就把错误交给界面显示,不要反复重试转圈。
   let recovered = false
+  // 本条连接上服务器最近一次快照说我在哪个房间。每次(重)连归零:新连接不该继承旧连接的判断。
+  // 用途是分辨 ALREADY_IN_ROOM 的两种来路(见 joinFlow.ts)。
+  let snapshotRoom: string | null = null
 
   /**
    * 处理「上一次会话的残留」。
@@ -48,28 +51,31 @@ export async function enterRoom(
 
   connect({
     onMessage: (msg) => {
-      const decision = decideJoinMessage(msg, room, recovered)
+      const decision = decideJoinMessage(msg, room, recovered, snapshotRoom)
       if (decision.kind === 'recover') {
         recoverFromStaleRoom()
         return
       }
       // 旧房间的快照不并进本地状态——那是要离开的房间。
       if (decision.kind === 'ignore') return
+      if (msg.type === 'state_snapshot') snapshotRoom = msg.room
       applyServerMessage(msg)
     },
     onStateChange: (s: ConnectionState) => {
       setConnection(s)
-      // 每次连上(含重连)都要 join_room:重连后服务器会私发新的 StateSnapshot,
-      // 本地状态整份被替换,不需要自己补。
+      // 每次连上(含重连)都要 join_room。重连时它多半会被 ALREADY_IN_ROOM 拒——那是**故意**的:
+      // 断线久过占座窗口的话,服务器早把我清出房间了,这条 join_room 正是自愈的那一下;而没被清掉时
+      // 服务器已私发过快照,那条错误无害(joinFlow 据快照咽掉它,不再误判成「挂在别的房间」)。
       if (s === 'open') {
         recovered = false // 新连接重新给一次恢复机会
+        snapshotRoom = null // 也不继承旧连接收到过的快照
         send({ type: 'join_room', room })
       }
     },
-    onAuthLost: () => {
+    onAuthLost: (reason) => {
       resetRoom()
       resetDm()
-      onAuthLost()
+      onAuthLost(reason)
     },
   })
 }
@@ -84,7 +90,7 @@ export async function enterRoom(
  * 「我是谁」不在这里取:大厅本来就要拉一次 /user/me 填头像卡,由它顺手 setMe 即可,
  * 没必要为同一个昵称多发一个信封请求。
  */
-export function connectLobby(onAuthLost: () => void): void {
+export function connectLobby(onAuthLost: (reason: AuthLostReason) => void): void {
   connect({
     onMessage: (msg) => {
       // 大厅只认私聊和服务器的拒绝。房间事件此刻要么无意义,要么是上一次会话的残留
@@ -102,10 +108,10 @@ export function connectLobby(onAuthLost: () => void): void {
       }
     },
     onStateChange: setConnection,
-    onAuthLost: () => {
+    onAuthLost: (reason) => {
       resetRoom()
       resetDm()
-      onAuthLost()
+      onAuthLost(reason)
     },
   })
 }

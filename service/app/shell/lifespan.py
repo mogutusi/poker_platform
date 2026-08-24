@@ -29,7 +29,7 @@ from app.rest.leaderboard import make_leaderboard_router
 from app.rest.lobby import make_lobby_router
 from app.rest.login import make_login_router
 from app.rest.profile import make_nickname_router, make_profile_router
-from app.shell.connection import Connection, ConnectionManager
+from app.shell.connection import WS_CLOSE_UNAUTHENTICATED, Connection, ConnectionManager
 from app.shell.dispatch import Dispatcher
 from app.shell.gameloop import GameLoop
 from app.shell.logsetup import setup_logging
@@ -253,7 +253,7 @@ def create_app() -> FastAPI:
         await ws.accept()
         session = shell.session_store.lookup(sid, time.time())
         if session is None:
-            await ws.close(code=4401)  # 未认证 / 过期 / 未知 sid:拒
+            await ws.close(code=WS_CLOSE_UNAUTHENTICATED)  # 未认证 / 过期 / 未知 sid:拒
             return
         conn = Connection.create(
             nick=session.nickname, session_id=sid, ws=ws, channel=_channel_for(session), session=session

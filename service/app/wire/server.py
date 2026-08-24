@@ -68,6 +68,7 @@ class HandStarted(ServerMessage):
     big_blind: int  # 大盲额(= 2×小盲)
     players: tuple[PlayerView, ...]  # 行动序座位快照([0]=SB、[1]=BB);不含底牌
     acting_position: int | None  # players 下标:preflop 首行动者;无人可行动为 None
+    pot: int  # 开局即时总底池(contributed + 各人本街 bet_amount,开局即盲注之和)
 
 
 class HoleCards(ServerMessage):
@@ -76,9 +77,14 @@ class HoleCards(ServerMessage):
 
 
 class HandStatusChanged(ServerMessage):
+    # 携本街完整下注态(不止 status/board):客户端单条即对齐,无须自己推「换街了所以清零」。
+    # 那条推断在 preflop 上是错的——开局这条 status=PRE_FLOP 紧跟 HandStarted 而盲注**已经下了**
+    # (见 0087:客户端照推断清零,Call 因此整轮 preflop 发的都是 bet(0),被 ILLEGAL_ACTION 拒)。
     type: Literal["hand_status_changed"] = "hand_status_changed"
     status: HandStatus  # 当前街(开局为 PRE_FLOP)
     board: tuple[Card, ...]  # 已发公共牌;PRE_FLOP 为空,逐街追加
+    last_bet: int  # 本街需跟到的额度(新街为 0;开局 PRE_FLOP 为大盲)
+    players: tuple[PlayerView, ...]  # 本街起点的在手玩家快照(bet_amount 已按本街计;不含底牌)
 
 
 class PlayerActed(ServerMessage):

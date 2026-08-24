@@ -32,8 +32,8 @@ def _all_strings(obj):
 def _broadcast_samples() -> list[S.ServerMessage]:
     view = S.PlayerView(seat_position=0, nickname="A", points=98, bet_amount=2, status=PlayerStatus.ACTIVE)
     return [
-        S.HandStarted(hand_seq=1, button_position=0, small_blind=1, big_blind=2, players=(view,), acting_position=0),
-        S.HandStatusChanged(status=HandStatus.FLOP, board=(_A,)),
+        S.HandStarted(hand_seq=1, button_position=0, small_blind=1, big_blind=2, players=(view,), acting_position=0, pot=3),
+        S.HandStatusChanged(status=HandStatus.FLOP, board=(_A,), last_bet=0, players=(view,)),
         S.PlayerActed(seat_position=0, nickname="A", action=PlayerActionType.BET, bet_amount=2, points=98,
                       status=PlayerStatus.ACTIVE, last_bet=2, pot=3, acting_position=1),
         S.HandEnded(winnings=(S.NickAmount(nickname="A", amount=3),), refunds=()),

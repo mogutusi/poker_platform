@@ -15,6 +15,13 @@ from app.shell.ratelimit import TokenBucket
 
 log = logging.getLogger(__name__)
 
+# ws 关闭码(私有区 4000-4999,语义对齐同号 HTTP 状态;前端契约见 frontend/BACKEND_GUIDE.md)。
+# 前端据此分流:4400/4401 要重新登录、4409 是被接管**不要**自动重连去抢。
+WS_CLOSE_BAD_FRAME = 4400  # 帧伪造/重放/损坏(FrameError)= 安全信号,拒帧即关连接
+WS_CLOSE_UNAUTHENTICATED = 4401  # 握手鉴权失败,或活连接撞上会话 exp:须重新登录换会话
+WS_CLOSE_DISPLACED = 4409  # 同 nick 的新连接接管了本连接(顶替)。会话仍有效,但这条连接已让位:
+# 客户端**不得**自动重连去抢——两边都重连就是互相顶替的乒乓(0087 在浏览器里实测到)
+
 
 @dataclass
 class Connection:

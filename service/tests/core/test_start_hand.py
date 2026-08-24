@@ -233,6 +233,20 @@ def test_hole_cards_dealt_round_robin():
     assert h.deck == DECK[2 * n:]  # 余牌留作后续街
 
 
+# ── HandStarted 带开局底池(0087):盲注已下,底池不是 0;与 StateSnapshot.pot 同一口径 ──
+def test_hand_started_carries_pot_of_blinds():
+    world = make_table(
+        {0: seat("A", 100, new_here=False), 1: seat("B", 100, new_here=False), 2: seat("C", 100, new_here=False)},
+        button=2,
+    )
+    world, events, err = _start(world, "A", 0)
+    assert err is None
+    started = events[0].msg
+    # 开局 contributed 还是空的,所以底池就是各家本街投入之和 = SB + BB
+    assert started.pot == SB + BB
+    assert started.pot == sum(v.bet_amount for v in started.players)
+
+
 # ── 事件投影 + 隐私:HandStarted → 每人 HoleCards → HandStatusChanged → TurnChanged;广播不含底牌 ──
 def test_events_and_privacy():
     world = make_table(
@@ -256,6 +270,9 @@ def test_events_and_privacy():
     # HandStatusChanged(PRE_FLOP、空 board) + TurnChanged(行动者、epoch=0)
     status_msgs = [e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandStatusChanged)]
     assert len(status_msgs) == 1 and status_msgs[0].status is HandStatus.PRE_FLOP and status_msgs[0].board == ()
+    # 开局这条**不是**零起点:盲注已经下了(0087——客户端照「换街即清零」推断,preflop 的 Call 因此全废)
+    assert status_msgs[0].last_bet == BB
+    assert {v.nickname: v.bet_amount for v in status_msgs[0].players} == {"A": 0, "B": SB, "C": BB}
     turn = [e for e in events if isinstance(e, TurnChanged)]
     assert len(turn) == 1 and turn[0].epoch == 0
     assert turn[0].acting_nick == h.players[h.acting_position].nickname

@@ -120,9 +120,9 @@
 
 | `type` | 关键字段 | 渲染 |
 |---|---|---|
-| `hand_started` | `players[]`(行动序快照)、`button_position`、`small_blind`/`big_blind`、`acting_position` | 开局铺桌 |
+| `hand_started` | `players[]`(行动序快照)、`button_position`、`small_blind`/`big_blind`、`acting_position`、`pot` | 开局铺桌。**`pot` 不是 0**:盲注已经下了,它就是盲注之和(0087)|
 | `hole_cards` | `cards`(你自己的两张) | 私发本人;摆你的手牌 |
-| `hand_status_changed` | `status`(街)、`board`(已发公共牌) | 翻 flop/turn/river |
+| `hand_status_changed` | `status`(街)、`board`(已发公共牌)、`last_bet`、`players[]` | 翻 flop/turn/river。**本街下注态照抄,别自己推「换街了所以清零」**:开局那条 `status:"pre_flop"` 紧跟 `hand_started`,盲注**已经在桌上**(0087)|
 | `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`acting_position` | 某人动作 + 推进后底池/下一行动位 |
 | `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
 | `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
@@ -144,6 +144,7 @@
 > **`acting_position` 是 `players[]` 的下标,不是座位号。**
 >
 > - `hand_started.players` 按行动序排:`[0]` = 小盲,`[1]` = 大盲。
+> - `hand_status_changed.players` 是**本街起点**的同款快照(开局带盲注,换街已归零)。
 > - 「轮到谁」= `players[acting_position]`,它的座位是 `.seat_position`;为 `null` 表示无人可行动,即手已结束或全员 all-in。
 
 > **聊天正文的表情是 `[code]` 文本 token**,房聊与私聊同规则,后端纯透传(见 0034/0035)。
@@ -161,10 +162,10 @@
 你 → set_user_status{status:"ready_to_play"}   ← user_status_changed{..."ready_to_play"}
 某人 → start_hand{seat}                ← hand_started{button_position, small_blind, big_blind, players[], acting_position}
                                        ← (私发你)hole_cards{cards:[你的两张]}
-                                       ← hand_status_changed{status:"pre_flop", board:[]}
+                                       ← hand_status_changed{status:"pre_flop", board:[], last_bet:BB, players:[带盲注的快照]}
 轮到你(players[acting_position]==你)→ player_action{action:"bet", bet_amount:10}
   每次有人动                            ← player_acted{nickname, action, bet_amount, points, status, pot, last_bet, acting_position}
-本街关闭(自动)                        ← hand_status_changed{status:"flop", board:[3张]}  → turn[4] → river[5]
+本街关闭(自动)                        ← hand_status_changed{status:"flop", board:[3张], last_bet:0, players:[本街投入已归零]}  → turn[4] → river[5]
 摊牌                                    ← hand_show_down{board:[5张], reveals:[未弃牌者底牌]}
                                        ← hand_ended{winnings:[{nickname,amount}], refunds:[...]}
 非法操作(如非你回合 / 钱不够)         ← error{code:"NOT_YOUR_TURN", detail:"..."}

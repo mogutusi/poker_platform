@@ -84,7 +84,7 @@ describe('StateSnapshot', () => {
 })
 
 describe('街道推进', () => {
-  it('清掉各家本街投入与需跟额,不动累计底池', () => {
+  it('本街下注态照服务器给的填,不动累计底池', () => {
     applyServerMessage(snapshot())
     applyServerMessage({
       type: 'hand_status_changed',
@@ -94,6 +94,11 @@ describe('街道推进', () => {
         { rank: '7', suit: 'd' },
         { rank: 'T', suit: 'h' },
       ],
+      last_bet: 0,
+      players: [
+        { seat_position: 3, nickname: 'alice', points: 490, bet_amount: 0, status: 'active' },
+        { seat_position: 5, nickname: 'bob', points: 680, bet_amount: 0, status: 'active' },
+      ],
     })
     const s = getRoomState()
     expect(s.handStatus).toBe('flop')
@@ -101,6 +106,26 @@ describe('街道推进', () => {
     expect(s.lastBet).toBe(0)
     expect(s.players.every((p) => p.bet_amount === 0)).toBe(true)
     expect(s.pot).toBe(30) // 底池是累计的,街道推进不清
+  })
+
+  it('开局那条 PRE_FLOP 不许把盲注清掉', () => {
+    // 服务端在 HandStarted 之后紧跟一条 status=PRE_FLOP 的 hand_status_changed。此前前端把它
+    // 当「换街」处理、把 lastBet 和各家 bet_amount 一律清零,于是整轮 preflop 的 Call 都发成
+    // bet(0),被 ILLEGAL_ACTION 拒(0087 在浏览器里抓到)。现在一律照服务器给的填。
+    applyServerMessage(snapshot())
+    applyServerMessage({
+      type: 'hand_status_changed',
+      status: 'pre_flop',
+      board: [],
+      last_bet: 20,
+      players: [
+        { seat_position: 3, nickname: 'alice', points: 490, bet_amount: 10, status: 'active' },
+        { seat_position: 5, nickname: 'bob', points: 680, bet_amount: 20, status: 'active' },
+      ],
+    })
+    const s = getRoomState()
+    expect(s.lastBet).toBe(20)
+    expect(s.players.map((p) => p.bet_amount)).toEqual([10, 20])
   })
 })
 
@@ -207,6 +232,21 @@ describe('进房时的「上次会话残留」', () => {
       kind: 'apply',
     })
   })
+
+  // 断线重连回**同一个**房间时,服务器已经把我放回原房、私发了本房快照,随后才拒掉我们那条
+  // 每次 open 都发的 join_room。此时的 ALREADY_IN_ROOM 是预料之中的回答,不是「挂在别处」——
+  // 当成残留去「先退再进」,等于每次重连都把自己从座位上退下来(0087 在浏览器里实测到)。
+  it('已经收到目标房快照后再收 ALREADY_IN_ROOM → 咽掉,不许当成残留', () => {
+    expect(decideJoinMessage({ type: 'error', code: 'ALREADY_IN_ROOM' }, 'new', false, 'new')).toEqual({
+      kind: 'ignore',
+    })
+  })
+
+  it('快照说我在别的房 → ALREADY_IN_ROOM 仍然是残留,照旧先退再进', () => {
+    expect(decideJoinMessage({ type: 'error', code: 'ALREADY_IN_ROOM' }, 'new', false, 'old')).toEqual({
+      kind: 'recover',
+    })
+  })
 })
 
 describe('UserStatusChanged 的三种情形', () => {
@@ -280,8 +320,24 @@ describe('结算面板的生命周期', () => {
       big_blind: 20,
       players: [],
       acting_position: null,
+      pot: 0,
     })
     expect(getRoomState().lastResult).toBeNull()
+  })
+
+  it('开局底池照服务器给的算:盲注已经在池子里,不是 0', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({
+      type: 'hand_started',
+      hand_seq: 3,
+      button_position: 0,
+      small_blind: 10,
+      big_blind: 20,
+      players: [],
+      acting_position: null,
+      pot: 30,
+    })
+    expect(getRoomState().pot).toBe(30)
   })
 
   it('用户手动关掉后不再显示', () => {

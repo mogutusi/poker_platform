@@ -25,6 +25,12 @@ export default function PokerLoginPage() {
 
   useEffect(() => {
     setNeedKUser(!hasKUser())
+    // 被服务器断开时,是带着原因跳回这一页的(见 transport/ws.ts)。不说清楚的话,用户看到的
+    // 只是「莫名其妙回到了登录页」。用 location 读而不是 useSearchParams:后者会逼整棵子树进
+    // Suspense 边界(Next 15 的要求,0077 在 /game 上踩过)。
+    const reason = new URLSearchParams(window.location.search).get("reason")
+    if (reason === "displaced") setNotice("这个账号刚在别处登录,本页的连接已被接管。")
+    else if (reason === "expired") setNotice("会话已过期,请重新登录。")
   }, [])
 
   const handleLogin = async (e: React.FormEvent) => {

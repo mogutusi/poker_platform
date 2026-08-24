@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 
-from app.shell.connection import Connection
+from app.shell.connection import WS_CLOSE_UNAUTHENTICATED, Connection
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ async def sender_loop(conn: Connection) -> None:
                 # 「只收不发的过期连接」,此处补上;关连接后 Receiver 的 receive 报错 → finally 清理。
                 log.warning("sender closing nick=%s reason=session_expired", conn.nick)
                 try:
-                    await conn.ws.close(code=4401)  # 同握手拒码:须重新登录换会话
+                    await conn.ws.close(code=WS_CLOSE_UNAUTHENTICATED)  # 同握手拒码:须重新登录换会话
                 except Exception:
                     pass
                 return

@@ -7,19 +7,28 @@ import type { ClientMessage, ServerMessage } from '@/types/wire.gen'
 import { wsUrl } from './config'
 import { acceptServerSeq, nextWsSeq, requireSession } from './session'
 
-/** 服务器因鉴权/信封问题主动关连接的关闭码;此时应重新登录,不要自动重连。 */
+/** 服务器因鉴权/信封问题主动关连接;会话已经不能用了,应重新登录,不要自动重连。 */
 const AUTH_CLOSE_CODE = 4401
+/**
+ * 同账号的新连接接管了这一条(顶替)。会话本身仍然有效,但这条连接已经让位:
+ * **绝不能自动重连**——一重连就把刚上位的那条顶掉,对方再重连,两边无限互顶
+ * (0087 在浏览器里实测过 6 秒 6 轮)。见 service/docs/connection.md 顶替语义。
+ */
+const DISPLACED_CLOSE_CODE = 4409
 
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 10_000
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
+/** 连接为什么没了:会话不能用了(须重登)/ 被同账号的新连接接管(别处登录)。 */
+export type AuthLostReason = 'expired' | 'displaced'
+
 export interface ChannelHandlers {
   onMessage: (msg: ServerMessage) => void
   onStateChange?: (state: ConnectionState) => void
-  /** 需要用户重新登录(会话失效、被顶替)。不会自动重连。 */
-  onAuthLost?: (reason: 'expired' | 'displaced') => void
+  /** 连接被服务器终结且不该自动重连(会话失效、被顶替)。 */
+  onAuthLost?: (reason: AuthLostReason) => void
 }
 
 let socket: WebSocket | null = null
@@ -92,10 +101,10 @@ function open(): void {
       setState('closed')
       return
     }
-    if (ev.code === AUTH_CLOSE_CODE) {
-      // 鉴权问题重连也没用,而且可能是被别处登录顶替了。
+    if (ev.code === AUTH_CLOSE_CODE || ev.code === DISPLACED_CLOSE_CODE) {
+      // 两种都不该自动重连:鉴权问题重连也没用;被顶替则重连等于去抢,会变成两边互顶。
       setState('closed')
-      handlers?.onAuthLost?.('displaced')
+      handlers?.onAuthLost?.(ev.code === DISPLACED_CLOSE_CODE ? 'displaced' : 'expired')
       return
     }
     scheduleReconnect()

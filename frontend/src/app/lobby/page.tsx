@@ -129,7 +129,7 @@ export default function LobbyPage() {
     // 大厅也要挂着 ws:私聊跨房间、不需要在房里,而离线期的补收只在(重)连时发生一次。
     // 不在离开大厅时断开——去牌桌那一跳要接着用这条连接(见 transport/ws.ts 的复用),
     // 真正的断开只发生在离开牌桌和登出。
-    connectLobby(() => router.replace("/"))
+    connectLobby((reason) => router.replace(`/?reason=${reason}`))
 
     // 公开读(房间/排行榜)和需身份的 /user/me 分开发:后者失败只是头像卡少两个字段,
     // 不该把整个大厅打成「加载失败」。

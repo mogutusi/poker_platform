@@ -10,9 +10,9 @@
 
 | 事件 | 改什么 |
 |---|---|
-| `HandStarted` | 新一手开始:清上一手的展示、设置盲注位与行动者 |
+| `HandStarted` | 新一手开始:清上一手的展示、设置盲注位与行动者;底池取 `pot`(**盲注已下,不是 0**)|
 | `HoleCards` | 私发,只给自己:填自己的两张底牌 |
-| `HandStatusChanged` | 街道推进,带新发的公共牌 |
+| `HandStatusChanged` | 街道推进,带新发的公共牌,以及**本街的 `last_bet` 与 `players[]`**——照抄,别自己推「换街了所以清零」(开局那条 `pre_flop` 上盲注已经在桌上,推错会让整轮 preflop 跟注发成 0,见 [changes/0087](../../service/docs/refactor/changes/0087-reconnect-and-displacement-in-browser.md))|
 | `PlayerActed` | 某人行动:更新其筹码/状态、底池、下一个行动者 |
 | `HandShowDown` | 摊牌:这是**唯一**会出现别人底牌的地方 |
 | `HandEnded` | 结算:各家筹码回座 |

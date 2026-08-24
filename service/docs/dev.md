@@ -37,6 +37,11 @@ poetry env activate                          # 或先激活、再裸跑命令
 .venv/bin/uvicorn app.shell.lifespan:app     # 或直接点名 venv 可执行(等价)
 ```
 
+**改完后端一定要重启 uvicorn,而且要确认它真的换了那一份代码。** 端口没让出来时新进程会打一行
+`[Errno 98] address already in use` 就退出,**旧进程继续服务**;curl 照样 200,浏览器层于是在悄悄
+测老代码——0087 就这样白跑了一轮全套用例(只有那条正好验新行为的用例红,别的全绿,极难看出)。
+稳妥做法:`kill <旧 pid>` → 确认进程没了 → 再起,起完 `grep "address already in use"` 看一眼日志。
+
 venv 与命令:
 
 - venv 固定在 `service/.venv`(Python 3.12):解释器 `service/.venv/bin/python`,IDE 的 Python interpreter 指到它;`pytest`/`alembic` 等可执行文件也都在 `service/.venv/bin/` 下。

@@ -28,7 +28,13 @@ from app.core.commands import (
 from app.core.errors import Err, ErrorCode
 from app.core.domain import World
 from app.db.queries import load_user_by_nick
-from app.shell.connection import Connection, ConnectionManager
+from app.shell.connection import (
+    WS_CLOSE_BAD_FRAME,
+    WS_CLOSE_DISPLACED,
+    WS_CLOSE_UNAUTHENTICATED,
+    Connection,
+    ConnectionManager,
+)
 from app.shell.messaging import deliver_dm_catch_up, route_direct_message, route_dm_mark_read
 from app.shell.persist import PersistWriter, WriteBuffer
 from app.shell.sender import sender_loop
@@ -108,7 +114,7 @@ async def _recv_frame(conn: Connection) -> str | bytes | None:
         # 会话 exp 兜底(auth.md):过期密钥的报文一律拒服务——正常客户端已提前无感轮换,撞到 = 未按时换钥。
         log.warning("frame rejected nick=%s reason=session_expired", conn.nick)
         try:
-            await conn.ws.close(code=4401)  # 同握手拒码:须重新登录换会话
+            await conn.ws.close(code=WS_CLOSE_UNAUTHENTICATED)  # 同握手拒码:须重新登录换会话
         except Exception:
             pass
         return None
@@ -117,7 +123,7 @@ async def _recv_frame(conn: Connection) -> str | bytes | None:
     except FrameError as e:
         log.warning("frame rejected nick=%s reason=%s", conn.nick, e.reason)
         try:
-            await conn.ws.close(code=4400)  # 拒帧即关连接(安全信号);close 幂等失败无害
+            await conn.ws.close(code=WS_CLOSE_BAD_FRAME)  # 拒帧即关连接(安全信号);close 幂等失败无害
         except Exception:
             pass
         return None
@@ -267,12 +273,15 @@ async def _build_join(
 async def _displace(old: Connection) -> None:
     if old.sender_task is not None:
         old.sender_task.cancel()
-    await _close_quietly(old.ws)  # 关旧 ws → 旧 Receiver 的 receive_text 报错退出(其 is_current=False,不投 Disconnect)
+    # 关旧 ws → 旧 Receiver 的 receive 报错退出(其 is_current=False,不投 Disconnect)。
+    # **必须带上 4409**:不带码时客户端只看到一次普通关闭,与掉线无从分辨,于是照常退避重连——
+    # 而它一重连就把刚上位的那条顶掉,对方再重连,两边无限互顶(0087 在浏览器里实测,6 秒 6 轮)。
+    await _close_quietly(old.ws, code=WS_CLOSE_DISPLACED)
 
 
-async def _close_quietly(ws: object) -> None:
+async def _close_quietly(ws: object, *, code: int) -> None:
     # 关 ws 并吞掉异常:已关 / 已断 / 对端消失都无害,关连接这一步绝不该反过来把调用方掀翻。
     try:
-        await ws.close()  # type: ignore[attr-defined]
+        await ws.close(code=code)  # type: ignore[attr-defined]
     except Exception:
         pass

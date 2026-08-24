@@ -293,16 +293,7 @@ def _start_hand_events(
 ) -> list[Event]:
     # 投影为出站载荷(快照值,无活引用);顺序按 core.md §事件:HandStarted → HoleCards* → HandStatusChanged → TurnChanged
     assert room_name is not None  # 开局必有目标房
-    views = tuple(
-        PlayerView(
-            seat_position=p.seat_position,
-            nickname=p.nickname,
-            points=p.points,
-            bet_amount=p.bet_amount,
-            status=p.status,
-        )
-        for p in hand.players
-    )
+    views = _player_views(hand)
     started = HandStarted(
         hand_seq=hand.seq,
         button_position=room.button_position,
@@ -310,12 +301,19 @@ def _start_hand_events(
         big_blind=big_blind,
         players=views,
         acting_position=hand.acting_position,
+        pot=_pot(hand),  # 盲注已下:开局底池不是 0(0087 在浏览器里发现界面开局显示底池 0,与快照的 3 矛盾)
     )
     events: list[Event] = [Broadcast(room=room_name, msg=started)]
     for p in hand.players:
         assert p.hole_cards is not None  # 开局已发
         events.append(Personal(nick=p.nickname, msg=HoleCards(cards=p.hole_cards)))
-    events.append(Broadcast(room=room_name, msg=HandStatusChanged(status=hand.status, board=())))
+    events.append(
+        Broadcast(
+            room=room_name,
+            # 开局这条带的是**盲注已下**的下注态:last_bet=BB、各家 bet_amount 是刚下的盲。
+            msg=HandStatusChanged(status=hand.status, board=(), last_bet=hand.last_bet, players=views),
+        )
+    )
     if hand.acting_position is not None:
         acting = hand.players[hand.acting_position]
         events.append(TurnChanged(room=room_name, acting_nick=acting.nickname, epoch=hand.epoch))
@@ -412,7 +410,16 @@ def _close_street(work: Work, hand: Hand, big_blind: int) -> list[Event]:
     hand.epoch += 1
     assert hand.acting_position is not None  # ≥2 可行动 ⇒ postflop 首行动者存在
     return [
-        Broadcast(room=work.room_name, msg=HandStatusChanged(status=nxt, board=tuple(_board(hand)))),
+        Broadcast(
+            room=work.room_name,
+            # settle_street 已把本街投入并入 contributed 并清零,所以这里带的就是新街的零起点。
+            msg=HandStatusChanged(
+                status=nxt,
+                board=tuple(_board(hand)),
+                last_bet=hand.last_bet,
+                players=_player_views(hand),
+            ),
+        ),
         TurnChanged(
             room=work.room_name,
             acting_nick=hand.players[hand.acting_position].nickname,
@@ -563,6 +570,21 @@ def _postflop_first(hand: Hand, *, room: Room | None) -> int | None:
     return betting.next_active_position(hand, button_idx)
 
 
+def _player_views(hand: Hand) -> tuple[PlayerView, ...]:
+    # 在手玩家的出站投影(行动序、快照值、结构上无底牌)。HandStarted / HandStatusChanged /
+    # StateSnapshot 三处同一份投影,别各抄一遍——抄一遍就多一处会漏改的地方。
+    return tuple(
+        PlayerView(
+            seat_position=p.seat_position,
+            nickname=p.nickname,
+            points=p.points,
+            bet_amount=p.bet_amount,
+            status=p.status,
+        )
+        for p in hand.players
+    )
+
+
 def _pot(hand: Hand) -> int:
     # 当前总底池:已并入的 contributed + 各人本街尚未并入的 bet_amount。
     return sum(hand.contributed.values()) + sum(p.bet_amount for p in hand.players)
@@ -692,11 +714,7 @@ def _state_snapshot(room: Room, room_name: str | None, *, for_nick: str) -> Stat
             seats=seats, watchers=watchers, hand_status=None, board=(), pot=0,
             acting_position=None, players=(), your_hole_cards=None,
         )
-    players = tuple(
-        PlayerView(seat_position=p.seat_position, nickname=p.nickname, points=p.points,
-                   bet_amount=p.bet_amount, status=p.status)
-        for p in hand.players
-    )
+    players = _player_views(hand)
     own = in_hand[for_nick].hole_cards if for_nick in in_hand else None
     return StateSnapshot(
         room=room_name, max_seats=len(room.seats), button_position=room.button_position,

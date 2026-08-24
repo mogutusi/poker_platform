@@ -5,37 +5,8 @@
 //
 // 前置:后端在跑(见 docs/dev.md)。
 
-import { expect, test, type Page } from '@playwright/test'
-
-const K_USER = '00112233445566778899aabbccddeeff'
-const PASSWORD = 'devpass123'
-
-async function joinTable(page: Page, user: string, room: string, seat: number): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel(/Username/i).fill(user)
-  await page.getByLabel(/Password/i).fill(PASSWORD)
-  await page.getByLabel(/K_user/i).fill(K_USER)
-  await page.locator('button[type="submit"]').click()
-  await expect(page).toHaveURL(/\/lobby/, { timeout: 15_000 })
-  await page.getByLabel('房间名').fill(room)
-  await page.getByTestId('enter-room').click()
-  await expect(page).toHaveURL(/\/game/, { timeout: 10_000 })
-  await page.locator(`[data-empty-seat="${seat}"]`).click()
-  await expect(page.locator('text=/观战中/')).toBeHidden({ timeout: 10_000 })
-  await page.getByRole('button', { name: '买入' }).click()
-  const ready = page.getByRole('button', { name: /^Ready$/ })
-  await expect(ready).toBeEnabled({ timeout: 10_000 })
-  await ready.click()
-}
-
-/** 现在轮到哪一页行动。按钮只在自己回合可用,所以这等于「谁能点谁就是行动者」(0080·C 的红利)。 */
-async function whoActs(pages: Page[]): Promise<Page | null> {
-  for (const p of pages) {
-    const fold = p.getByRole('button', { name: /^Fold$/ })
-    if ((await fold.isVisible().catch(() => false)) && (await fold.isEnabled().catch(() => false))) return p
-  }
-  return null
-}
+import { expect, test } from '@playwright/test'
+import { joinTable, whoActs } from './helpers'
 
 test.describe('界面上加注', () => {
   test('输入金额点 Raise:服务器接受,底池随之变大', async ({ browser }) => {

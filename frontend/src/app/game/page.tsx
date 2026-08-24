@@ -70,7 +70,8 @@ function GameView() {
       return
     }
     let cancelled = false
-    void enterRoom(roomId, () => router.replace("/"), () => cancelled).catch(() => {
+    // 被顶替 / 会话失效时带上原因跳回登录页,让人知道自己为什么被踢出来(见 transport/ws.ts)。
+    void enterRoom(roomId, (reason) => router.replace(`/?reason=${reason}`), () => cancelled).catch(() => {
       if (!cancelled) router.replace("/")
     })
     return () => {

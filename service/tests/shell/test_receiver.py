@@ -12,7 +12,7 @@ from app.core.enums import UserStatus
 from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import DMMessage, User
-from app.shell.connection import Connection
+from app.shell.connection import WS_CLOSE_DISPLACED, Connection
 from app.shell.receiver import run_receiver
 from app.wire.server import (
     ChatMessage,
@@ -390,6 +390,9 @@ async def test_async_displacement_old_connection_exits_silently():
     try:
         assert sh.conns.is_current(c2)  # 新连接上位
         assert c1.ws.closed  # 旧 ws 被关
+        # 关闭码必须是 4409「被接管」而不是普通关闭(0087):不带码时客户端分不出「掉线」与「被顶」,
+        # 于是照常退避重连,一重连又把新连接顶掉 —— 两边无限互顶(浏览器里实测 6 秒 6 轮)。
+        assert c1.ws.close_code == WS_CLOSE_DISPLACED
         assert c1.sender_task.cancelled() or c1.sender_task.done()  # 旧 Sender 被 cancel
         assert rx1.done() and rx1.exception() is None  # 旧 Receiver 干净退出
         # 关键:旧连接退出未把 alice 标 OFFLINE(顶替静默);新连接仍可正常收发

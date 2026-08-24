@@ -65,6 +65,7 @@ export interface HandStarted {
   big_blind: number;
   players: PlayerView[];
   acting_position: number | null;
+  pot: number;
 }
 
 export interface HoleCards {
@@ -76,6 +77,8 @@ export interface HandStatusChanged {
   type: "hand_status_changed";
   status: HandStatus;
   board: Card[];
+  last_bet: number;
+  players: PlayerView[];
 }
 
 export interface PlayerActed {

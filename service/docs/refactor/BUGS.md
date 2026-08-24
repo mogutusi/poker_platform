@@ -111,6 +111,7 @@
 - **实测证据**(`npm run smoke:raise`):`last_bet=2` 时加注到 10 ⇒ `last_raise_size=8`;此后下限是 `10+8=18`,而前端那个式子给的是 `10+2=12` —— 12 被 `ILLEGAL_ACTION` 拒,18 被接受。
 - **这是 [0084](changes/0084-new-here-channel.md) 那类病的第二例**:客户端需要的一个规则输入没有传达渠道,于是前端只好猜。修法同款——把下限(或 `last_raise_size`)放上 wire,让服务器说,前端只显示不推算。要碰的消息是 `last_bet` 会变的那几处:`HandStarted` / `PlayerActed` / `HandStatusChanged` / `StateSnapshot`。
 - **为什么本批不修**:0085 是验证批,它的职责是把这条路走通并留下证据;改协议要动 4 条消息 + codegen + 前端,值得单独一篇变更记录。**已有回归护栏**:`smoke:raise` 会一直钉住服务端这一侧的下限语义。
+- **0087 进展**:同一批消息里,`last_bet` 这一半已经补齐了——`HandStatusChanged` 现在带 `last_bet` + 本街 `players[]`,`HandStarted` 带 `pot`(修的是另一个缺陷:前端自己推「换街即清零」,把开局盲注也清了,整轮 preflop 的跟注因此发成 `bet(0)` 被拒)。**本条剩下的是 `last_raise_size`(加注下限)那一半**:`HandStarted` / `PlayerActed` / `StateSnapshot` 仍不带它,前端那两个自编式子(`min={callAmount*2}`、回退 `lastBet+bigBlind`)也还在。
 
 ---
 

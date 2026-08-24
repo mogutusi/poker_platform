@@ -150,12 +150,12 @@
 - [x] **传输层补测** — **0078 完成**:46 项单测(加密向量 29 + 状态归并 + seq 纪律)
 - [x] **0078·A** 「上次会话残留」自愈 — **已完成**:`store/joinFlow.ts` 的 `decideJoinMessage` 判「先退再进」且只做一次;`scripts/smoke-stale-room.mjs` 在真后端验过
 - [x] **0078·B** 冒烟扩展到完整摊牌 — **已完成**:preflop → flop → turn → river → 摊牌比牌 + 筹码守恒。**过程中抓到真 bug**:`acting_position` 是 `players[]` 下标不是座位号,我的 `isMyTurn` 拿它当座位号用了(单测夹具恰好让两者相等所以没抓到,已把夹具改成下标≠座位号)
-- [~] **0078·D** 冒烟再扩 — **0085 做掉两项**:加注与 min-raise、多人边池已由 `npm run smoke:raise` 覆盖(两人加注→再加注钉住 `last_bet+max(last_raise_size,BB)` 的正反例;三人短码 all-in **且随后再加注**才算分层,判据是「分配总额 > 主池上限」)。**余**:断线重连后 seq 继续累加 —— 归 0079·B
+- [x] **0078·D** 冒烟再扩 — **0085 做掉两项**:加注与 min-raise、多人边池已由 `npm run smoke:raise` 覆盖(两人加注→再加注钉住 `last_bet+max(last_raise_size,BB)` 的正反例;三人短码 all-in **且随后再加注**才算分层,判据是「分配总额 > 主池上限」)。**余**:断线重连后 seq 继续累加 —— **0087 已验**(浏览器里真断一次线,重连后发出的命令服务器照收,且全程没有一条连接被 4400 关掉)
 - [x] **0078·C** 真实界面验证 — **0079 完成**:Playwright 4 个用例走通登录 → 大厅 → 进房观战。**一次抓出三个问题**:后端没配 CORS(浏览器连登录都发不出去)、空大厅没有进房入口(动态建房下是死路)、ws 在组件卸载时的竞态
 - [x] **0079·A** 浏览器里两人同桌 — **0080 完成**:入座 → 买入 → 准备 → 开局 → 弃牌 → 手牌结束。**又抓出三个缺陷**:空座位不渲染导致观战者无法入座、开局后 `playerHands[别人座位]` 为 undefined 致整页白屏、行动按钮在别人回合仍可点却静默无反应。顺带修了 `UserStatusChanged` 只处理三种情形之一(入座事件被整条吞掉)
 - [x] **0080·A** 界面走完整牌局 — **已完成**:`e2e/showdown.spec.ts` 两人 Check/Call 推进到手牌结束,6 个浏览器用例全绿。顺带记录一个工具链坑:`npm run dev` 跑着时执行 `npm run build` 会冲掉 dev server 的 `.next` chunk,症状是页面 200 但 React 不水合
 - [~] **0080·B** 界面上验加注与 min-raise — **0085 做掉加注**:`e2e/raise.spec.ts` 在真浏览器里输入金额点 Raise,断言两边底池都变大(广播回来的,不是本地画的);顺带发现**底池从来没渲染过**(`state.pot` 算了不用),已补。**余**:min-raise 的界面表达要等 [BUG-19](BUGS.md)(下限没上 wire,前端在自编式子);三人以上与边池的**界面**表现仍未验(界面只显示一个总底池,不显示分层)
-- [ ] **0079·B** 断线重连在浏览器里验:重连后 seq 继续累加、快照重新对齐;被顶替(4401)的处理
+- [x] **0079·B** 断线重连在浏览器里验 — **0087 完成**:`e2e/reconnect.spec.ts` 两个用例(掉线重连 / 同账号别处登录)。seq 跨重连继续累加与快照对齐**本来就对**,被验证的是它们;而**一次抓出四个缺陷**:每次重连都把自己从座位上退下来(`ALREADY_IN_ROOM` 被当成「挂在别的房间」)、开局底池显示 0、整轮 preflop 的跟注都发成 `bet(0)` 被拒(前端自己推「换街即清零」,而开局那条 `PRE_FLOP` 上盲注已下)、被顶替后两边无限互顶(顶替关闭码是 1000,客户端分不出掉线,新增 **4409**)。顺带发现 `showdown.spec.ts` 是假绿的(推进循环一路空转到 `ACTION_TIMEOUT`),已改真
 - [ ] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途(`chips`/`phase` 与后端 enum 的漂移仍在;新合入的 `game/page.tsx` 还在用它)。这条即上文「前端消费 wire.gen.ts」的落地时机
 - [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
 - [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改
