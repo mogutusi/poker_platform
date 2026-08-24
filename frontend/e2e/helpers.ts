@@ -39,6 +39,12 @@ export async function joinTable(page: Page, user: string, room: string, seat: nu
   await ready.click()
 }
 
+/** 某个座位上现在有多少筹码(服务器给的值,经 data-seat-points 暴露)。座位号是界面上的 1 起编号。 */
+export async function seatPoints(page: Page, seat: number): Promise<number> {
+  const raw = await page.locator(`[data-seat="${seat}"]`).getAttribute('data-seat-points')
+  return Number(raw)
+}
+
 /** 现在轮到哪一页行动。按钮只在自己回合可用,所以「谁能点谁就是行动者」。 */
 export async function whoActs(pages: Page[]): Promise<Page | null> {
   for (const p of pages) {

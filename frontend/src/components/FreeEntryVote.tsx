@@ -9,12 +9,49 @@
 //   - 候选在开票时冻结:开票后才坐下的新人不在这批里,通过也不免他。
 
 import { voteFreeEntry } from '@/store/actions'
+import { clearVoteResult } from '@/store/room'
 import { useRoom } from '@/store/useRoom'
 
 export default function FreeEntryVote() {
   const state = useRoom()
   const vote = state.freeEntryVote
-  if (!vote) return null
+
+  // 票结束了就报结果,而不是让面板凭空消失。`passed`/`waived` 是服务器给的,这里只显示(0089)。
+  if (!vote) {
+    const result = state.lastVoteResult
+    if (!result) return null
+    return (
+      <div
+        role="status"
+        data-testid="free-entry-vote-result"
+        className={[
+          'absolute right-4 top-20 z-40 w-72 rounded-xl border-2 p-4 shadow-2xl backdrop-blur-sm',
+          result.passed
+            ? 'border-emerald-500/50 bg-emerald-950/85 text-emerald-100'
+            : 'border-red-500/50 bg-red-950/85 text-red-100',
+        ].join(' ')}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-semibold">
+            {result.passed ? '免盲投票通过' : '免盲投票没通过'}
+          </p>
+          <button
+            type="button"
+            aria-label="关闭投票结果"
+            onClick={clearVoteResult}
+            className="px-1 text-base leading-none opacity-70 hover:opacity-100"
+          >
+            ×
+          </button>
+        </div>
+        <p className="mt-2 text-xs">
+          {result.passed
+            ? `${result.waived.join('、')} 这一手免付入局盲,直接入局。`
+            : '有人反对,或候选已经不在桌上。这次不免,新人照常付入局盲。'}
+        </p>
+      </div>
+    )
+  }
 
   const { candidates, voters, approvals } = vote
   const iAmVoter = state.me !== null && voters.includes(state.me)

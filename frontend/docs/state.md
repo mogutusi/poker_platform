@@ -20,7 +20,7 @@
 | `PlayerBoughtIn` | 某人买入 |
 | `RoomConfigChanged` | 盲注/买入额被改 |
 | `ChatMessage` / `RoomChatHistory` | 房聊 |
-| `FreeEntryVoteUpdated` / `FreeEntryVoteClosed` | 免盲投票面板 |
+| `FreeEntryVoteUpdated` / `FreeEntryVoteClosed` | 免盲投票面板。`Closed` 带 `passed`/`waived`,**要显示出来**——只拿它关面板的话,用户看到的是面板凭空消失,不知道自己那一票有没有起作用(0089)|
 
 失去同步了怎么办:**不要自己修**。断开重连,服务器会补一份新快照。
 

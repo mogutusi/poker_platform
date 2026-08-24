@@ -438,6 +438,10 @@ function GameView() {
               return (
                 <div
                   key={seat.number}
+                  // 测试钩子:座位号 + 该座位当前筹码(服务器给的值)。按文案定位太脆——改一句提示
+                  // 就能弄坏用例,而「这个座位上还剩多少」是免盲/买入/结算都要断言的东西。
+                  data-seat={seat.number}
+                  data-seat-points={seat.player.points ?? ""}
                   className={cn(
                     "absolute flex flex-col items-center",
                     !isCurrent && "gap-0.5"

@@ -56,6 +56,9 @@ export interface RoomState {
 
   chat: ChatMessage[]
   freeEntryVote: { candidates: string[]; voters: string[]; approvals: string[] } | null
+  /** 上一次免盲投票的结果(服务器给的 passed / waived)。展示后由 UI 清掉;新一手也会清。
+   *  此前这条事件只被用来关面板,结果直接丢掉——投没投过、谁被免了,界面上一个字都没有。 */
+  lastVoteResult: { passed: boolean; waived: string[] } | null
 
   connection: ConnectionState
   /** 最近一次服务器拒绝;展示后由 UI 清掉。 */
@@ -85,6 +88,7 @@ const EMPTY: RoomState = {
   lastResult: null,
   chat: [],
   freeEntryVote: null,
+  lastVoteResult: null,
   connection: 'idle',
   lastError: null,
 }
@@ -122,6 +126,11 @@ export function setConnection(connection: ConnectionState): void {
 /** 关掉结算面板。新一手开始时 hand_started 会自己清,这个是给用户手动关的。 */
 export function clearResult(): void {
   if (state.lastResult) set({ lastResult: null })
+}
+
+/** 关掉免盲投票结果提示。同上,新一手也会自己清。 */
+export function clearVoteResult(): void {
+  if (state.lastVoteResult) set({ lastVoteResult: null })
 }
 
 export function clearError(): void {
@@ -217,6 +226,7 @@ export function applyServerMessage(msg: ServerMessage): void {
         yourHoleCards: null,
         reveals: [],
         lastResult: null,
+        lastVoteResult: null, // 新一手开始,上一次投票的结果不再相关
       })
       break
 
@@ -333,7 +343,9 @@ export function applyServerMessage(msg: ServerMessage): void {
       break
 
     case 'free_entry_vote_closed':
-      set({ freeEntryVote: null })
+      // 关面板,同时把结果留下来给界面显示。服务器已经说了 passed / waived,丢掉不用的话
+      // 用户只会看到面板凭空消失,不知道自己那一票有没有起作用、谁被免了(0089)。
+      set({ freeEntryVote: null, lastVoteResult: { passed: msg.passed, waived: msg.waived } })
       break
 
     case 'error':

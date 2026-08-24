@@ -168,6 +168,18 @@ describe('加注下限与免盲投票投影(0088)', () => {
     })
   })
 
+  it('投票终结要把结果留下来,不是把面板一关了事(0089)', () => {
+    applyServerMessage({
+      type: 'free_entry_vote_updated',
+      candidates: ['dave'],
+      voters: ['alice'],
+      approvals: [],
+    })
+    applyServerMessage({ type: 'free_entry_vote_closed', passed: true, waived: ['dave'] })
+    expect(getRoomState().freeEntryVote).toBeNull()
+    expect(getRoomState().lastVoteResult).toEqual({ passed: true, waived: ['dave'] })
+  })
+
   it('没有投票进行时快照把面板清掉,不留上一轮的残影', () => {
     applyServerMessage({
       type: 'free_entry_vote_updated',

@@ -3,7 +3,7 @@
 // 前置:后端在跑。
 
 import { expect, test, type Page } from '@playwright/test'
-import { dropGameSocket, gameSockets, installWsProbe } from './helpers'
+import { FACE_UP_CARD, dropGameSocket, gameSockets, installWsProbe, seatPoints } from './helpers'
 
 const K_USER = '00112233445566778899aabbccddeeff'
 const PASSWORD = 'devpass123'
@@ -51,10 +51,45 @@ test.describe('房间参数', () => {
 
     expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('买入额:越界被服务器拒且不生效,合法值改完就是入座的默认买入', async ({ page }) => {
+    const room = `cfg-buyin-${Date.now().toString(36)}`
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(String(e)))
+
+    // **专属账号**:这一条要真的进房,而 table/raise/reconnect 那几条用例**结束时还停在手牌里**。
+    // 同名账号再登录会走「先退再进」,但局中的 leave_room 要等这手打完才驱逐(rules.md ④),
+    // 于是进不去房、连「房间设置」入口都不出现——在全套里必红、单跑却绿(0089 实测撞到)。
+    await joinRoom(page, 'gina', room)
+    await page.getByRole('button', { name: '房间设置' }).click()
+    const buyInField = page.locator('#cfg-bi')
+    const submitBuyIn = page.getByRole('button', { name: '改' }).last()
+
+    // 越界:上下限归 shell 按 gameconfig 挡(MAX_BUY_IN=100000000),core 不 import 配置。
+    // 前端**不预判**——照发,让服务器裁决,再把 INVALID_BUY_IN 翻成人话。
+    await buyInField.fill('100000001')
+    await submitBuyIn.click()
+    await expect(page.getByTestId('action-error')).toHaveText(/买入额超出允许范围/, { timeout: 10_000 })
+    await expect(page.getByText(/买入 100/)).toBeVisible()  // 被拒 ⇒ 当前值一分没动(dev 房默认 100)
+    await page.getByTestId('action-error').click()  // 消掉提示,免得下一条断言看的是旧的
+
+    // 合法值:广播回来之后面板跟着变,而且**它就是入座时真的买进去的那个数**
+    await buyInField.fill('250')
+    await submitBuyIn.click()
+    await expect(page.getByText(/买入 250/)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('action-error')).toBeHidden()
+
+    await seatAndReady(page, 1)
+    expect(await seatPoints(page, 1), '入座买入用的应当是改过的房间默认值').toBe(250)
+
+    expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
+  })
 })
 
 test.describe('免盲投票', () => {
-  test('有新人时可发起,投票人能表态', async ({ browser }) => {
+  test('有新人时可发起,投票人能表态,投到通过后新人真的免盲入局', async ({ browser }) => {
+    // 这一条要走完「打一手 → 开票 → 掉线重连 → 再表态 → 通过 → 再开一手」,比默认 30 秒长。
+    test.setTimeout(90_000)
     const room = `vote-${Date.now().toString(36)}`
     const ctxA = await browser.newContext()
     const ctxB = await browser.newContext()
@@ -103,7 +138,7 @@ test.describe('免盲投票', () => {
 
       // C 这时进来入座,他才是 new_here 候选
       await joinRoom(c, 'carol', room)
-      await c.locator('[data-empty-seat="3"]').click()
+      await seatAndReady(c, 3)  // 要开下一手,C 也得买入 + 准备(他是 new_here,所以仍是候选而不是投票人)
 
       // A 那边应看到 C 挂上「等入局」(sit_down 的 user_status_changed 现在自带 new_here)
       await expect(a.locator('[data-owes-entry]')).toHaveCount(1, { timeout: 15_000 })
@@ -151,6 +186,29 @@ test.describe('免盲投票', () => {
       // 全票制下这张票就永远等不到他,卡死。
       await b.getByRole('button', { name: /^Ready$/ }).click()
       await expect(panelB.getByRole('button', { name: '同意' })).toBeVisible({ timeout: 10_000 })
+
+      // ── 0089:把票投到通过,看结果是不是真的落地 ──
+      // 全票制:A 已同意,B 这一票投下去就够了。
+      await panelB.getByRole('button', { name: '同意' }).click()
+
+      // 结果要说出来。此前 free_entry_vote_closed 只被用来关面板,passed/waived 直接丢掉——
+      // 面板凭空消失,谁也不知道自己那一票有没有起作用、谁被免了。
+      for (const p of [a, b, c]) {
+        const result = p.getByTestId('free-entry-vote-result')
+        await expect(result).toBeVisible({ timeout: 10_000 })
+        await expect(result).toContainText('通过')
+        await expect(result).toContainText('carol')
+      }
+
+      // 免掉的那笔钱真的没收:开一手,底池只有小盲 + 大盲(1+2=3)。
+      // C 若没被免,他入局要**额外**付一个大盲,底池就是 5——除非他这手恰好坐在盲位上
+      // (三人桌两个盲位,位置由庄家轮转决定,界面上没有办法指定)。所以这条断言是**必要条件**:
+      // 免盲生效时它恒为真,不生效时多数情况下会红。「一分不多收」的穷举在 core 层
+      // (tests/core/test_free_entry_vote.py 的 waive 用例)。
+      await a.getByRole('button', { name: /Start Game/i }).click()
+      await expect(a.locator('text=/In game/i')).toBeVisible({ timeout: 10_000 })
+      await expect(c.locator(FACE_UP_CARD)).toHaveCount(2, { timeout: 10_000 })  // C 真的被发牌了
+      await expect(a.getByTestId('pot-amount')).toHaveText('3', { timeout: 10_000 })
 
       expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
     } finally {
