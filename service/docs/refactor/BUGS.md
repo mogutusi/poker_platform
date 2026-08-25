@@ -124,7 +124,7 @@
 | ID | 缺陷 |
 |---|---|
 | BUG-11(N-e9) | DM 读游标无单调防护,游标可能被旧值回拨 |
-| BUG-12(N-e10/N-e11) | [db-migrations.md](../db-migrations.md) 的示例配置照抄会导致启动崩溃,且违反本仓自己的配置铁律 |
+| ~~BUG-12(N-e10/N-e11)~~ | ~~db-migrations.md 的示例配置照抄会启动崩溃,且违反自家铁律~~ —— **0095 已修**(文档层)。**顺带更正登记的措辞**:0072 原文说的是违反自家 **create_all-vs-Alembic** 铁律,不是「配置铁律」——config.md / coding_principle.md 的配置铁律这篇一条都没违反。N-e10:sqlite 示例 URL 照抄进 `.env` 会崩(两个消费方方言形不同),现已写明并改掉示例;N-e11:那条「生产绝不靠 create_all」在代码里无路径可守(lifespan 无条件 `create_all`),现已把口径改实并给出正确顺序 |
 | BUG-13(N-e16) | `_evict` 不清 `waive_entry_for` → 离房再进仍享免盲 |
 | ~~BUG-14(N-e26)~~ | ~~`scripts/scripts.py` 孤儿脚本~~ —— **0092 已删** |
 | BUG-15(N-e34) | `NullPersister` 无生产消费者 |
@@ -168,6 +168,7 @@
 | 0085(BUG-19)| 前端自编 min-raise 下限 → 别人大额加注之后发不出合法加注 | 0088 |
 | 0072·R2(BUG-3)+ 0072·N4 | `Timeout` 身份不足(只带 epoch)→ 跨手/跨房撞号,误弃不该弃的人 | 0090 |
 | 0072·N-e32(BUG-10)| 离场者收不到自己那手的结算(广播按 commit 后的成员表解析)| 0091 |
+| 0072·N-e10/N-e11(BUG-12)| db-migrations.md 示例照抄会崩 + create_all/Alembic 铁律无路径可守(文档层)| 0095 |
 
 ## 误报留档(别再「发现」一次)
 
