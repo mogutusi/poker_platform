@@ -874,6 +874,10 @@ def _evict(work: Work, room: Room, nick: str) -> list[Event]:
     pw = _release_seat(work, room, nick)
     if pw is not None:
         events.append(pw)
+    # 离房即弃免盲(BUG-13/0096):已通过的免盲快照随人离房作废,否则退房再进凭残留 nick 免掉
+    # 入局 BB(违反 rules.md ①.9「退房再进躲盲被堵」),改名腾出的旧 nick 还会把免盲转给别人。
+    # 与「投票进行中候选离场即失对象」(_finish_entry_vote)同一口径;起身(→WATCHING)人未离房,不没收。
+    room.waive_entry_for.discard(nick)
     room.users_in_room.pop(nick, None)
     del work.users[nick]  # 彻底离场回大厅;单房间约束 ⇒ 驱逐无歧义(user.md)
     left = UserLeft(nickname=nick, seat_position=seat_idx)

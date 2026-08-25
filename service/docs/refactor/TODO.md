@@ -119,7 +119,7 @@
 - [x] **0072·N-e32** Broadcast 收件人取 commit 后成员表,离场者收不到自己那手的结算 — **0091 已修**:对「本手参与者 ∩ 本手末尾被驱逐者」各补一份 `Personal(HandShowDown/HandEnded)`。**登记的第二条备选走不通**:dispatch 对整批事件用同一份 commit 后的成员表、commit 又是原子的,挪 `_evict` 的位置毫无作用(已在 BUGS.md/core.md 写明,别再试)
 - 注:~~**N4**(Timeout 跨房)并入 **R2** 修复~~ —— **0090 两条一起修掉**:`Timeout` 改带三元身份 `(room, hand_seq, epoch)`,三项全等才新鲜;`room` 只作校验不作路由,硬规则 8 原样成立
 - 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
-- [~] **0072·N-低危设计边角**(low,择机)—— **0092 做掉三条 + 0095 做掉 N-e10/N-e11**(~~N-e26 孤儿脚本~~ 已删、~~N-e36 `_NICKNAME_MAX_LEN` 二份事实源~~ 已改引 schema、~~C3 `big_blind=2*`~~ 已改引常量)。**余**:N-e9 DM 游标无单调防护 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e38·N-e40 演进面与快照 min-raise 记档
+- [~] **0072·N-低危设计边角**(low,择机)—— **0092 做掉三条 + 0095 做掉 N-e10/N-e11 + 0096 做掉 N-e16**(~~N-e26 孤儿脚本~~ 已删、~~N-e36 `_NICKNAME_MAX_LEN` 二份事实源~~ 已改引 schema、~~C3 `big_blind=2*`~~ 已改引常量、~~N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲~~ **0096 已修**:`_evict` 剔除该 nick,回归测钉到筹码面)。**余**:N-e9 DM 游标无单调防护 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e38·N-e40 演进面与快照 min-raise 记档
 
 > **口径(0093)**:本节条目与 [BUGS.md](BUGS.md) 是**同一批缺陷的两份登记**。缺陷正文以 BUGS.md 为准,本节只作当轮任务的痕迹;修完两处都要划掉。0088/0090/0091/0092 曾只划掉 BUGS 那一份,导致 TODO 上挂着五条早已修完的「待办」——账本自相矛盾比缺一条记录更糟(见 [changes/0093](changes/0093-ledger-alignment.md))。
 

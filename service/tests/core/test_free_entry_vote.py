@@ -6,8 +6,11 @@
 """
 
 from app.core.commands import (
+    BuyIn,
+    Cleanup,
     Connect,
     Disconnect,
+    JoinRoom,
     LeaveRoom,
     OpenFreeEntryVote,
     SetUserStatus,
@@ -188,6 +191,90 @@ def test_voter_disconnect_does_not_trigger_vote():
     assert _room(world).entry_vote is not None  # 投票仍挂着,等 C 重连投票 / 或 Cleanup 时重算
     assert _room(world).waive_entry_for == set()  # 未免盲
     assert _room(world).users_in_room["C"] is UserStatus.OFFLINE  # 掉线者保座
+
+
+# ── 离房即弃免盲(BUG-13/0096):通过后受免者 LeaveRoom → 快照剔除;重进要照付入局 BB ──
+def test_leaver_forfeits_waiver_and_pays_on_reentry():
+    # 与「投票进行中候选离场即失对象」(_finish_entry_vote)同一口径:离房是不可逆退出,
+    # 已通过的免盲随人作废;否则退房再进凭残留 nick 免盲,违反 ①.9「退房再进躲盲被堵」。
+    world = _three_plus_newcomer()
+    world, _, err = run(world, OpenFreeEntryVote(origin="A"))
+    assert err is None
+    for v in ("A", "B", "C"):
+        world, _, err = run(world, VoteFreeEntry(origin=v, approve=True))
+        assert err is None
+    assert _room(world).waive_entry_for == {"D"}  # 通过,快照在
+
+    world, _, err = run(world, LeaveRoom(origin="D"))  # 受免者离房(两手之间 → 即时驱逐)
+    assert err is None
+    assert "D" not in _room(world).users_in_room and "D" not in world.users
+    assert _room(world).waive_entry_for == set()  # 免盲随人作废
+
+    # D 重进、重坐、买入、准备:下一手他是普通 new_here,付盲即玩要真金白银 post 一个 BB
+    world, _, err = run(world, JoinRoom(origin="D", room="r1", uid=3, loaded=100))
+    assert err is None
+    world, _, err = run(world, SitDown(origin="D", seat=3))
+    assert err is None and _room(world).seats[3].new_here is True
+    world, _, err = run(world, BuyIn(origin="D", seat=3, amount=100))
+    assert err is None
+    world, _, err = run(world, SetUserStatus(origin="D", status=UserStatus.READY_TO_PLAY))
+    assert err is None
+    world, _, err = run(world, StartHand(origin="A", seat=0, started_at=T0, deck=DECK))
+    assert err is None
+    d = _by_seat(_room(world).hand, 3)
+    assert d.bet_amount == BB and d.points == 100 - BB  # 入局 post 真的收了(非盲位,残留免盲则会是 0)
+
+
+# ── 只没收离场者那一份:同批被免的其他人不受牵连(钉「定向 discard」而非「整份清空」)──
+def test_eviction_forfeits_only_the_leavers_waiver():
+    # waive_entry_for 是 union 累积的多人集合(_finish_entry_vote),所以「清整份」与「只清一个」
+    # 在单候选用例上无从分辨:两条离房用例都只有 D 一人被免,`== set()` 对两种实现都成立。
+    # 这条用多候选把差别撑开——否则把 discard 写成 `= set()` 会静默毁掉别人已获全票通过的免盲。
+    world = make_table(
+        {
+            0: seat("A", 100, new_here=False),
+            1: seat("B", 100, new_here=False),
+            2: seat("C", 100, new_here=False),
+            3: seat("D", 100, new_here=True),  # 候选:留下
+            4: seat("E", 100, new_here=True),  # 候选:离场
+        },
+        button=4,  # 推进到 0 → SB=1、BB=2,D(座 3)是 UTG 非盲位,便于断言「免付」
+    )
+    world, _, err = run(world, OpenFreeEntryVote(origin="A"))
+    assert err is None
+    for v in ("A", "B", "C"):
+        world, _, err = run(world, VoteFreeEntry(origin=v, approve=True))
+        assert err is None
+    assert _room(world).waive_entry_for == {"D", "E"}  # 同一票免掉两人
+
+    world, _, err = run(world, LeaveRoom(origin="E"))
+    assert err is None
+    assert _room(world).waive_entry_for == {"D"}  # 只没收 E 的那份,D 的免盲原样保留
+
+    # D 的免盲仍然兑现:下一手非盲位免费入局(整份清空的实现下他会被迫付一个入局 BB)
+    world, _, err = run(world, StartHand(origin="A", seat=0, started_at=T0, deck=DECK))
+    assert err is None
+    d = _by_seat(_room(world).hand, 3)
+    assert d.bet_amount == 0 and d.points == 100
+
+
+# ── 同缺陷另一路径:在座者掉线不弃权(可逆),Cleanup 驱逐才弃权(_evict 是唯一汇聚点)──
+def test_cleanup_eviction_forfeits_waiver():
+    world = _three_plus_newcomer()
+    world, _, err = run(world, OpenFreeEntryVote(origin="A"))
+    assert err is None
+    for v in ("A", "B", "C"):
+        world, _, err = run(world, VoteFreeEntry(origin=v, approve=True))
+        assert err is None
+
+    world, _, err = run(world, Disconnect(origin=None, nick="D"))  # 掉线可逆:保座,免盲不动
+    assert err is None
+    assert _room(world).waive_entry_for == {"D"}
+
+    world, _, err = run(world, Cleanup(origin=None, nick="D"))  # 占座到期 → _evict 驱逐
+    assert err is None
+    assert "D" not in _room(world).users_in_room
+    assert _room(world).waive_entry_for == set()  # 驱逐即弃权,与 LeaveRoom 同口径
 
 
 # ── 候选自身可发起投票(开票者不必是投票人,决策 5)──
