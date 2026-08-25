@@ -104,10 +104,10 @@
 ## 审计跟进(0072,2026-07-14)— 台账见 [changes/0072](changes/0072-architecture-audit.md)
 
 - [~] **0072·R1** 手牌记录跨房间世代撞键(**用户定案暂缓,2026-07-28**:「先不修」;已确认未修非接受,方案两案留档 0072):`dedupe_key="room:seq"` 同名房销毁重建/进程重启后与旧世代撞键 → 幂等 INSERT 静默丢新记录;启动时须带「销房重建 + 重启两路径」回归测试 —— 详见 [BUGS.md#BUG-2](BUGS.md)
-- [ ] **0072·R2** Timeout staleness 跨手失效:epoch 每手归零,`Timeout` 补带 `hand.seq` 双键校验 + 构造交错的回归测试(可与 R1 同批) —— 详见 [BUGS.md#BUG-3](BUGS.md)
-- [ ] **0072·D2-D5** 文档 truth-up 一批(仿 0047/0067):~~messaging.md §房聊历史 0071 残留旧段(D1)~~ **D1 已由 0075 文档重写连带解决**(四处反事实全消失)/ architecture.md 不变量 2 补「只读 committed world 豁免」判据(D2)/ connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
+- [x] **0072·R2** Timeout staleness 跨手失效 — **0090 已修**:`Timeout` 改带三元身份 `(room, hand_seq, epoch)`。登记里写的「双键」**不够**——`seq` 只在房内单调,而目标房是按「他现在在哪」解析的,故必须连 room 一起(并入 N4)。R1(BUG-2)按用户定案仍暂缓,两条虽同源但未一并动
+- [~] **0072·D2-D5** 文档 truth-up 一批(仿 0047/0067):~~D1 messaging.md §房聊历史残留旧段~~(0075 连带解决)/ ~~D2 architecture.md 不变量 2 补只读豁免判据~~(**0092 已修**:改写成「本体是唯一写者」+ 三条判据 + 现存三处名单 + 新增豁免的论证要求)/ **余**:connection.md·lobby.md 待定段陈旧(D3)/ 四处陈旧注释含两处 JWT 反事实(D4)/ 小项(D5)
 - [x] **0072·C2** codegen 守门口径 — **0086 改实**:architecture.md/wire.md 两处都改成「pytest 守门;仓库没有 CI 也没装 pre-commit,提交规约见 dev.md」。**搭 CI 与否是独立决策,未做**(用户指出:提交规约本来就有文档,缺的是自动化不是约定)
-- [ ] **0072·C3** `rest/lobby.py` 的 `big_blind=2*` 改引 `blinds.BIG_BLIND_MULTIPLE`(一行,可并入任意批)
+- [x] **0072·C3** `rest/lobby.py` 的 `big_blind=2*` 改引 `blinds.BIG_BLIND_MULTIPLE` — **0092 已修**(投影用例的断言也从字面量 10 改成派生关系,否则改错倍数照样绿)
 - 注:0072·C1(前端消费 wire.gen.ts)已有 W 段既有项,不重复登记
 
 **新增缺陷(第五次工作流 N 系列对抗验证坐实,均 medium;台账 0072「N 系列」节)**:
@@ -115,11 +115,13 @@
 - [x] **0072·N2** 慢客户端被丢弃只摘键 → 幽灵命令源 + 同 nick 双 Receiver — **0083 已修**:`Connection.receiver_task` + drop 时 cancel Sender 与 Receiver。**修法与登记时不同**:只关 ws 堵不住「读慢写健」的非对称慢客户端(关闭帧和数据一样发不出去),故改为 cancel(同步,不违反「dispatch 不 await」);顺带补上 `stop()` 收 Sender 时按 `online_nicks()` 遍历、够不着已被 drop 的连接那个泄漏
 - [x] **0072·N3** GameLoop 兜底只罩 `reduce()` + 常驻协程死了无人告警 — **0083 已修**:`handle` 兜底提到罩住 checkout/commit/审计/派发 + GameLoop·Timer·PersistWriter 三条常驻协程挂 watchdog(非取消退出即 CRITICAL,兑现 log.md 早就写着的那条)。**定性更正**:对抗核实逐条走过后确认当前无可达抛出路径,是潜在缺口而非活的崩溃路径,详见 [BUGS.md#BUG-7](BUGS.md)
 - [ ] **0072·N5** `SessionStore.revoke` 全仓零调用者——无登出端点/无管理员吊销通道,泄露应对(issue --reset)后已建会话仍活至 SESSION_TTL。补吊销通道(登出端点 或 name→sessions 索引供改密/reset 时撤销),或若确认 v1 不做则在 auth.md 显式记档「不吊销、靠 TTL+重启」
-- [ ] **0072·N9** StateSnapshot 不投影 `room.entry_vote` → 顶替/重连快照清空进行中免盲投票面板、重连的必需投票人不知有票。给 StateSnapshot 加投票公开态投影(或 reduce 重连臂补发 FreeEntryVoteUpdated)
-- [ ] **0072·N-e32** Broadcast 收件人取 commit 后成员表:LeaveRoom 触发 fold-to-one 终手时,离场者收不到同批 PlayerActed/HandShowDown/HandEnded(看不到自己参与底池的结算)。离场结算事件改 Personal 补发给离场者,或调整驱逐与结算广播的顺序
+- [x] **0072·N9** StateSnapshot 不投影 `room.entry_vote` — **0088 已修**:快照加 `free_entry_vote` 投影。**登记只说对了一半**:重连恢复的是 SITTING_IN 而非 READY_TO_PLAY,人回来后并不是合格投票人,再点 Ready 才是——而这件事此前没有任何事件承载,票照样卡死。故同批给 `_maybe_resolve_entry_vote` 补了「票还在就广播当前公开态」
+- [x] **0072·N-e32** Broadcast 收件人取 commit 后成员表,离场者收不到自己那手的结算 — **0091 已修**:对「本手参与者 ∩ 本手末尾被驱逐者」各补一份 `Personal(HandShowDown/HandEnded)`。**登记的第二条备选走不通**:dispatch 对整批事件用同一份 commit 后的成员表、commit 又是原子的,挪 `_evict` 的位置毫无作用(已在 BUGS.md/core.md 写明,别再试)
 - 注:~~**N4**(Timeout 跨房)并入 **R2** 修复~~ —— **0090 两条一起修掉**:`Timeout` 改带三元身份 `(room, hand_seq, epoch)`,三项全等才新鲜;`room` 只作校验不作路由,硬规则 8 原样成立
 - 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
 - [~] **0072·N-低危设计边角**(low,择机)—— **0092 做掉三条**(~~N-e26 孤儿脚本~~ 已删、~~N-e36 `_NICKNAME_MAX_LEN` 二份事实源~~ 已改引 schema、~~C3 `big_blind=2*`~~ 已改引常量)。**余**:N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e38·N-e40 演进面与快照 min-raise 记档
+
+> **口径(0093)**:本节条目与 [BUGS.md](BUGS.md) 是**同一批缺陷的两份登记**。缺陷正文以 BUGS.md 为准,本节只作当轮任务的痕迹;修完两处都要划掉。0088/0090/0091/0092 曾只划掉 BUGS 那一份,导致 TODO 上挂着五条早已修完的「待办」——账本自相矛盾比缺一条记录更糟(见 [changes/0093](changes/0093-ledger-alignment.md))。
 
 ## 代码缺陷排查(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
 
