@@ -40,12 +40,13 @@
 
 ## medium
 
-### BUG-3 · Timeout 的 staleness 校验跨手失效
+### ~~BUG-3 · Timeout 的 staleness 校验跨手失效~~ —— **0090 已修**
 
-- **来源**:[0072·R2](changes/0072-architecture-audit.md)
+- **来源**:[0072·R2](changes/0072-architecture-audit.md) · **修于 [0090](changes/0090-timeout-identity.md)**(`Timeout` 改带三元身份 `(room, hand_seq, epoch)`,三项全等才算新鲜;并入 0072·N4 的跨房那半——补 `seq` 只堵跨手,`seq` 在房内单调,两个房的第 1 手同为 1)
 - **症状**:上一手的超时命令可能被当成本手的有效超时执行,导致本手玩家被误判超时。
 - **机理**:`epoch` 每手归零,所以「上一手的 epoch」和「本手的 epoch」会重号,单靠 `epoch` 区分不出跨手的陈旧命令。
 - **修法**:`Timeout` 补带 `hand.seq`,与 `epoch` 双键校验。可与 BUG-2 同批(都动手牌标识)。
+- **登记时的修法不完整,0090 已更正**:双键**不够**——`seq` 只在房内单调,而 `Timeout` 的目标房是按「他现在在哪」解析的,人换房之后两个房的第 1 手都是 `seq=1`,照样撞。实际落地的是**三**键。BUG-2(手牌记录撞键)与本条同源但**未一并修**:那条是 dedupe_key 跨房间世代撞,用户已定案暂缓。
 - **要补的测试**:构造跨手交错,让上一手的 `Timeout` 在新手开始后才到达。
 
 ### ~~BUG-4 · 改昵称窗内发生 ws 顶替,活连接永久挂在旧 nick 键上~~ —— **0083 已修**
@@ -164,6 +165,7 @@
 | 0074·I/J(BUG-5)| `_cancel_and_await` 吞自己的取消;lifespan `yield` 无 `try/finally` → drain 整体跳过 | 0083 |
 | 0072·N9(BUG-9)| `StateSnapshot` 不投影 `entry_vote` → 重连/顶替后投票面板消失、全票制下卡死 | 0088 |
 | 0085(BUG-19)| 前端自编 min-raise 下限 → 别人大额加注之后发不出合法加注 | 0088 |
+| 0072·R2(BUG-3)+ 0072·N4 | `Timeout` 身份不足(只带 epoch)→ 跨手/跨房撞号,误弃不该弃的人 | 0090 |
 
 ## 误报留档(别再「发现」一次)
 

@@ -325,7 +325,9 @@ def _start_hand_events(
     )
     if hand.acting_position is not None:
         acting = hand.players[hand.acting_position]
-        events.append(TurnChanged(room=room_name, acting_nick=acting.nickname, epoch=hand.epoch))
+        events.append(
+            TurnChanged(room=room_name, acting_nick=acting.nickname, hand_seq=hand.seq, epoch=hand.epoch)
+        )
     return events
 
 
@@ -399,7 +401,9 @@ def _advance(work: Work, hand: Hand, big_blind: int) -> list[Event]:
     hand.epoch += 1
     assert hand.acting_position is not None  # 未关 ⇒ 必有另一个 ACTIVE(见 rules.md ② street_closed)
     nxt = hand.players[hand.acting_position]
-    return [TurnChanged(room=work.room_name, acting_nick=nxt.nickname, epoch=hand.epoch)]
+    return [
+        TurnChanged(room=work.room_name, acting_nick=nxt.nickname, hand_seq=hand.seq, epoch=hand.epoch)
+    ]
 
 
 def _close_street(work: Work, hand: Hand, big_blind: int) -> list[Event]:
@@ -435,6 +439,7 @@ def _close_street(work: Work, hand: Hand, big_blind: int) -> list[Event]:
         TurnChanged(
             room=work.room_name,
             acting_nick=hand.players[hand.acting_position].nickname,
+            hand_seq=hand.seq,
             epoch=hand.epoch,
         ),
     ]
@@ -613,7 +618,14 @@ def _timeout(work: Work, cmd: Timeout) -> ReduceResult:
     room = work.room
     if room is None or room.hand is None:
         return [], None  # 不在房 / 无手牌 → 过期忽略
+    if work.room_name != cmd.room:
+        # 人已换房:这条队是别的房排的。`checkout` 按「他现在在哪」解析目标房,不校验就会让 A 房的
+        # 陈旧超时落进 B 房——而 seq 只在房内单调,两个房的第 1 手同为 1,补 seq 也堵不住(0072·N4)。
+        return [], None
     hand = room.hand
+    if hand.seq != cmd.hand_seq:
+        # 跨手撞号:epoch 每手从 0 起,上一手的 epoch 和这一手的会重号(BUG-3)。seq 房内单调,一比即知。
+        return [], None
     if hand.epoch != cmd.epoch:
         return [], None  # 回合早已推进(epoch 不符)→ 过期忽略
     pos = hand.acting_position

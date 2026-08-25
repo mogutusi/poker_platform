@@ -81,6 +81,8 @@ GameLoop 读 `world.users` 解析房间是允许的:它是唯一写者、单协�
 | `JoinRoom(room, …)` | 命令自带 `room` | 房可能不存在 → 给「无此房」的副本,reduce 负责新建 |
 | 其余 wire 命令(`PlayerAction`/`SitDown`/`BuyIn`/`RoomChat`/…) | `world.users[cmd.origin].room` | 必有(用户已在房) |
 | `Timeout(nick)` / `Cleanup(nick)` | `world.users[nick].room`;不在 `users` 则无房,reduce no-op | 视情况 |
+
+> `Timeout` 另带 `room`/`hand_seq` 两个字段,但**解析目标房仍只看 `world.users[nick].room`**(上表不变):那两项是 reduce 进门做 staleness 用的身份,不是路由依据——人换了房,陈旧命令必须被挡在门外而不是被路由到别处(见 [timer.md](timer.md)「过期防护」/ changes/0090)。
 | `Connect(nick)` / `Disconnect(nick)` | `nick` 在 `world.users` → 其 `room`;否则纯大厅,无房可拷 | 视情况 |
 
 > 纯大厅的 `Connect`/`Disconnect` 没有目标房,`checkout` 只拷 `users` 表(或连 users 都不动)。reduce 对它们「core 无事」,或只动 presence(在 shell)。

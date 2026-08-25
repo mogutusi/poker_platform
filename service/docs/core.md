@@ -246,20 +246,25 @@ def reduce(work, cmd):
 
 ## 手牌标识与 staleness(定死 epoch / id)
 
-一句话:`epoch` 判「这条超时还新鲜吗」,`seq` 判「这是哪一手」。
+一句话:`epoch` 判「这条超时还新鲜吗」,`seq` 判「这是哪一手」,**两者都不够,要连房名一起用**。
 
 **`hand.epoch`(行动新鲜度)**
 
 - 每次行动推进或街道切换自增;`Timeout` 命令携带调度时的 `epoch`。
-- reduce 进门比对:`hand.epoch != cmd.epoch` 说明该超时已过期(staleness),忽略。
-- [timer.md](timer.md) 的「新鲜度判据」就落在 `hand.epoch` 上。
+- reduce 进门比对:`hand.epoch != cmd.epoch` 说明该回合已推进,忽略。
 
 **`hand.seq`(手牌标识)**
 
 - 开局时从 `room.hand_seq` 自增取得,房间内单调。
 - `dedupe_key = f"{room}:{seq}"`,供 **delayDB**(异步落库层)做幂等(见 [db.md](db.md))。
 
-两者都是内存内自增计数,由状态推导,不读墙钟、不读随机,不违反不变量 1;不引入 wall-clock 的 `hand_id`。
+**`Timeout` 的身份是三元组 `(room, hand_seq, epoch)`(0090)**,三项全等才算新鲜:
+
+- 只比 `epoch` 会**跨手撞号**——它每手从 0 起,「上一手的第 N 回合」和「这一手的第 N 回合」长得一样(BUG-3)。
+- 补上 `seq` 仍会**跨房撞号**——`seq` 只在房内单调,两个房的第 1 手同为 `seq=1`;而 `checkout` 按「他**现在**在哪」解析目标房,人换了房陈旧命令就落进新房(0072·N4)。
+- `Timeout.room` **只作校验、不作路由**:目标房照旧由 `world.users[nick].room` 推定(硬规则 8 不变)。判据与流程见 [timer.md](timer.md)「过期防护」。
+
+三者都是内存内自增计数或既有标识,由状态推导,不读墙钟、不读随机,不违反不变量 1;不引入 wall-clock 的 `hand_id`。
 
 ## 事件产出一览(A 组对外 / B 组内部)
 
@@ -306,7 +311,7 @@ def reduce(work, cmd):
 1. **筹码守恒**:任一时刻 `Σ Player.points + Σ Player.bet_amount + Σ contributed == 开局锁入的总筹码`。三者都要算,因为 `bet_amount` 是本街尚未并入 `contributed` 的投入。结算后 `Σ 还回 Seat.points == 同一总额`。每个分支后可 `assert`,测试期开启。
 2. **全局积分不在对局内流转**:下注、底池、结算只动 `Player`/`Seat`/`contributed`,不碰 `UserState`。全局积分只在 `BuyIn`/`LeaveRoom`/`Cleanup` 变动(见 [user.md](user.md))。
 3. **底牌/牌堆隐私**:除 `Personal(HoleCards)` 与摊牌的 `HandShowDown` 外,任何事件、日志、落库都不含 `hole_cards`/`deck`。
-4. **行动唯一**:每房间至多一个 `acting_position`;`epoch` 单调,过期 `Timeout` 必被 staleness 挡掉。
+4. **行动唯一**:每房间至多一个 `acting_position`;过期 `Timeout` 必被三元身份 `(room, hand_seq, epoch)` 的 staleness 校验挡掉。
 5. 先校验后改是习惯;正确性兜底是工作副本 discard。
 6. **一个用户只在一个房间**:`UserState.room` 记其所在房间。已在某房者 `JoinRoom` 到别房会被拒(`ALREADY_IN_ROOM`),要先 `LeaveRoom`。这保证全局积分的载入/驱逐无歧义(见 [user.md](user.md))。
 

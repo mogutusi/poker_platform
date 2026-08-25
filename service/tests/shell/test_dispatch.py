@@ -85,13 +85,15 @@ def test_turn_changed_and_clear_action_drive_timer(monkeypatch):
     clock = type("C", (), {"t": 1000.0})()
     monkeypatch.setattr(timer_mod, "now", lambda: clock.t)
     sh = Shell(_world())
-    sh.dispatcher.dispatch(TurnChanged(room="r1", acting_nick="alice", epoch=3))
+    sh.dispatcher.dispatch(TurnChanged(room="r1", acting_nick="alice", hand_seq=7, epoch=3))
     clock.t += 9999
     sh.timer.tick()
     fired = sh.inbox_drain()
     assert len(fired) == 1 and fired[0].nick == "alice" and fired[0].epoch == 3
+    # 身份三元组要原样带回来(0090):room 与 hand_seq 一起挡跨房/跨手的陈旧命令
+    assert fired[0].room == "r1" and fired[0].hand_seq == 7
     # ClearAction 取消:再排再清 → 不触发
-    sh.dispatcher.dispatch(TurnChanged(room="r1", acting_nick="bob", epoch=4))
+    sh.dispatcher.dispatch(TurnChanged(room="r1", acting_nick="bob", hand_seq=7, epoch=4))
     sh.dispatcher.dispatch(ClearAction(room="r1"))
     clock.t += 9999
     sh.timer.tick()

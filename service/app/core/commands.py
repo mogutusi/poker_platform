@@ -101,8 +101,13 @@ class Disconnect(Command):
 
 @dataclass(frozen=True, slots=True)
 class Timeout(Command):
+    # 身份三元组 (room, hand_seq, epoch):进门三项全等才算新鲜(见 timer.md 过期防护 / changes/0090)。
+    # 单靠 epoch 不够——它每手从 0 起,上一手和这一手会重号;而 seq 只在房内单调,两个房的第 1 手同为 1。
     nick: str  # 轮到谁超时(游戏目标,非错误收件人)
-    epoch: int  # 调度时的 hand.epoch 快照;进门做 staleness 比对
+    room: str  # 排这条队时的房名。**不用于路由**(目标房照旧由 world.users[nick].room 解析),只作校验:
+    # 解析出来的房与它不符 ⇒ 这是别的房排的队(人已换房),忽略
+    hand_seq: int  # 调度时的 hand.seq 快照(房内单调);挡跨手撞号
+    epoch: int  # 调度时的 hand.epoch 快照;挡本手内的回合推进
 
 
 @dataclass(frozen=True, slots=True)

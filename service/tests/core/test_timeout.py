@@ -31,7 +31,7 @@ def test_timeout_checks_when_no_bet_to_call():
         status=HandStatus.FLOP, last_bet=0, acting_position=0,
         contributed={"A": 2, "B": 2}, flop=FLOP,
     )
-    world, events, err = run(world, Timeout(origin=None, nick="A", epoch=0))
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r1", hand_seq=1, epoch=0))
     assert err is None
     h = _room(world).hand
     acted = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, PlayerActed))
@@ -52,7 +52,7 @@ def test_timeout_folds_when_facing_bet():
         status=HandStatus.FLOP, last_bet=10, acting_position=1,
         contributed={"A": 2, "B": 2, "C": 2}, flop=FLOP,
     )
-    world, events, err = run(world, Timeout(origin=None, nick="B", epoch=0))
+    world, events, err = run(world, Timeout(origin=None, nick="B", room="r1", hand_seq=1, epoch=0))
     assert err is None
     h = _room(world).hand
     acted = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, PlayerActed))
@@ -71,7 +71,7 @@ def test_timeout_fold_to_one_ends_hand():
         button=0, status=HandStatus.FLOP, last_bet=10, acting_position=1,
         contributed={"A": 10, "B": 10},  # preflop 各投 10
     )
-    world, events, err = run(world, Timeout(origin=None, nick="B", epoch=0))
+    world, events, err = run(world, Timeout(origin=None, nick="B", room="r1", hand_seq=1, epoch=0))
     assert err is None
     room = _room(world)
     assert room.hand is None and room.status is RoomStatus.PENDING_START
@@ -89,7 +89,7 @@ def test_timeout_stale_epoch_ignored():
         [player("A", 100, seat=0), player("B", 100, seat=1)],
         status=HandStatus.FLOP, last_bet=0, acting_position=0, contributed={"A": 2, "B": 2}, flop=FLOP,
     )
-    world, events, err = run(world, Timeout(origin=None, nick="A", epoch=99))  # epoch 不符
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r1", hand_seq=1, epoch=99))  # epoch 不符
     assert err is None and events == []
     h = _room(world).hand
     assert h.acting_position == 0 and h.players[0].status is PlayerStatus.ACTIVE  # world 未动
@@ -100,12 +100,40 @@ def test_timeout_wrong_actor_ignored():
         [player("A", 100, seat=0), player("B", 100, seat=1)],
         status=HandStatus.FLOP, last_bet=0, acting_position=0, contributed={"A": 2, "B": 2}, flop=FLOP,
     )
-    world, events, err = run(world, Timeout(origin=None, nick="B", epoch=0))  # 轮到 A,却给 B 超时
+    world, events, err = run(world, Timeout(origin=None, nick="B", room="r1", hand_seq=1, epoch=0))  # 轮到 A,却给 B 超时
     assert err is None and events == []
     assert _room(world).hand.acting_position == 0
 
 
+# ── BUG-3(0090):跨手撞号。epoch 每手从 0 起,单靠它分不出「上一手的第 N 回合」和「这一手的第 N 回合」──
+def test_timeout_from_previous_hand_ignored():
+    # 本手 seq=1(builders 缺省)。上一手排队的那条 Timeout 带 seq=0,其它三项(房/人/epoch)全对得上
+    # ——这正是最危险的形状:不比 seq 就会把不该弃牌的人弃了。
+    world = hand_world(
+        [player("A", 100, seat=0), player("B", 100, seat=1)],
+        status=HandStatus.FLOP, last_bet=0, acting_position=0, contributed={"A": 2, "B": 2}, flop=FLOP,
+    )
+    assert _room(world).hand.seq == 1 and _room(world).hand.epoch == 0  # 前提:三项里只有 seq 不同
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r1", hand_seq=0, epoch=0))
+    assert err is None and events == []
+    h = _room(world).hand
+    assert h.acting_position == 0 and h.players[0].status is PlayerStatus.ACTIVE  # 没被误弃
+
+
+# ── 0072·N4(0090):跨房撞号。seq 只在房内单调,两个房的第 1 手同为 1;checkout 按「他现在在哪」解析目标房 ──
+def test_timeout_scheduled_in_another_room_ignored():
+    world = hand_world(
+        [player("A", 100, seat=0), player("B", 100, seat=1)],
+        status=HandStatus.FLOP, last_bet=0, acting_position=0, contributed={"A": 2, "B": 2}, flop=FLOP,
+    )
+    # A 在 r1 的第 1 手里正等着行动;这条命令是他还在 r2 时排的队,seq/epoch/nick 却完全一致
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r2", hand_seq=1, epoch=0))
+    assert err is None and events == []
+    h = _room(world).hand
+    assert h.acting_position == 0 and h.players[0].status is PlayerStatus.ACTIVE  # 没被别的房的队伍误伤
+
+
 def test_timeout_no_hand_ignored():
     world = make_table({0: seat("A", 100, new_here=False), 1: seat("B", 100, new_here=False)}, button=1)
-    world, events, err = run(world, Timeout(origin=None, nick="A", epoch=0))
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r1", hand_seq=1, epoch=0))
     assert err is None and events == []  # 两手之间无 hand → 过期忽略

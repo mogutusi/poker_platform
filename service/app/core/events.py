@@ -27,7 +27,8 @@ class Personal(Event):
 @dataclass(frozen=True, slots=True)
 class TurnChanged(Event):
     room: str  # 要(重)起行动倒计时的房间
-    acting_nick: str  # 新行动者;Timer 据它构造 Timeout(nick, epoch)
+    acting_nick: str  # 新行动者;Timer 据它构造 Timeout
+    hand_seq: int  # 当前 hand.seq(房内单调),与 room/epoch 一起构成 Timeout 的身份(见 changes/0090)
     epoch: int  # 当前 hand.epoch,供 Timeout staleness
 
 

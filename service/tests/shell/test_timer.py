@@ -23,9 +23,9 @@ def _timer_with_clock(monkeypatch) -> tuple[Timer, _Clock, "asyncio.Queue"]:
     return Timer(inbox), clock, inbox
 
 
-def test_action_timeout_fires_with_epoch(monkeypatch):
+def test_action_timeout_fires_with_full_identity(monkeypatch):
     t, clock, inbox = _timer_with_clock(monkeypatch)
-    t.on_turn_changed("r1", "alice", epoch=7, timeout_s=15)
+    t.on_turn_changed("r1", "alice", hand_seq=1, epoch=7, timeout_s=15)
     clock.t += 10
     t.tick()
     assert inbox.empty()  # 未到期:不触发
@@ -33,6 +33,9 @@ def test_action_timeout_fires_with_epoch(monkeypatch):
     t.tick()
     cmd = inbox.get_nowait()
     assert isinstance(cmd, Timeout) and cmd.nick == "alice" and cmd.epoch == 7 and cmd.origin is None
+    # 身份三元组要带齐(0090):room 取排队时的那个房(**不是路由字段**,reduce 只拿它挡跨房陈旧命令),
+    # hand_seq 挡跨手撞号 —— 单靠 epoch 分不出「上一手的第 N 回合」和「这一手的第 N 回合」。
+    assert cmd.room == "r1" and cmd.hand_seq == 1
     t.tick()
     assert inbox.empty()  # 一次性:触发即删,不重复投
 
@@ -40,8 +43,8 @@ def test_action_timeout_fires_with_epoch(monkeypatch):
 def test_on_turn_changed_same_room_overwrites(monkeypatch):
     # 同房覆盖 = 取消上一回合:新回合 epoch 生效,旧 deadline 不再触发。
     t, clock, inbox = _timer_with_clock(monkeypatch)
-    t.on_turn_changed("r1", "alice", epoch=1, timeout_s=15)
-    t.on_turn_changed("r1", "bob", epoch=2, timeout_s=15)
+    t.on_turn_changed("r1", "alice", hand_seq=1, epoch=1, timeout_s=15)
+    t.on_turn_changed("r1", "bob", hand_seq=1, epoch=2, timeout_s=15)
     clock.t += 20
     t.tick()
     cmd = inbox.get_nowait()
@@ -51,7 +54,7 @@ def test_on_turn_changed_same_room_overwrites(monkeypatch):
 
 def test_clear_action_cancels(monkeypatch):
     t, clock, inbox = _timer_with_clock(monkeypatch)
-    t.on_turn_changed("r1", "alice", epoch=1, timeout_s=15)
+    t.on_turn_changed("r1", "alice", hand_seq=1, epoch=1, timeout_s=15)
     t.clear_action("r1")
     clock.t += 100
     t.tick()

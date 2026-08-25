@@ -337,7 +337,7 @@ def test_disconnect_then_timeout_autofolds_keeps_seat():
     )
     # A 面对 10、bet 0;先有人下注?这里直接令 acting=A 面对 last_bet=10(B 已下,简化为初始态)
     world, _, err = run(world, Disconnect(origin=None, nick="A"))
-    world, events, err = run(world, Timeout(origin=None, nick="A", epoch=0))
+    world, events, err = run(world, Timeout(origin=None, nick="A", room="r1", hand_seq=1, epoch=0))
     assert err is None
     room = _room(world)
     assert room.hand.players[0].status is PlayerStatus.FOLDED  # 超时默认 fold(面对注)

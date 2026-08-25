@@ -204,7 +204,9 @@ wire 消息(`ServerMessage`/`ClientMessage`)只在后端 Pydantic 写一份,前�
 ## 定时器(详见 [timer.md](timer.md))
 
 - **行动倒计时**:进入某玩家回合时由 reduce 产出事件,Timer 起倒计时;玩家行动后覆盖或取消;到点投 `Timeout`,reduce 校验仍是该回合后执行默认动作,能 check 则 check,否则 fold。
-- **过期防护**:Timer 永远可能投出已经过期的命令。正确性靠 reduce 进门先做 staleness(过期)校验。判据是 `hand.epoch`,它是每次行动推进或街道切换时自增的内存计数,见 [core.md](core.md);`hand.epoch != cmd.epoch` 即视为过期、忽略。不引入基于 wall-clock 的 `hand_id`。
+- **过期防护**:Timer 永远可能投出已经过期的命令。正确性靠 reduce 进门先做 staleness(过期)校验。判据是**三元身份 `(room, hand_seq, epoch)`**,全是内存里的单调量(见 [core.md](core.md)「手牌标识与 staleness」),三项有一项不符即视为过期、忽略。不引入基于 wall-clock 的 `hand_id`。
+  - 只比 `epoch` 不够:它每手从 0 起,跨手会重号;补 `hand.seq` 也不够:`seq` 只在房内单调,而 `Timeout` 的目标房是按「他现在在哪」解析的,人换了房就撞上别的房(0090 修,原 BUG-3 + 0072·N4)。
+  - `Timeout.room` **只作校验、不作路由**,不变量 8 原样成立。
 
 ## 测试
 

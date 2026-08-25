@@ -20,6 +20,7 @@ def now() -> float:
 @dataclass
 class _ActionDeadline:
     nick: str  # 行动者
+    hand_seq: int  # 这一手的房内单调号(= hand.seq);与 room/epoch 一起构成 Timeout 的身份(0090)
     epoch: int  # 回合新鲜度判据(= hand.epoch);Timeout 带回,reduce 进门比对挡过期
     fire_at: float  # 到期单调时刻
 
@@ -31,9 +32,11 @@ class Timer:
         self._liveness: dict[str, float] = {}  # nick → **断线占座窗口**到期时刻(条目只在离线期存在,0070)
 
     # ── 游戏层:GameLoop.dispatch 调(reduce 产 TurnChanged / ClearAction)──
-    def on_turn_changed(self, room: str, nick: str, epoch: int, timeout_s: float | None = None) -> None:
+    def on_turn_changed(
+        self, room: str, nick: str, hand_seq: int, epoch: int, timeout_s: float | None = None
+    ) -> None:
         s = gameconfig.ACTION_TIMEOUT if timeout_s is None else timeout_s
-        self._action[room] = _ActionDeadline(nick, epoch, now() + s)  # 同房覆盖 = 取消上一回合
+        self._action[room] = _ActionDeadline(nick, hand_seq, epoch, now() + s)  # 同房覆盖 = 取消上一回合
 
     def clear_action(self, room: str) -> None:
         self._action.pop(room, None)  # 手结束:停该房行动倒计时
@@ -59,7 +62,9 @@ class Timer:
         t = now()
         for room, d in list(self._action.items()):
             if t >= d.fire_at:
-                self._fire(Timeout(origin=None, nick=d.nick, epoch=d.epoch))  # 不带 room,reduce 解析
+                # 带齐身份 (room, hand_seq, epoch):**room 不是路由字段**,reduce 照旧按 nick 解析目标房,
+                # 它只用来挡「人已换房」的陈旧命令(见 timer.md 过期防护 / changes/0090)。
+                self._fire(Timeout(origin=None, nick=d.nick, room=room, hand_seq=d.hand_seq, epoch=d.epoch))
                 del self._action[room]
         for nick, fire_at in list(self._liveness.items()):
             if t >= fire_at:

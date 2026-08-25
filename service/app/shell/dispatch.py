@@ -62,8 +62,8 @@ class Dispatcher:
                 if isinstance(p, HandRecordWrite) and p.end_time is None:
                     p = replace(p, end_time=self._now())
                 self.persist.put(p)
-            case TurnChanged(room=r, acting_nick=n, epoch=e):  # B 组:同步调 Timer(倒计时长 Timer 自取配置)
-                self.timer.on_turn_changed(r, n, e)
+            case TurnChanged(room=r, acting_nick=n, hand_seq=hs, epoch=e):  # B 组:同步调 Timer(倒计时长 Timer 自取配置)
+                self.timer.on_turn_changed(r, n, hs, e)
             case ClearAction(room=r):
                 self.timer.clear_action(r)
 

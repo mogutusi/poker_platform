@@ -4,7 +4,7 @@
 
 | 层 | 常量 | 时长 | 谁驱动 | 到期动作 |
 |---|---|---|---|---|
-| **行动倒计时**(游戏层) | `ACTION_TIMEOUT` | 短(~15s) | reduce → dispatch | 投 `Timeout(nick, epoch)`,reduce 执行默认动作:能 check 则 check,否则 fold |
+| **行动倒计时**(游戏层) | `ACTION_TIMEOUT` | 短(~15s) | reduce → dispatch | 投 `Timeout(nick, room, hand_seq, epoch)`,reduce 执行默认动作:能 check 则 check,否则 fold |
 | **断线占座窗口**(连接层) | `LIVENESS_TIMEOUT` | 长(~90s) | 断线装表 / 重连拆表(0070) | 投 `Cleanup(nick)`,reduce 退还筹码、释放座位、广播离场 |
 
 务必 `ACTION_TIMEOUT ≪ LIVENESS_TIMEOUT`。前者让掉线者不卡牌局(自动 fold),后者给重连留窗口(座位筹码先留着)。
@@ -47,6 +47,7 @@ def now() -> float:
 @dataclass
 class _ActionDeadline:
     nickname: str
+    hand_seq: int       # 这一手的房内单调号 = hand.seq;与 room/epoch 一起构成 Timeout 的身份(0090)
     epoch: int          # 回合新鲜度判据 = core.md 的 hand.epoch(每次行动推进/街道切换自增),防误触
     fire_at: float
 
@@ -58,9 +59,9 @@ class Timer:
         self._liveness: dict[str, float] = {}            # nick -> 到期时刻(按 nick 单键,见上)
 
     # ── 游戏层:由 GameLoop.dispatch 调用(reduce 产出 TurnChanged / ClearAction)──
-    def on_turn_changed(self, room, nickname, epoch, timeout_s=None):
+    def on_turn_changed(self, room, nickname, hand_seq, epoch, timeout_s=None):
         s = gameconfig.ACTION_TIMEOUT if timeout_s is None else timeout_s
-        self._action[room] = _ActionDeadline(nickname, epoch, now() + s)   # 同房间覆盖 = 取消上一回合
+        self._action[room] = _ActionDeadline(nickname, hand_seq, epoch, now() + s)   # 同房间覆盖 = 取消上一回合
 
     def clear_action(self, room):
         self._action.pop(room, None)
@@ -73,7 +74,7 @@ class Timer:
         self._liveness.pop(nickname, None)
 ```
 
-配套事件属 [architecture.md](architecture.md) 的 Event B 组:同步派发、不走队列。dispatch 把 `TurnChanged(room, acting_nick, epoch)` 路由到 `on_turn_changed`,把 `ClearAction(room)` 路由到 `clear_action`。
+配套事件属 [architecture.md](architecture.md) 的 Event B 组:同步派发、不走队列。dispatch 把 `TurnChanged(room, acting_nick, hand_seq, epoch)` 路由到 `on_turn_changed`,把 `ClearAction(room)` 路由到 `clear_action`。
 
 事件不带 `timeout_s`,字段以 [events.py](../app/core/events.py) 为准。原因:core 不读配置,时长由 Timer 自己取 `gameconfig.ACTION_TIMEOUT`。`timeout_s` 留参仅作可选覆盖。
 
@@ -86,7 +87,7 @@ class Timer:
             t = now()
             for room, d in list(self._action.items()):
                 if t >= d.fire_at:
-                    self._inbox.put_nowait(Timeout(nickname=d.nickname, epoch=d.epoch))   # 模型 2:不带 room,reduce 用 world.users[nick].room 解析
+                    self._inbox.put_nowait(Timeout(nickname=d.nickname, room=room, hand_seq=d.hand_seq, epoch=d.epoch))
                     del self._action[room]                    # 一次性,触发即删
             for nick, fire_at in list(self._liveness.items()):
                 if t >= fire_at:
@@ -99,9 +100,10 @@ class Timer:
 staleness = 「这条命令还新鲜吗」。Timer 永远可能投出已过期的命令(玩家刚好在最后一刻行动、或刚好重连上),所以正确性不靠取消,而靠 reduce 进门先校验:
 
 ```python
-# reduce 处理 Timeout:回合是否还停在当初那个点?
-if room.hand is None or not is_still_acting(room.hand, cmd.nickname, cmd.epoch):
-    return [], None                 # 回合早已推进 → 过期,忽略
+# reduce 处理 Timeout:这条队是为「哪一手的哪一回合」排的?三项全等才算新鲜
+if room.hand is None or work.room_name != cmd.room or room.hand.seq != cmd.hand_seq \
+        or not is_still_acting(room.hand, cmd.nickname, cmd.epoch):
+    return [], None                 # 换房 / 换手 / 回合已推进 → 过期,忽略
 # 仍是该回合该玩家 → 执行默认动作(能 check 则 check,否则 fold)
 
 # reduce 处理 Cleanup:仍离线才退筹释座
@@ -109,15 +111,25 @@ if room.users_in_room.get(cmd.nickname) is not UserStatus.OFFLINE:
     return [], None                 # 已重连 → 忽略
 ```
 
-新鲜度判据是 `hand.epoch`(见 [core.md](core.md)「手牌标识与 staleness」),内存计数,不引入 wall-clock 的 `hand_id`:Timer 投 `Timeout` 时带上调度那一刻的 `epoch`,reduce 比对 `hand.epoch != cmd.epoch`,不符即过期、忽略。
+**新鲜度判据是三元身份 `(room, hand_seq, epoch)`**,全是内存里的单调量,不引入 wall-clock 的 `hand_id`(0090)。三项缺一不可:
+
+| 判据 | 挡什么 | 为什么单靠别的挡不住 |
+|---|---|---|
+| `epoch`(= `hand.epoch`) | 本手内回合已推进 | —— |
+| `hand_seq`(= `hand.seq`,房内单调) | **跨手撞号** | `epoch` 每手从 0 起,「上一手的第 N 回合」和「这一手的第 N 回合」长得一样(BUG-3) |
+| `room` | **跨房撞号** | `seq` 只在房内单调,两个房的第 1 手同为 `seq=1`;而 `checkout` 按「他**现在**在哪」解析目标房,人换了房陈旧命令就落进新房(0072·N4) |
+
+> **`Timeout.room` 不是路由字段。** 目标房照旧由 `world.users[nick].room` 推定(硬规则 8 不变),命令自报的 `room` 只参与**校验**:两者不符即忽略。这是对规则 8 的澄清,不是给它开第二个例外。
+
+> **`Cleanup` 不需要同款身份。** 它同样按 nick 解析房,但判据是「仍 `OFFLINE`」——人若已经换到别的房,必然是在线的,陈旧 `Cleanup` 天然被挡住。别「顺手对齐」给它加字段。
 
 ## 三条流程
 
 **行动倒计时**
 
-1. reduce 推进到玩家 A 的回合,`epoch += 1`,产出 `TurnChanged(room, "A", epoch)`。
+1. reduce 推进到玩家 A 的回合,`epoch += 1`,产出 `TurnChanged(room, "A", hand_seq, epoch)`。
 2. dispatch 调 `on_turn_changed`,记下 `fire_at`(覆盖上一回合)。
-3. A 在 15s 内行动 → 新 `TurnChanged` 覆盖旧 deadline;旧的即便漏触发,`Timeout` 也因 `epoch` 不符被忽略。
+3. A 在 15s 内行动 → 新 `TurnChanged` 覆盖旧 deadline;旧的即便漏触发,`Timeout` 也因身份不符被忽略。
 4. A 超时未动 → 投 `Timeout` → reduce 校验仍是该回合 → 执行默认动作。
 
 **掉线 → 占座 → 清理**(0070 语义)
