@@ -12,7 +12,7 @@
 // 跑法(后端在跑,且 `npm run smoke` 已打包过 dist-smoke/crypto.js):
 //   node scripts/smoke-raise-sidepot.mjs
 
-import { BASE, connectAs, ensureInRoom, sleep } from './smoke-client.mjs'
+import { connectAs, ensureInRoom, restCall, sleep } from './smoke-client.mjs'
 
 // 专属冒烟账号,不与浏览器用例共用(理由见 smoke-e2e.mjs 顶部)。
 const [A, B, C] = ['smoke1', 'smoke2', 'smoke3']
@@ -203,9 +203,10 @@ async function main() {
   for (const c of [a2, b2, c2]) c.send({ type: 'leave_room' })
   await sleep(400)
 
-  // 三人合计守恒(对基线,不对写死值:dev 库长期复用,见 smoke-e2e 的同款注释)
-  const board = await (await fetch(`${BASE}/leaderboard`)).json()
-  const total = [A, B, C].reduce((n, nick) => n + (board.find((e) => e.nickname === nick)?.points ?? 0), 0)
+  // 三人合计守恒(对基线,不对写死值:dev 库长期复用,见 smoke-e2e 的同款注释)。
+  // 排行榜 0094 起走加密信封,拿任一已登录会话去读即可。
+  const { entries } = await restCall(a2.session, '/leaderboard', {})
+  const total = [A, B, C].reduce((n, nick) => n + (entries.find((e) => e.nickname === nick)?.points ?? 0), 0)
   check(Number.isFinite(total) && total > 0, `三人积分合计 ${total}(离桌后已全部结算回全局)`)
 
   for (const c of [a2, b2, c2]) c.ws.close()

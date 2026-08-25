@@ -10,7 +10,7 @@
 //
 // 用的是 dev 种子用户与 dev 共享密钥(见 service/app/poker.env.example),仅限本地。
 
-import { BASE, Client, ensureInRoom, login } from './smoke-client.mjs'
+import { Client, ensureInRoom, login, restCall } from './smoke-client.mjs'
 
 // **冒烟用专属账号,不与浏览器用例共用**(0086 实测教训):共用时,浏览器那边留在桌上的筹码会在
 // 冒烟跑到一半时被占座清理退回全局积分,凭空改变「两人合计」,把守恒断言打红——查半天才发现
@@ -33,16 +33,20 @@ function check(cond, label) {
 // dev 库是长期复用的:服务器带着「有人在座」被杀过一次,桌上的筹码就再也回不到全局积分
 // (进程崩溃带走内存状态,见 service/docs/architecture.md「崩溃语义」),写死的初始总额从此永远对不上;
 // 而真正的不变量——「这一趟跑下来两人合计不变」——照样成立。
-async function pairPoints() {
-  const board = await (await fetch(`${BASE}/leaderboard`)).json()
-  return [SMOKE_A, SMOKE_B].map((nick) => [nick, board.find((e) => e.nickname === nick)?.points ?? 0])
+// 排行榜 0094 起走加密信封(没有明文读了),所以基线要**登录之后**才读得到。
+async function pairPoints(session) {
+  const { entries } = await restCall(session, '/leaderboard', {})
+  return [SMOKE_A, SMOKE_B].map((nick) => [nick, entries.find((e) => e.nickname === nick)?.points ?? 0])
 }
-const baseline = await pairPoints()
-const baselineSum = baseline.reduce((n, [, p]) => n + p, 0)
 
 log('① 登录 alice / bob')
-const alice = new Client(SMOKE_A, await login(SMOKE_A))
-const bob = new Client(SMOKE_B, await login(SMOKE_B))
+const aliceSession = await login(SMOKE_A)
+const bobSession = await login(SMOKE_B)
+const alice = new Client(SMOKE_A, aliceSession)
+const bob = new Client(SMOKE_B, bobSession)
+
+const baseline = await pairPoints(aliceSession)
+const baselineSum = baseline.reduce((n, [, p]) => n + p, 0)
 check(!!alice.session.session_id && !!alice.session.session_token, '登录换回 session_id + session_token')
 
 log('② ws 握手')
@@ -171,7 +175,7 @@ let after = []
 let sum = 0
 for (let i = 0; i < 40; i++) {
   await new Promise((r) => setTimeout(r, 100))
-  after = await pairPoints()
+  after = await pairPoints(aliceSession)
   sum = after.reduce((n, [, p]) => n + p, 0)
   if (sum === baselineSum) break
 }

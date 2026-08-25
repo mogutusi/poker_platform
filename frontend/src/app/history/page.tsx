@@ -14,7 +14,7 @@ const PAGE_SIZE = 20
 type Scope = "mine" | "all"
 
 /**
- * 手牌历史。数据全部来自 GET /hands(公开读、明文),这一页只展示结果,
+ * 手牌历史。数据全部来自 POST /hands(走加密信封,需已登录 —— 0094 收编),这一页只展示结果,
  * 不复算任何牌局(见 docs/architecture.md 不变量 1)——后端记的就是最终的 net,不是我们算的。
  */
 export default function HistoryPage() {

@@ -19,7 +19,7 @@
 **1. 读 DB,不读 `world`**
 
 - 排行榜/历史/资料读的是 delayDB 落库后的值,比内存滞后,展示够用。实时判定(下注、余额)一律在 reduce 里以内存为准,不在 REST。
-- 唯一例外 · `GET /lobby/rooms`(见 [lobby.md](lobby.md),0048 落地):
+- 唯一例外 · `POST /lobby/rooms`(见 [lobby.md](lobby.md),0048 落地;0094 收编进信封):
   - 它读 committed `world.rooms`,不读 DB;原因是房间花名册和头数为内存权威、从不落库(见 [storage.md](storage.md)),DB 里根本没有这些数据。
   - 它仍守「只读、可滞后、不做实时裁定」。读法是纯同步、无 `await` 的投影,对唯一写者 GameLoop 而言是原子的,不会读到撕裂的中间态(同 [presence.md](presence.md))。
 
@@ -31,7 +31,8 @@
 
 - 需身份的端点:请求 `POST {sid, frame}`,响应 `{frame}`;解密即认证,无 JWT。
 - 信封格式、密钥分域、滑动窗防重放、seq 回显见 [auth.md](auth.md) §加密信道「REST 信封」;助手在 [app/rest/secure.py](../app/rest/secure.py):`open_request` / `seal_response`。
-- 公开读(本页 lobby/leaderboard/hands)无隐私,留明文。要全量加密再收编。
+- **每个端点都走信封,没有例外**(0094)。`POST /user/login` 是唯一暴露在外的入口——它必须明文,因为此刻还没有会话密钥可用(登录本身用 `K_user` 加密一来一回,见 [auth.md](auth.md) §登录握手)。
+- 收编前 lobby/leaderboard/hands 是明文 GET,那是 P5 落地之前的残留(执行序被 [0016](refactor/changes/0016-replan-wire-first.md) 重排,读端点先于加密信道落地),不是设计。
 
 **4. wire/DTO 同源**
 
@@ -42,13 +43,14 @@
 一句话:按 DB 里的全局积分排名,桌上的筹码不算。
 
 ```
-GET /leaderboard?limit=N  →  [{ rank, nickname, points }]   # app/rest/leaderboard.py + db/queries.top_users_by_points
+POST /leaderboard  信封内 {limit?}  →  {entries: [{ rank, nickname, points }]}   # app/rest/leaderboard.py + db/queries.top_users_by_points
 ```
 
 - 读 DB `users` 表,按 `points` 降序取前 N;同分按 `nickname` 升序,保证 `rank` 稳定。
 - `limit` 由 `gameconfig.LEADERBOARD_DEFAULT_LIMIT` / `MAX_LIMIT` 兜。
 - `LeaderboardEntry` 是 REST DTO,不进 ws 联合、不进 `wire.gen.ts`,同 `RoomMeta`。
-- dev 无鉴权,排名公开。P5 上加密信道时按「共同原则 3」补,补的时候可以选择留公开。
+- **走信封**(0094):`POST /leaderboard`,内层参数 `{"limit"?: int}`,响应 `{"entries": [...]}`。要登录才看得到。
+- `limit` 的范围校验从 FastAPI 的 `Query(ge=, le=)` 挪进了端点自己:参数进了信封,框架就管不着了。越界回 **400**(信封已验过 ⇒ 是客户端 bug,不是鉴权问题),**不默默截断**成合法值。
 
 **坑 · 排的是「结算后的全局积分」,不是身家**
 
@@ -62,7 +64,7 @@ GET /leaderboard?limit=N  →  [{ rank, nickname, points }]   # app/rest/leaderb
 一句话:从 DB 查已结束的手,只有结果,永远没有底牌。
 
 ```
-GET /hands?room=&user=&limit=&before=  →  [HandRecordView]   (游标分页,新→旧)   # app/rest/hands.py + db/queries.list_hands
+POST /hands  信封内 {room?, user?, before?, limit?}  →  {hands: [HandRecordView]}   (游标分页,新→旧)   # app/rest/hands.py + db/queries.list_hands
 ```
 
 **数据来源**
@@ -88,7 +90,8 @@ GET /hands?room=&user=&limit=&before=  →  [HandRecordView]   (游标分页,新
 - 游标 = `HandRecord.id`,自增 PK,单调唯一;事件写按手尾追加。比用 `end_time` 好,免了并列问题。
 - `before=<id>` → `id < before ORDER BY id DESC LIMIT n`;`id` 兼作「下一页游标」。
 - `limit` 由 `gameconfig.HANDS_DEFAULT_LIMIT` / `MAX_LIMIT` 兜。
-- dev 无鉴权。上加密信道时可以改成要求仅查自己。
+- **走信封**(0094):`POST /hands`,内层参数 `{room?, user?, before?, limit?}`,响应 `{"hands": [...]}`。要登录才看得到。参数校验同 leaderboard,越界/类型错回 400。
+- **授权范围仍是待定项**:登录用户目前**可以查任何人**(`user=` 点名照旧)。0094 只解决「传输裸奔 + 未登录可读」;要不要收紧成「只能查自己」是另一个决定,它会连带决定前端历史页「全部」页签的去留,尚未拍板。
 
 ## 用户资料 profile —— /user/me 已落地(0062,首个信封消费者)
 

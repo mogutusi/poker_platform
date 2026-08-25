@@ -268,19 +268,21 @@
 
 ## 10. REST 面(大厅 / 排行 / 历史 / 登录 / 资料)
 
-一句话:公开读走明文 GET,带身份的一律走加密信封 POST。
+一句话:**除登录外一律走加密信封 POST**;登录是唯一暴露在外的入口(0094)。
 
 > REST DTO 暂无 TS 生成(见 §8)。下列形状以后端 [`app/rest/*.py`](../app/rest/) 为准,本节只给「怎么调」。
 >
 > 设计细节见 [rest.md](rest.md) / [auth.md](auth.md)。
 
-**公开读**:明文 GET,无鉴权。数据来自 DB / committed world,可滞后一拍;只作展示,别做实时判定。
+**读接口**:同样走信封(`POST` + `{sid, frame}`),要已登录。数据来自 DB / committed world,可滞后一拍;只作展示,别做实时判定。响应统一包一层对象,不是裸数组。
 
-| 端点 | 响应 | 说明 |
+| 端点 | 内层请求 → 响应 | 说明 |
 |---|---|---|
-| `GET /lobby/rooms` | `[{id, small_blind, big_blind, buy_in, max_seats, seated, watching, status}]` | 大厅房间列表;v1 靠轮询,几秒一次足够。`seated` 含断线保座的人 |
-| `GET /leaderboard?limit=N` | `[{rank, nickname, points}]` | 排行榜;排的是结算后的全局积分,买进牌桌的筹码不计,要离桌结算后才回到全局积分 |
-| `GET /hands?room=&user=&limit=&before=` | `[{id, dedupe_key, start_time, end_time, final_pot, participants:[{nickname, initial_points, final_points, net}]}]` | 手牌历史,新→旧。游标分页,`before` 传上一页末条的 `id`;`user` 按昵称过滤参与过的手;记录只有结果,没有底牌 |
+| `POST /lobby/rooms` | `{}` → `{rooms: [{id, small_blind, big_blind, buy_in, max_seats, seated, watching, status}]}` | 大厅房间列表;v1 靠轮询,几秒一次足够。`seated` 含断线保座的人 |
+| `POST /leaderboard` | `{limit?}` → `{entries: [{rank, nickname, points}]}` | 排行榜;排的是结算后的全局积分,买进牌桌的筹码不计,要离桌结算后才回到全局积分 |
+| `POST /hands` | `{room?, user?, before?, limit?}` → `{hands: [{id, dedupe_key, start_time, end_time, final_pot, participants:[{nickname, initial_points, final_points, net}]}]}` | 手牌历史,新→旧。游标分页,`before` 传上一页末条的 `id`;`user` 按昵称过滤参与过的手;记录只有结果,没有底牌 |
+
+> 参数越界或类型不对回 **400**(信封已验过 ⇒ 是客户端 bug,不是鉴权问题),不会被默默截断成合法值;信封本身不过一律 **401**。
 
 **登录**:引导信道。明文 HTTP,body 用 `K_user` 加密。`K_user` 是管理员带外发你、要你手输的 16 字节密钥。
 

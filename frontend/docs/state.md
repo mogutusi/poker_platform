@@ -45,11 +45,11 @@
 
 | 界面 | 实际做什么 |
 |---|---|
-| 房间列表 | `GET /lobby/rooms` → `RoomMeta[]`(id、盲注、买入、座位数、在座/观战人数、状态) |
-| 排行榜 | `GET /leaderboard` → `LeaderboardEntry[]`(rank、nickname、points) |
+| 房间列表 | `POST /lobby/rooms`(信封,0094)→ `{rooms: RoomMeta[]}`(id、盲注、买入、座位数、在座/观战人数、状态) |
+| 排行榜 | `POST /leaderboard`(信封,0094)→ `{entries: LeaderboardEntry[]}`(rank、nickname、points) |
 | 进入房间 | ws 发 `join_room{room}`;房不存在就动态建房 |
 
-**这里有个设计取舍要说清楚。** 原 UI 的大厅直接画了一张 9 座的桌子,点空座就进牌桌。但后端是多房间模型,而 `GET /lobby/rooms` 只给房间的**汇总信息**(人数、盲注),给不出每个座位上是谁——逐座位的详情要 `join_room` 之后由 `StateSnapshot` 带来。
+**这里有个设计取舍要说清楚。** 原 UI 的大厅直接画了一张 9 座的桌子,点空座就进牌桌。但后端是多房间模型,而 `/lobby/rooms` 只给房间的**汇总信息**(人数、盲注),给不出每个座位上是谁——逐座位的详情要 `join_room` 之后由 `StateSnapshot` 带来。
 
 所以调整为:**大厅展示房间列表(沿用现有的卡片与排行榜视觉),选座挪到牌桌页**。进房后你是观战状态,在牌桌上点空座才是 `sit_down`。这既符合后端的命令序,也符合真实牌桌的体验(先入座、再买入、再准备)。原大厅那套座位视觉不浪费,直接复用到牌桌页。
 

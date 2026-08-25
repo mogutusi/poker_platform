@@ -81,7 +81,7 @@ export default function LobbyPage() {
   const [isJoining, setIsJoining] = useState(false)
   const [selectedSeat, setSelectedSeat] = useState<number | null>(null)
 
-  // 排行榜来自 GET /leaderboard(公开读,明文)。它排的是结算后的全局积分,不含桌上筹码。
+  // 排行榜来自 POST /leaderboard(走加密信封,需已登录 —— 0094 收编)。它排的是结算后的全局积分,不含桌上筹码。
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [rooms, setRooms] = useState<RoomMeta[]>([])
   const [hands, setHands] = useState<HandRecord[]>([])
@@ -131,8 +131,8 @@ export default function LobbyPage() {
     // 真正的断开只发生在离开牌桌和登出。
     connectLobby((reason) => router.replace(`/?reason=${reason}`))
 
-    // 公开读(房间/排行榜)和需身份的 /user/me 分开发:后者失败只是头像卡少两个字段,
-    // 不该把整个大厅打成「加载失败」。
+    // 房间/排行榜与 /user/me 分开发:三者都走信封(0094 起没有明文读了),但 /user/me 失败
+    // 只是头像卡少两个字段,不该把整个大厅打成「加载失败」。
     Promise.all([fetchRooms(), fetchLeaderboard(LEADERBOARD_PREVIEW)])
       .then(([roomList, board]) => {
         if (cancelled) return

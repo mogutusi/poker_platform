@@ -18,7 +18,7 @@ const K_USER = '00112233445566778899aabbccddeeff'
 const PASSWORD = 'devpass123'
 
 const { sm4CbcEncrypt, sm4CbcDecrypt, hexToBytes, bytesToHex, utf8ToBytes, bytesToUtf8,
-        deriveWsKeys, sealFrame, openFrame } = await import(`${FRONTEND}/dist-smoke/crypto.js`)
+        deriveWsKeys, deriveRestKeys, sealFrame, openFrame } = await import(`${FRONTEND}/dist-smoke/crypto.js`)
 
 export { hexToBytes, bytesToHex, utf8ToBytes, bytesToUtf8 }
 
@@ -107,6 +107,27 @@ export async function connectAs(name) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 读一个 REST 端点。**每个端点都走加密信封**(0094:登录是唯一暴露在外的入口),所以这里要:
+ * POST {sid, frame} → 拆 {frame} → 内层 JSON。seq 逐次自增:同一个 seq 重发会被防重放窗判掉。
+ *
+ * `session` 是 login() 的返回值;密钥用 **REST 域**(与 ws 分域,截获的 ws 帧注入 REST 必 MAC 失败)。
+ */
+let _restSeq = 0n
+export async function restCall(session, path, params = {}) {
+  const keys = deriveRestKeys(hexToBytes(session.session_token))
+  _restSeq += 1n
+  const frame = sealFrame(keys, _restSeq, utf8ToBytes(JSON.stringify(params)))
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sid: session.session_id, frame: bytesToHex(frame) }),
+  })
+  if (!res.ok) throw new Error(`POST ${path} → ${res.status}`)
+  const body = await res.json()
+  return JSON.parse(bytesToUtf8(openFrame(keys, hexToBytes(body.frame)).plaintext))
+}
 
 /**
  * 进房,并处理「上一次会话的残留」(0078·A)。

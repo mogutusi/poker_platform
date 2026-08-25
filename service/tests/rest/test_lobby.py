@@ -9,7 +9,9 @@ from fastapi import HTTPException
 
 from app.core.enums import RoomStatus, UserStatus
 from app.core.rules import blinds
+from app.auth.session import SessionStore
 from app.rest.lobby import RoomMeta, list_rooms, make_lobby_router
+from tests.rest._sealed import T0, TTL, call, seal_req
 from app.shell.lifespan import create_app
 from tests.builders import hand_world, make_world, player, room_with, seat
 
@@ -80,23 +82,41 @@ def test_hand_started_status_and_seated():
     assert (meta.seated, meta.watching) == (2, 0)
 
 
+def _wired(world):
+    # 端点 + 一个活会话:0094 起本端点走加密信封,「解密即认证」,所以测试也得先有会话。
+    store = SessionStore(TTL)
+    sid, session = store.create("alice", "Alice", T0)
+    router = make_lobby_router(lambda: world, store, now=lambda: T0)
+    return _endpoint(router), sid, session
+
+
 def test_router_endpoint_returns_list_rooms():
     room = room_with(seats=[seat("a", 100)], small_blind=2, buy_in=50, max_seats=4)
     world = make_world(rooms={"r": room})
-    result = asyncio.run(_endpoint(make_lobby_router(lambda: world))())
-    assert result == list_rooms(world)
+    endpoint, sid, session = _wired(world)
+    payload = asyncio.run(call(endpoint, sid, session, {}))
+    assert payload["rooms"] == [m.model_dump() for m in list_rooms(world)]
 
 
 def test_router_endpoint_503_when_world_not_ready():
     # world 尚未建(setup 前的极窄窗口)→ 503,不崩、不返回空表冒充「无房」。
+    endpoint, sid, session = _wired(None)
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(_endpoint(make_lobby_router(lambda: None))())
+        asyncio.run(call(endpoint, sid, session, {}))
     assert ei.value.status_code == 503
 
 
+def test_router_rejects_without_envelope():
+    # 0094 的正题:没有有效会话就拿不到房间列表。未知 sid → 统一 401(fail-closed,不泄败因)。
+    endpoint, _sid, session = _wired(make_world())
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(endpoint(seal_req("bogus-sid", session, 1, {})))
+    assert ei.value.status_code == 401
+
+
 def test_create_app_registers_lobby_route():
-    # 布线:create_app() 产出的 app 注册了 GET /lobby/rooms(不跑 lifespan,只验路由表)。
+    # 布线:create_app() 产出的 app 注册了 POST /lobby/rooms(不跑 lifespan,只验路由表)。
     app = create_app()
     lobby = [r for r in app.routes if getattr(r, "path", None) == "/lobby/rooms"]
     assert len(lobby) == 1
-    assert "GET" in lobby[0].methods
+    assert lobby[0].methods == {"POST"}, "0094 收编进信封 ⇒ 不再有明文 GET"

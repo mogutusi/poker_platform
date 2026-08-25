@@ -4,16 +4,20 @@
 # 其余 REST(leaderboard/hands/profile)读的是结算后落库的数据,才守 rest.md「只读 DB」。读的是 committed world:
 # 展示用、可滞后一拍,不做实时游戏裁定(裁定一律在 reduce)。安全性同 Presence 的只读消费范式——持稳定 world 引用、
 # 单线程 asyncio 下 GameLoop.handle 全程无 await ⇒ 任何不 await 的读对它原子、不撕裂(不变量 2,见 presence.py)。
-# dev 明文无鉴权(P5 上 JWT,与 ws 两套,见 rest.md)。
+# **走加密信封**(0094 收编):POST + `{sid, frame}`,内层参数 `{}`,响应 `{"rooms": [...]}`。
+# 「解密即认证」⇒ 未登录者拿不到房间列表——登录是唯一暴露在外的入口(auth.md §加密信道)。
 
+import time
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.auth.session import SessionStore
 from app.core.domain import Room, World
 from app.core.enums import RoomStatus, UserStatus
 from app.core.rules import blinds
+from app.rest.secure import SecureRequest, SecureResponse, open_request, seal_response
 
 
 class RoomMeta(BaseModel):
@@ -48,16 +52,22 @@ def list_rooms(world: World) -> list[RoomMeta]:
     return [_room_meta(rid, world.rooms[rid]) for rid in sorted(world.rooms)]
 
 
-def make_lobby_router(get_world: Callable[[], World | None]) -> APIRouter:
+def make_lobby_router(
+    get_world: Callable[[], World | None],
+    session_store: SessionStore,
+    now: Callable[[], float] = time.time,
+) -> APIRouter:
     # 迟绑 world getter:world 在 DevShell.setup() 后才建(create_app 传 lambda: shell.world);测试可注入 fake。
     router = APIRouter()
 
-    @router.get("/lobby/rooms", response_model=list[RoomMeta])
-    async def get_lobby_rooms() -> list[RoomMeta]:
-        # 无入参:公开发现、身份不需(dev 无鉴权)。仅读 world,不写、不 await(读原子)。
+    @router.post("/lobby/rooms", response_model=SecureResponse)
+    async def get_lobby_rooms(req: SecureRequest) -> SecureResponse:
+        session, seq, _params = open_request(session_store, req, now())  # 信封不过 → 统一 401;本端点无参({})
         world = get_world()
         if world is None:  # setup() 未完成的极窄窗口(serving 前已建 world,理论不可达)
             raise HTTPException(status_code=503, detail="shell not ready")
-        return list_rooms(world)
+        # 仅读 world,不写、不 await(读原子)。响应包一层对象:seal_response 的载荷是 dict,
+        # 与请求侧「参数一律对象形」同一条规矩;裸数组还会堵死日后加分页元信息的路。
+        return seal_response(session, seq, {"rooms": [m.model_dump() for m in list_rooms(world)]})
 
     return router

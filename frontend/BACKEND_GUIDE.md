@@ -175,21 +175,24 @@ start_hand 后你会收到:
 
 ## 6. REST 接口一览
 
-**公开(明文 GET,无需登录)**:
+**除登录外,每一个端点都走 §4.4 的 REST 信封**——`POST` + `{sid, frame}`,内层是参数 JSON,响应也是信封。
+「解密即认证」:没有有效会话就拿不到任何数据,`POST /user/login` 是唯一暴露在外的入口。
 
-| 端点 | 返回 | 用法 |
-|---|---|---|
-| `GET /lobby/rooms` | 房间列表(配置 + 在座/观战人数) | 大厅页轮询,几秒一次 |
-| `GET /leaderboard?limit=N` | 排行(名次/昵称/积分) | 积分是结算值,桌上筹码不计 |
-| `GET /hands?room=&user=&limit=&before=` | 手牌历史(新→旧) | 游标分页:`before` 传上一页最后一条的 `id`;记录只有输赢,没有底牌 |
-
-**需要身份(走 §4.4 的 REST 信封)**:
+> **0094 之前 `/lobby/rooms`、`/leaderboard`、`/hands` 是明文 `GET`,现在不是了。** 还照旧发 GET 会得 **405**;
+> 发了 POST 但信封不过(sid 不识/过期、MAC 坏、seq 重放)统一 **401**,不告诉你是哪一种。
 
 | 端点 | 内层请求 → 响应 | 说明 |
 |---|---|---|
+| `POST /lobby/rooms` | `{}` → `{rooms: [...]}` | 房间列表(配置 + 在座/观战人数);大厅页轮询 |
+| `POST /leaderboard` | `{limit?}` → `{entries: [...]}` | 排行(名次/昵称/积分);积分是结算值,桌上筹码不计 |
+| `POST /hands` | `{room?, user?, before?, limit?}` → `{hands: [...]}` | 手牌历史(新→旧);游标分页,`before` 传上一页最后一条的 `id`;记录只有输赢,没有底牌 |
 | `POST /user/me` | `{}` → `{name, nickname, points}` | 个人资料 |
 | `POST /user/password` | `{old_password, new_password}` → `{status}` | 改密码要验旧密码;403 = 旧密码错 |
 | `POST /user/nickname` | `{new_nickname}` → `{status, nickname}` | **只能在大厅改**(在房间里 403);撞名 409 |
+
+**响应都包一层对象**(`{rooms: […]}` 而不是裸数组):信封载荷统一是 JSON 对象,和请求侧「参数一律对象形」同一条规矩,也给日后加分页元信息留了位置。
+
+**参数校验从框架挪进了端点**:`limit` 越界、`before` 不是正整数、`user` 不是字符串 → **400**(信封已验过 ⇒ 是你的 bug,不是鉴权问题)。**不会**默默把越界值截断成合法值。
 
 REST 的请求/响应类型**没有**自动生成(和 ws 不同),按上表和后端 [`service/app/rest/`](../service/app/rest/) 的字段注释手写,别把它们加进 `wire.gen.ts`。
 
@@ -205,7 +208,7 @@ cd service
 - 首次启动自动建 SQLite 库并种好 dev 用户(`alice`/`bob`/`carol`/`dave`/`eve`/`frank`,各 1000 积分)。
 - **登录**:dev 用户账号 = 昵称,密码和 K_user 是共享的 dev 值(在 `service/app/poker.env.example` 里的 `DEV_PASSWORD`/`DEV_KUSER`;仅开发用)。登录换到 `sid` 后连 `ws://127.0.0.1:8000/ws?sid=<sid>`。
 - 想开两个人对打:用**不同的 dev 账号**——同一账号第二次登录会顶掉第一条连接(见 §2)。
-- REST 直接 `curl http://127.0.0.1:8000/lobby/rooms` 可验。
+- REST **不能**再用裸 `curl` 验了(0094 起没有明文端点):最省事的办法是照 `frontend/src/transport/rest.ts` 的 `postSealed` 走一遍,或用 `frontend/scripts/smoke-client.mjs` 的 `restCall`。
 
 ## 8. 常见坑清单(对接前扫一眼)
 

@@ -6,7 +6,12 @@ from sqlalchemy.pool import StaticPool
 from app.db.engine import create_all, make_engine, make_sessionmaker
 from app.db.models import User
 from app.db.queries import top_users_by_points
+import pytest
+from fastapi import HTTPException
+
+from app.auth.session import SessionStore
 from app.rest.leaderboard import LeaderboardEntry, make_leaderboard_router
+from tests.rest._sealed import T0, TTL, call, seal_req
 from app.shell.lifespan import create_app
 
 
@@ -44,19 +49,47 @@ async def test_query_empty_table():
     assert await top_users_by_points(sm, 10) == []
 
 
+def _wired(sm):
+    # 端点 + 一个活会话:0094 起本端点走加密信封,「解密即认证」。
+    store = SessionStore(TTL)
+    sid, session = store.create("alice", "Alice", T0)
+    return _endpoint(make_leaderboard_router(lambda: sm, store, now=lambda: T0)), sid, session
+
+
 async def test_route_ranks_and_limits():
     sm = await _seeded_sm({"alice": 100, "bob": 300, "carol": 200})
-    result = await _endpoint(make_leaderboard_router(lambda: sm))(limit=2)
-    assert result == [
-        LeaderboardEntry(rank=1, nickname="bob", points=300),
-        LeaderboardEntry(rank=2, nickname="carol", points=200),  # limit=2 截断:alice(100)不出现
+    endpoint, sid, session = _wired(sm)
+    payload = await call(endpoint, sid, session, {"limit": 2})
+    assert payload["entries"] == [
+        LeaderboardEntry(rank=1, nickname="bob", points=300).model_dump(),
+        LeaderboardEntry(rank=2, nickname="carol", points=200).model_dump(),  # limit=2 截断:alice(100)不出现
     ]
-    assert [e.rank for e in result] == [1, 2]  # rank 从 1 递增连续
+
+
+async def test_route_rejects_without_envelope():
+    # 0094 的正题:排行榜也要登录才看得到。未知 sid → 统一 401(fail-closed)。
+    sm = await _seeded_sm({"alice": 100})
+    endpoint, _sid, session = _wired(sm)
+    with pytest.raises(HTTPException) as ei:
+        await endpoint(seal_req("bogus-sid", session, 1, {}))
+    assert ei.value.status_code == 401
+
+
+async def test_route_bad_limit_is_400_not_silently_clamped():
+    # 参数进了信封就得自己校:收编前这层是 FastAPI 的 Query(ge=,le=)。信封已验过 ⇒ 畸形是客户端 bug,
+    # 按 400 分层(不是 401),更不能默默截断成合法值——那会让「limit=0」悄悄变成一整页。
+    sm = await _seeded_sm({"alice": 100})
+    endpoint, sid, session = _wired(sm)
+    # seq 每次都要新的:同一个 seq 重来会被防重放窗判成重放、回 401,那就测不到 400 了。
+    for seq, bad in enumerate((0, -1, 10_000, "5", True), start=1):
+        with pytest.raises(HTTPException) as ei:
+            await endpoint(seal_req(sid, session, seq, {"limit": bad}))
+        assert ei.value.status_code == 400, bad
 
 
 def test_create_app_registers_leaderboard_route():
-    # 布线:create_app() 产出的 app 注册了 GET /leaderboard(不跑 lifespan,只验路由表)。
+    # 布线:create_app() 产出的 app 注册了 POST /leaderboard(不跑 lifespan,只验路由表)。
     app = create_app()
     routes = [r for r in app.routes if getattr(r, "path", None) == "/leaderboard"]
     assert len(routes) == 1
-    assert "GET" in routes[0].methods
+    assert routes[0].methods == {"POST"}, "0094 收编进信封 ⇒ 不再有明文 GET"

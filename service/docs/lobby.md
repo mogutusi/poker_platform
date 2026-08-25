@@ -86,7 +86,7 @@
 一个只读端点,展示用。
 
 ```
-GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lobby_router
+POST /lobby/rooms 信封内 {} → {rooms: [RoomMeta]}   # app/rest/lobby.py:list_rooms / make_lobby_router(0094 起走信封)
 ```
 
 `RoomMeta` 是 `app/rest/lobby.py` 里的 Pydantic 模型,字段分两类:
@@ -122,6 +122,6 @@ GET /lobby/rooms → [RoomMeta]        # app/rest/lobby.py:list_rooms / make_lob
 ## 待定 / future
 
 - 建房余项。包括:建房时自定盲注/买入/座位,做法是往 `join_room` 报文加 `create` 字段让创建者设参,现在用的是 `gameconfig` 默认值加建后调参;房名冲突与命名规则;建房数量上限。本规模是内网 ≤20 人,暂不设这些限制。
-- 实时房间列表推送。新增 `LobbyBroadcast(msg)` 事件,由 dispatch 发给所有大厅连接,即那些 nick 不在 `world.users` 的连接;建房、销房时增量推送。v1 先用轮询 `GET /lobby/rooms`(0048)。
+- 实时房间列表推送。新增 `LobbyBroadcast(msg)` 事件,由 dispatch 发给所有大厅连接,即那些 nick 不在 `world.users` 的连接;建房、销房时增量推送。v1 先用轮询 `POST /lobby/rooms`(0048;0094 起走信封)。
 - 离桌中途在局的精确处理:接 [timer.md](timer.md) 的 `Cleanup` 与弃牌规则。
 - messaging(私聊 + 房聊):见 [messaging.md](messaging.md)。完整 presence 只读视图仍待单列。

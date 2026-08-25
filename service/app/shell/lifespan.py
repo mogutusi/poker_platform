@@ -231,11 +231,11 @@ def create_app() -> FastAPI:
             allow_headers=["Content-Type"],
         )
     # REST 大厅房间列表(唯一读 committed world 的 REST,见 app/rest/lobby.py);world 迟绑(setup() 后才建)。
-    app.include_router(make_lobby_router(lambda: shell.world))
+    app.include_router(make_lobby_router(lambda: shell.world, shell.session_store))
     # REST 排行榜(读 DB 结算积分,见 app/rest/leaderboard.py);sessionmaker 迟绑(setup() 前已在 __init__ 建好)。
-    app.include_router(make_leaderboard_router(lambda: shell.sessionmaker))
+    app.include_router(make_leaderboard_router(lambda: shell.sessionmaker, shell.session_store))
     # REST 手牌历史(读 DB,游标分页,见 app/rest/hands.py)。
-    app.include_router(make_hands_router(lambda: shell.sessionmaker))
+    app.include_router(make_hands_router(lambda: shell.sessionmaker, shell.session_store))
     # 登录端点(P5:K_user 护密码、铸会话、K_user 加密下发 session,见 app/rest/login.py)。sessionmaker/session_store 迟绑。
     app.include_router(make_login_router(lambda: shell.sessionmaker, shell.session_store))
     # 用户资料(P5 REST 加密信封首个消费者:POST /user/me 走会话密钥信封,见 app/rest/profile.py / changes/0062)。

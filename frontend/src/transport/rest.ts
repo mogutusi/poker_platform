@@ -1,11 +1,13 @@
-// REST:公开读是明文 GET,需身份的端点走加密信封(见 docs/transport.md §五 / service/docs/rest.md)。
+// REST:**每一个端点都走加密信封**,登录是唯一暴露在外的入口(见 docs/transport.md §五 /
+// service/docs/auth.md §加密信道)。0094 之前 lobby/leaderboard/hands 是明文 GET,那是 P5 落地前的
+// 残留——没有 TLS 的前提下,明文读等于把房间、排行、逐手财务流水裸露在内网上。
 // 牌局操作一律走 ws,不在这里。
 
 import { bytesToHex, bytesToUtf8, hexToBytes, openFrame, sealFrame, utf8ToBytes } from '@/crypto'
 import { API_BASE_URL } from './config'
 import { nextRestSeq, requireSession } from './session'
 
-// ── 公开读(明文,无需登录)──
+// ── 读接口(同样走信封,需已登录)──
 
 /** 大厅房间列表。只有汇总信息,逐座位的详情要 join_room 之后由 StateSnapshot 带来。 */
 export interface RoomMeta {
@@ -57,37 +59,30 @@ export interface HandsQuery {
   limit?: number
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`)
-  // 明文 GET 也用 RestError:调用方判错的写法不必因端点是否加密而分叉。
-  if (!res.ok) throw new RestError(`GET ${path} failed`, res.status)
-  return (await res.json()) as T
+/** 去掉值为 undefined 的键:信封内层是 JSON,`{"limit": undefined}` 序列化后那个键会消失,但显式列出更清楚。 */
+function defined(params: Record<string, string | number | undefined>): Record<string, string | number> {
+  return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined)) as Record<
+    string,
+    string | number
+  >
 }
 
-function query(params: Record<string, string | number | undefined>): string {
-  const q = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined) q.set(k, String(v))
-  }
-  const s = q.toString()
-  return s ? `?${s}` : ''
+export async function fetchRooms(): Promise<RoomMeta[]> {
+  return (await postSealed<{ rooms: RoomMeta[] }>('/lobby/rooms', {})).rooms
 }
 
-export function fetchRooms(): Promise<RoomMeta[]> {
-  return getJson<RoomMeta[]>('/lobby/rooms')
-}
-
-export function fetchLeaderboard(limit?: number): Promise<LeaderboardEntry[]> {
-  return getJson<LeaderboardEntry[]>(`/leaderboard${limit ? `?limit=${limit}` : ''}`)
+export async function fetchLeaderboard(limit?: number): Promise<LeaderboardEntry[]> {
+  return (await postSealed<{ entries: LeaderboardEntry[] }>('/leaderboard', defined({ limit }))).entries
 }
 
 /**
- * 手牌历史,新→旧。公开读,明文 GET。
+ * 手牌历史,新→旧。走信封,需已登录。
  *
  * 分页用游标不用 offset:传 `before=上一页最后一条的 id` 取下一页。返回条数少于 limit 就是到底了。
  */
-export function fetchHands(q: HandsQuery = {}): Promise<HandRecord[]> {
-  return getJson<HandRecord[]>(`/hands${query({ user: q.user, room: q.room, before: q.before, limit: q.limit })}`)
+export async function fetchHands(q: HandsQuery = {}): Promise<HandRecord[]> {
+  const params = defined({ user: q.user, room: q.room, before: q.before, limit: q.limit })
+  return (await postSealed<{ hands: HandRecord[] }>('/hands', params)).hands
 }
 
 /**

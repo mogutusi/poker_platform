@@ -87,7 +87,7 @@ ws://<host>/ws?sid=<session_id>
 
 ## 五、REST 信封
 
-需要身份的端点(`/user/me`、`/user/password`、`/user/nickname`):
+**每一个端点都要**(`/lobby/rooms`、`/leaderboard`、`/hands`、`/user/me`、`/user/password`、`/user/nickname`):
 
 ```
 POST <endpoint>
@@ -95,7 +95,10 @@ body = { sid, frame }         frame = hex(iv ‖ ct ‖ mac)，用 REST 密钥
 响应 = { frame }
 ```
 
-公开读(`/lobby/rooms`、`/leaderboard`、`/hands`)**是明文的**,直接 GET,不套信封。
+**没有明文读**。`POST /user/login` 是唯一暴露在外的入口——那一步还没有会话密钥,只能用 `K_user` 加密一来一回(见 §一)。
+0094 之前那三个读端点是明文 GET,那是加密信道落地之前的残留;现在照旧发 GET 会得 405。
+
+三个读端点的内层形状:`/lobby/rooms` 收 `{}` 回 `{rooms}`;`/leaderboard` 收 `{limit?}` 回 `{entries}`;`/hands` 收 `{room?, user?, before?, limit?}` 回 `{hands}`。参数越界/类型错回 **400**(信封已验过 ⇒ 不是鉴权问题),不会被默默截断。
 
 错误分层(见 [rest.md](../../service/docs/rest.md)):信封本身不过 → 401;业务错 → 403/409/400;服务端故障 → 500。**401 不等于「该重登」**——REST 重试若原样重发也会得 401,先用新 seq 重试一次再判断。
 
