@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app import gameconfig
 from app.auth.passwords import hash_password, verify_password
 from app.auth.session import SessionStore
+from app.db.models import User as DBUser
 from app.db.queries import load_identity_by_name, load_password_for_change, load_profile_by_name, nickname_taken
 from app.db.user_writes import update_nickname, update_password_hash
 from app.rest.secure import SecureRequest, SecureResponse, open_request, seal_response
@@ -22,7 +23,11 @@ from app.shell.presence import Presence
 
 log = logging.getLogger(__name__)
 
-_NICKNAME_MAX_LEN = 50  # 对齐 db/models.py User.nickname 的 max_length(schema 常量,非可调参数)
+# 昵称长度上限直接取自 schema(db/models.py 的 User.nickname `max_length`),不手抄字面量:
+# 抄一份就是第二份事实源,改 schema 忘了改这里,就会「DB 收得下、接口先拒掉」或反过来(BUG-17)。
+_NICKNAME_MAX_LEN: int = next(
+    m.max_length for m in DBUser.model_fields["nickname"].metadata if hasattr(m, "max_length")
+)
 
 
 def make_profile_router(

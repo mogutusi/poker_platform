@@ -126,11 +126,11 @@
 | BUG-11(N-e9) | DM 读游标无单调防护,游标可能被旧值回拨 |
 | BUG-12(N-e10/N-e11) | [db-migrations.md](../db-migrations.md) 的示例配置照抄会导致启动崩溃,且违反本仓自己的配置铁律 |
 | BUG-13(N-e16) | `_evict` 不清 `waive_entry_for` → 离房再进仍享免盲 |
-| BUG-14(N-e26) | `scripts/scripts.py` 是原型遗留的孤儿脚本,应删除 |
+| ~~BUG-14(N-e26)~~ | ~~`scripts/scripts.py` 孤儿脚本~~ —— **0092 已删** |
 | BUG-15(N-e34) | `NullPersister` 无生产消费者 |
 | BUG-16(N-e35) | `Presence` 的三个方法零消费者 |
-| BUG-17(N-e36) | `profile.py` 手抄 `_NICKNAME_MAX_LEN`,成了第二份事实源 |
-| BUG-18(C3) | `rest/lobby.py` 的 `big_blind=2*` 应改引 `blinds.BIG_BLIND_MULTIPLE`(一行) |
+| ~~BUG-17(N-e36)~~ | ~~`profile.py` 手抄 `_NICKNAME_MAX_LEN`~~ —— **0092 已修**(改为从 `db/models.py` 的 schema 取,带「跟随 schema」的回归测)|
+| ~~BUG-18(C3)~~ | ~~`rest/lobby.py` 手抄 `big_blind=2*`~~ —— **0092 已修**(改引 `blinds.BIG_BLIND_MULTIPLE`,断言改成派生关系)|
 
 ---
 
@@ -139,7 +139,7 @@
 | ID | 事项 | 出处 |
 |---|---|---|
 | ~~DEBT-1(C2)~~ | ~~architecture.md/wire.md 声称 codegen「进 CI/pre-commit」,实际只有 pytest 守门~~ —— **0086 已把口径改实**(两处都改成「pytest 守门,仓库没有 CI 也没装 pre-commit,提交规约见 dev.md」)。**要不要真搭 CI 是独立决策,未做**:仓库的提交流程本来就写在 [dev.md](../dev.md)「提交」,缺的是自动化而不是约定 | 0072·C2 |
-| DEBT-2(D2) | [architecture.md](../architecture.md) 不变量 2 写「读 DB、不读 `world`」,但已有三处**记档合规**的只读豁免(presence 0037、`GET /lobby/rooms` 0048、`FetchRoomChat` 0071)。顶层不变量没描述这个豁免家族,读者按字面会把三处合规代码误判为违规。修法:不变量 2 补一句豁免判据 | 0072·D2 |
+| ~~DEBT-2(D2)~~ | ~~不变量 2 没描述只读豁免家族~~ —— **0092 已修**:不变量 2 改写成「本体是唯一写者」,补上三条判据(只读 / 读已 commit / 全程同步)+ 现存三处名单 + 「新增豁免要按判据论证并补进名单」 | 0072·D2 |
 | DEBT-3(D3) | [connection.md](../connection.md) / [lobby.md](../lobby.md) 的「待定」段陈旧 | 0072·D3 |
 | DEBT-4(D4) | 四处陈旧注释,含两处 JWT 反事实(P5 已无 JWT) | 0072·D4 |
 | DEBT-5(D5) | 其余文档小项 | 0072·D5 |

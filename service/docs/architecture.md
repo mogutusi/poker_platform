@@ -137,7 +137,10 @@ ws ◀──ServerMessage(含 ErrorMessage)── Sender ◀──────�
    - 判据一,会不会卡住事件循环——慢 IO 一律外移;判据二,会不会拿墙钟当游戏判据——超时与新鲜度只用单调自增的 `epoch`,不读 `time.time()`,以免 NTP 校时误触。
    - 非阻塞的本地计算不违反本条:`random.SystemRandom()` 洗牌可用。shell 盖好的时间戳也可以作为记录元数据穿过 core,它只存进 `Hand.start_time`,不参与任何分支。
    - 根本要求是 reduce 须「给定 `world+cmd` 可断言输出」,所以墙钟一律由 shell 盖,core 不主动读。
-2. **`world` 只由 GameLoop 经「工作副本 commit」更新**:`reduce` 只改副本,其它协程只读已提交状态、不写。Receiver 允许读 DB(那是 shell IO),但它读 DB、不读 `world`——载入与否的决定权在 reduce(见 [user.md](user.md))。
+2. **`world` 只由 GameLoop 经「工作副本 commit」更新**:`reduce` 只改副本,**写**永远只有这一条路;其它协程只读已提交状态。
+   - **不变量的本体是「唯一写者」,不是「谁都不许读」。** shell 里有一族**记档合规的只读豁免**:同步读一眼已 commit 的 `world` 做纯投影,不写、不据它决定要不要载入。判据三条:①只读、②读的是已 commit 的状态、③全程同步(无 `await`,所以读到的一定是某条命令的完整结果,不会撞见半改)。现存三处:presence([0037](refactor/changes/0037-presence.md))、`GET /lobby/rooms`([0048](refactor/changes/0048-rest-lobby-rooms.md))、`FetchRoomChat`([0071](refactor/changes/0071-room-chat-history-in-room.md))。
+   - **Receiver 那条仍然成立且更严**:它读 DB(那是 shell IO)、不读 `world`——**载入与否的决定权在 reduce**(见 [user.md](user.md))。这是比上面三条更强的约束,因为「要不要从 DB 载入积分」是个**写决策**,不是投影。
+   - 新增只读豁免必须在变更记录里按上面三条判据论证,并回来补进这份名单(DEBT-2 之前正是因为顶层没收编这个家族,读者会把三处合规代码误判成违规)。
 3. **GameLoop 处理一条命令期间不 `await`**(派发只用 `put_nowait`)。
 4. **对外发送只经 per-connection Sender 队列**:禁止 `create_task(ws.send())`,也禁止在别处直接 `ws.send()`。
 5. **定时器、连接、断线一律转 `Command` 进 `inbox`**,不旁路改状态。

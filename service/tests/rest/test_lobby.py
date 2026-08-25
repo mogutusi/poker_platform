@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.enums import RoomStatus, UserStatus
+from app.core.rules import blinds
 from app.rest.lobby import RoomMeta, list_rooms, make_lobby_router
 from app.shell.lifespan import create_app
 from tests.builders import hand_world, make_world, player, room_with, seat
@@ -38,6 +39,8 @@ def test_list_rooms_projection_fields():
         },
     )
     (meta,) = list_rooms(make_world(rooms={"table1": room}))
+    # 大盲是派生值,倍数取规则常量而不是在 rest 里手抄 2(BUG-18,0092 修)
+    assert meta.big_blind == blinds.BIG_BLIND_MULTIPLE * meta.small_blind
     assert meta == RoomMeta(
         id="table1",
         small_blind=5,

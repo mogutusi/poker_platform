@@ -119,7 +119,7 @@
 - [ ] **0072·N-e32** Broadcast 收件人取 commit 后成员表:LeaveRoom 触发 fold-to-one 终手时,离场者收不到同批 PlayerActed/HandShowDown/HandEnded(看不到自己参与底池的结算)。离场结算事件改 Personal 补发给离场者,或调整驱逐与结算广播的顺序
 - 注:~~**N4**(Timeout 跨房)并入 **R2** 修复~~ —— **0090 两条一起修掉**:`Timeout` 改带三元身份 `(room, hand_seq, epoch)`,三项全等才新鲜;`room` 只作校验不作路由,硬规则 8 原样成立
 - 注:**N7**(每房一 GameLoop「core 不变」承诺过宽)、**N-r4/N-r6/N-e21/N-d33/N-dev22 及 N-d8~N-d29 共 12 条文档漂移**并入 D 批 truth-up;**N-r5 已 REFUTED 不采纳**
-- [ ] **0072·N-低危设计边角**(low,择机):N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e26 `scripts/scripts.py` 原型孤儿脚本删除 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e36 profile.py 手抄 `_NICKNAME_MAX_LEN` 二份事实源 / N-e38·N-e40 演进面与快照 min-raise 记档
+- [~] **0072·N-低危设计边角**(low,择机)—— **0092 做掉三条**(~~N-e26 孤儿脚本~~ 已删、~~N-e36 `_NICKNAME_MAX_LEN` 二份事实源~~ 已改引 schema、~~C3 `big_blind=2*`~~ 已改引常量)。**余**:N-e9 DM 游标无单调防护 / N-e10·N-e11 db-migrations.md 示例配置致启动崩·违自家铁律 / N-e16 `_evict` 不清 `waive_entry_for` 致离房重进免盲 / N-e34 NullPersister 无生产消费者 / N-e35 Presence 三方法零消费者 / N-e38·N-e40 演进面与快照 min-raise 记档
 
 ## 代码缺陷排查(0074,2026-07-29)— 台账见 [changes/0074](changes/0074-code-defect-hunt.md)
 

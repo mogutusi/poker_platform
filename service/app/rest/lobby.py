@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.core.domain import Room, World
 from app.core.enums import RoomStatus, UserStatus
+from app.core.rules import blinds
 
 
 class RoomMeta(BaseModel):
@@ -33,7 +34,7 @@ def _room_meta(room_id: str, room: Room) -> RoomMeta:
     return RoomMeta(
         id=room_id,
         small_blind=room.small_blind,
-        big_blind=2 * room.small_blind,
+        big_blind=blinds.BIG_BLIND_MULTIPLE * room.small_blind,  # 倍数是规则常量,不在这里手抄
         buy_in=room.buy_in,
         max_seats=len(room.seats),
         seated=seated,

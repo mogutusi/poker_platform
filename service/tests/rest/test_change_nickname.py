@@ -152,6 +152,16 @@ async def test_race_integrity_error_maps_409(monkeypatch):
     assert conns.get("Alice") is conn and conns.get("Bob") is None and conn.nick == "Alice"
 
 
+def test_nickname_max_len_follows_the_schema():
+    # 上限是 schema 的单一事实源(db/models.py 的 User.nickname max_length),不是手抄的字面量:
+    # 抄一份就会「DB 收得下、接口先拒掉」或反过来(BUG-17,0092 修)。
+    from app.db.models import User as DBUser
+    from app.rest.profile import _NICKNAME_MAX_LEN
+
+    schema_max = next(m.max_length for m in DBUser.model_fields["nickname"].metadata if hasattr(m, "max_length"))
+    assert _NICKNAME_MAX_LEN == schema_max
+
+
 @pytest.mark.parametrize("bad", ["Alice", "", "   ", " Bob", "Bob ", "x" * 51, 5, ["Neo"], None])
 async def test_bad_new_nickname_400(bad):
     # 同名(rename 语义须变)/ 空 / 超长(>50 对齐 models)/ 非串 / 缺参 → 400。
