@@ -95,12 +95,13 @@
 - **机理**:`StateSnapshot` 不投影 `room.entry_vote`。
 - **修法**:给 `StateSnapshot` 加投票公开态的投影;或在 reduce 的重连臂补发一条 `FreeEntryVoteUpdated`。
 
-### BUG-10 · 离场者收不到自己参与的那手的结算事件
+### ~~BUG-10 · 离场者收不到自己参与的那手的结算事件~~ —— **0091 已修**
 
-- **来源**:[0072·N-e32](changes/0072-architecture-audit.md)
+- **来源**:[0072·N-e32](changes/0072-architecture-audit.md) · **修于 [0091](changes/0091-settlement-reaches-the-leaver.md)**(对「本手参与者 ∩ 本手末尾被驱逐者」各补一份 `Personal(HandShowDown/HandEnded)`)
 - **症状**:玩家 `LeaveRoom` 触发了「只剩一人」的终手结算,但他本人收不到 `PlayerActed`/`HandShowDown`/`HandEnded`——看不到自己投入的底池是怎么结算的。
 - **机理**:`Broadcast` 的收件人取的是 commit **之后**的成员表,而离场者此时已被移出。
-- **修法**:结算事件对离场者改用 `Personal` 补发;或调整「驱逐」与「结算广播」的先后顺序。
+- **修法**:结算事件对离场者改用 `Personal` 补发;~~或调整「驱逐」与「结算广播」的先后顺序~~。
+- **登记的第二条备选走不通,0091 已更正**:dispatch 对**整批**事件用的是同一份 commit 后的成员表,而 commit 是原子的——在 reduce 里把 `_evict` 挪到广播之后,派发时看到的成员表一模一样,毫无作用。别再照它试一遍。
 
 ---
 
@@ -166,6 +167,7 @@
 | 0072·N9(BUG-9)| `StateSnapshot` 不投影 `entry_vote` → 重连/顶替后投票面板消失、全票制下卡死 | 0088 |
 | 0085(BUG-19)| 前端自编 min-raise 下限 → 别人大额加注之后发不出合法加注 | 0088 |
 | 0072·R2(BUG-3)+ 0072·N4 | `Timeout` 身份不足(只带 epoch)→ 跨手/跨房撞号,误弃不该弃的人 | 0090 |
+| 0072·N-e32(BUG-10)| 离场者收不到自己那手的结算(广播按 commit 后的成员表解析)| 0091 |
 
 ## 误报留档(别再「发现」一次)
 

@@ -480,8 +480,29 @@ def _settle_and_end(work: Work, hand: Hand, *, reveal: bool) -> list[Event]:
     for nick, amount in payout.total.items():
         _by_nick(hand, nick).points += amount  # 赢得 + 退还进本手剩余筹码,随后由 finalize 还回座位
 
+    departing = {p.nickname for p in hand.players} & set(room.leaving)  # 取在 finalize 清空 leaving 之前
     events += _finalize_hand(work, hand, payout)
-    return events
+    return events + _settlement_copies_for_departing(events, departing)
+
+
+def _settlement_copies_for_departing(events: list[Event], departing: set[str]) -> list[Event]:
+    # 给「本手参与者 ∩ 本手末尾被驱逐者」补一份结算结果的私发(BUG-10)。
+    #
+    # 为什么必须补:Broadcast 的收件人由 dispatch 在 **commit 之后**按 users_in_room 解析,而离场者
+    # 在同一条 reduce 里已被 _evict 移出成员表 —— 等到派发时他已不在名单上,于是投了一整个底池的人
+    # 看不到它是怎么分的。**把 _evict 挪到广播之后没有用**:dispatch 对整批事件用的是同一份
+    # commit 后的成员表,而 commit 是原子的(0091 更正了 BUGS 登记里的那条修法)。
+    #
+    # 只补描述「这手怎么结的」那两条;他自己的 auto-fold(PlayerActed)是他点离开的直接结果,不补。
+    # 内容与广播完全相同(wire DTO 冻结,可安全共享同一个对象),排在原广播之后,不动顺序契约。
+    if not departing:
+        return []
+    outcome = [
+        e.msg
+        for e in events
+        if isinstance(e, Broadcast) and isinstance(e.msg, (HandShowDown, HandEnded))
+    ]
+    return [Personal(nick=nick, msg=msg) for nick in sorted(departing) for msg in outcome]
 
 
 def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event]:

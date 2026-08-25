@@ -101,6 +101,49 @@ def test_leave_by_lone_high_bettor_forfeits_uncalled_bet():
     assert 60 + 150 + 90 == 300  # 守恒
 
 
+# ── BUG-10(0091):离场者要收到自己那手的结算 ──
+def test_departing_participant_gets_personal_settlement():
+    # A 一走就只剩 B 未弃 → 本手立刻结算,而 A 在同一条 reduce 里被驱逐。
+    # Broadcast 的收件人是 commit **之后**的成员表,那时 A 已经不在 → 他看不到底池是怎么分的。
+    world = hand_world(
+        [
+            player("A", 60, seat=0, bet_amount=30, has_acted=True),
+            player("B", 90, seat=1, bet_amount=0),
+            player("C", 90, seat=2, status=PlayerStatus.FOLDED),
+        ],
+        button=0, status=HandStatus.FLOP, last_bet=30, acting_position=1,
+        contributed={"A": 10, "B": 10, "C": 10},
+    )
+    world, events, err = run(world, LeaveRoom(origin="A"))
+    assert err is None
+    assert "A" not in _room(world).users_in_room  # 前提:他确实已被移出,广播够不着他了
+
+    personal_to_a = [e for e in events if isinstance(e, Personal) and e.nick == "A"]
+    kinds = [type(e.msg) for e in personal_to_a]
+    assert HandEnded in kinds  # 赢取与退还:他投了一整个底池,必须看得到怎么分的
+    # 内容与广播的那条完全一致(同一个冻结 DTO),不是另编一份
+    broadcast_ended = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandEnded))
+    assert next(e.msg for e in personal_to_a if isinstance(e.msg, HandEnded)) is broadcast_ended
+    # 只补给离场的参与者:留在桌上的 B/C 照旧走广播,不重复私发
+    assert not [e for e in events if isinstance(e, Personal) and e.nick in {"B", "C"}]
+    # 顺序契约不变:补发排在原广播之后
+    assert events.index(personal_to_a[0]) > events.index(
+        next(e for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandEnded))
+    )
+
+
+def test_no_settlement_copies_when_nobody_leaves():
+    # 稳态:没人离场就一条私发都不该多出来(防「顺手给所有人补一份」)
+    world = hand_world(
+        [player("A", 60, seat=0, bet_amount=30, has_acted=True), player("B", 90, seat=1, bet_amount=0)],
+        button=0, status=HandStatus.FLOP, last_bet=30, acting_position=1,
+        contributed={"A": 10, "B": 10},
+    )
+    world, events, err = run(world, PlayerAction(origin="B", action=PlayerActionType.FOLD))
+    assert err is None
+    assert [e for e in events if isinstance(e, Personal)] == []
+
+
 # ════════ 多人同手离桌:手尾按 sorted(leaving) 确定序逐个驱逐 ════════
 def test_two_leavers_both_evicted_in_sorted_order():
     # 3 人,轮到 B;A(非行动者)先离 → 标 leaving 不结束;再 B 离(行动者)→ 只剩 C → 结束,A、B 同手尾驱逐

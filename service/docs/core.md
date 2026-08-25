@@ -276,7 +276,7 @@ def reduce(work, cmd):
 | 动作·换人 | `Broadcast(PlayerActed)` | `TurnChanged` |
 | 动作·进街 | `Broadcast(PlayerActed)` + `Broadcast(HandStatusChanged)` | `TurnChanged` |
 | 摊牌 | `Broadcast(HandShowDown)` | — |
-| 结束 | `Broadcast(HandEnded)` + `Persist(HandRecord)` | `ClearAction` |
+| 结束 | `Broadcast(HandEnded)` + `Persist(HandRecord)` + 本手离场参与者各一份 `Personal(HandShowDown/HandEnded)`(见下) | `ClearAction` |
 | 买入/离桌/起身 | `Broadcast(...)` + `Persist(PointsWrite)` | — |
 | 免盲投票 | `Broadcast(FreeEntryVoteUpdated/Closed)`,三个时机是开票 / 进度 / 终结(见 [rules.md](rules.md) ①) | — |
 | 房间聊天 | `Broadcast(ChatMessage)`;不改游戏状态(见 [messaging.md](messaging.md)) | — |
@@ -287,6 +287,11 @@ def reduce(work, cmd):
 开局那条 `UserStatusChanged` 的由来(0084):`_start_hand` 末尾要按防躲盲重标 `new_here`(被发牌者清、未被发牌的在座者置上,见 [rules.md](rules.md) ①),而这个标志此前**没有任何事件承载**——它只在 `StateSnapshot.SeatView` 里,于是客户端那份打完一手就过期,免盲开票入口无从判断(0082·A 记的缺口)。现在对**值真的变了**的座位各产一条,排在 `HandStarted`/`HoleCards` 之后(同手尾状态广播的次序:先知道这手怎么开的,再知道各座位落到什么状态)。只发变了的 ⇒ 稳态牌桌每手 0 条。
 
 `UserStatusChanged` 因此带 `new_here: bool | None`(未就座为 `None`,与 `seat_position` 同语义),五处产出点都如实填——客户端不必、也不允许自己推断这个标志。
+
+手尾那几份 `Personal` 的由来(0091):`Broadcast` 的收件人由 dispatch 在 **commit 之后**按 `users_in_room` 解析,而本手离场者在同一条 reduce 里已被 `_evict` 移出成员表——等到派发时他已不在名单上,于是**投了一整个底池的人看不到它是怎么分的**(BUG-10)。所以对「本手参与者 ∩ 本手末尾被驱逐者」各补一份结算结果的私发。
+
+> **把 `_evict` 挪到广播之后不管用**:dispatch 对**整批**事件用的是同一份 commit 后的成员表,而 commit 是原子的。BUGS 里登记的那条备选修法据此作废,已更正。
+> 补发只覆盖「这手怎么结的」两条(`HandShowDown`/`HandEnded`);离场者自己的 auto-fold(`PlayerActed`)是他点离开的直接结果,不补。
 
 免盲投票同理(0088):**投票人集合变了就要补一条 `FreeEntryVoteUpdated`**(`_maybe_resolve_entry_vote`,
 离场/坐出/起身/准备都会触发),而 `StateSnapshot` 也投影一份 `free_entry_vote` —— 重连与顶替只私发快照、
