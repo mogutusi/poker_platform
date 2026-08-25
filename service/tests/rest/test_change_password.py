@@ -216,3 +216,56 @@ def test_create_app_registers_change_password_route():
     app = create_app()
     routes = [r for r in app.routes if getattr(r, "path", None) == "/user/password"]
     assert len(routes) == 1 and "POST" in routes[0].methods
+
+
+async def test_password_change_revokes_other_sessions_but_keeps_current():
+    # 0097:改密即吊销该账号其它设备的会话——改密要求旧密码作第二因子,能走到这里的必是本人;
+    # 「怀疑号被盗 → 改密码」是用户唯一的自救手段,旧会话还活着这个手段就等于没有。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    sid, session = store.create("alice", "Alice", _T0)  # 当前这台
+    sid_phone, session_phone = store.create("alice", "Alice", _T0)  # 另一台设备(或窃取者)
+    sid_bob, session_bob = store.create("bob", "Bob", _T0)  # 别的账号
+
+    await _change(store, sm, sid, _seal_req(session, 1, {"old_password": _OLD, "new_password": "new-pw-2"}))
+
+    assert store.lookup(sid, _T0) is session  # 当前会话留着:别把正在操作的人自己踢下线
+    assert store.lookup(sid_phone, _T0) is None  # 其它设备被吊销
+    assert session_phone.expires_at == 0.0  # 且对象判死 → 它那条活 ws 下一帧被 4401 关掉
+    assert store.lookup(sid_bob, _T0) is session_bob and session_bob.expires_at > _T0  # 不误伤别的账号
+
+
+async def test_failed_password_change_revokes_nothing():
+    # 旧密码错 → 403 且不改库,也不能顺手把人家其它会话清了(否则成了「猜错密码即踢人下线」的骚扰面)。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    sid, session = store.create("alice", "Alice", _T0)
+    sid_phone, session_phone = store.create("alice", "Alice", _T0)
+
+    with pytest.raises(HTTPException) as ei:
+        await _change(store, sm, sid, _seal_req(session, 1, {"old_password": "wrong", "new_password": "x"}))
+    assert ei.value.status_code == 403
+    assert store.lookup(sid_phone, _T0) is session_phone and session_phone.expires_at > _T0
+
+
+async def test_db_write_failure_revokes_nothing(monkeypatch):
+    # 吊销必须排在**成功写库之后**:写库失败还把人踢下线 = 密码没改、其它设备却全掉线,
+    # 用户既没自救成、又被打断。变异(把吊销提到 await 之前)会让这条红。
+    #
+    # 注意这里要打的是 update_password_hash 而不是 sessionmaker:后者在更早的
+    # load_password_for_change 就会先炸,根本走不到写库这一步,那样测的是查询失败、不是写失败。
+    sm = await _setup()
+    store = SessionStore(_TTL)
+    sid, session = store.create("alice", "Alice", _T0)
+    sid_phone, session_phone = store.create("alice", "Alice", _T0)
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr("app.rest.profile.update_password_hash", _boom)
+
+    with pytest.raises(HTTPException) as ei:
+        await _change(store, sm, sid, _seal_req(session, 1, {"old_password": _OLD, "new_password": "x"}))
+    assert ei.value.status_code == 500
+    assert await _current_hash(sm, 1) is not None  # 密码没被改
+    assert store.lookup(sid_phone, _T0) is session_phone and session_phone.expires_at > _T0  # 也没被误吊销

@@ -52,7 +52,8 @@
 
 - **轮换 = 无感重连**。客户端在 `SESSION_TTL` 到期前,用本地缓存的 `K_user` 静默重跑登录握手拿新 `session_token`。新连接顶替旧连接(即"顶替再连":同一用户的新连接把旧连接踢下线,见 [connection.md](connection.md)),reduce 私发 `StateSnapshot` 对齐。
 - **服务器 exp 兜底**。`session_token.exp` 到点即拒:新握手 / REST 查表即拒(0055/0062);活 ws 连接也强制(0070),收帧和出站各比对一次 `expires_at`,过期即关连接 4401。例外:双向零流量的过期连接活到下次任一方向有活动——接受,无流量即无泄露面。
-- **什么时候要重新手输**。客户端进程还在、`K_user` 还在内存时,轮换与重连都静默;客户端彻底关闭或主动登出后,须用户重新手输 `K_user` 登录。`K_user` 即长期 refresh 凭证,不另设 refresh token。
+- **什么时候要重新手输**。客户端进程还在、`K_user` 还在内存时,轮换与重连都静默;`K_user` 即长期 refresh 凭证,不另设 refresh token。
+  > **现状与这句不符,如实记档(0097)**:前端把 `K_user` 存在 `localStorage`(`transport/session.ts`),**登出与关页面都不清**(`clearKUser()` 至今零调用者),所以重新登录只需再输密码、不必再输 `K_user`。那是前端有意的取舍——`K_user` 每周轮换,每次登出都要重输摩擦太大。孰对孰错(共享机器的安全 vs 手输摩擦)**尚未定案**,在定案前别把上面这句当成实现契约。
 - **不做中途 rekey / 完整前向保密**。定期无感重连换钥已够,本规模不做棘轮。
 
 > 轮换周期由 `SESSION_TTL_SECONDS` 定(见配置);客户端应在到期前留余量主动轮换。
@@ -72,7 +73,8 @@
 - 盐明文存没问题:盐不是密钥,只为让每人哈希不同,不需保密。
 - DB 列已落地([changes/0056](refactor/changes/0056-p5-user-auth-columns-authenticate.md)):`User` 加三列 `name`/`hash_password`/`k_user`,配迁移 `49417b108733`;三列均 nullable,加可空列是最安全的增量迁移,NULL 表示未启用登录;`name` 唯一,故不能用常量 `server_default` 回填(0056 决策 1);`authenticate` 与 `load_user_for_login` 同批落地。
 - 初始密码由管理员生成(高熵随机),私下发给用户;用户可自行改密。
-- 改密码已落地([changes/0064](refactor/changes/0064-p7-change-password.md)):`POST /user/password` 走会话密钥信封,先验旧密码作第二因子(防止盗得 `session_token` 的人直接改密、把真用户锁死),再重算新盐哈希;同步直写 DB,鉴权列以 DB 为权威,不走 delayDB(延迟落库的写缓冲),见 [storage.md](storage.md)「鉴权列写路径」。错误分层与细节见 [rest.md](rest.md);v1 不吊销其它会话。
+- 改密码已落地([changes/0064](refactor/changes/0064-p7-change-password.md)):`POST /user/password` 走会话密钥信封,先验旧密码作第二因子(防止盗得 `session_token` 的人直接改密、把真用户锁死),再重算新盐哈希;同步直写 DB,鉴权列以 DB 为权威,不走 delayDB(延迟落库的写缓冲),见 [storage.md](storage.md)「鉴权列写路径」。错误分层与细节见 [rest.md](rest.md)。
+  **改密成功即吊销该账号其它会话**([0097](refactor/changes/0097-revocation-that-actually-bites.md) 翻掉 0064 的「v1 不吊销」):改密要求旧密码作第二因子,所以能改的必是本人;而「怀疑号被盗 → 改密码」是用户唯一的自救手段,旧会话还活着这个手段就等于没有。留下当前会话,免得把正在操作的人自己踢下线;失败(旧密码错)不吊销任何东西,否则成了「猜错密码即踢人下线」的骚扰面。
 
 ## 共享密钥(手输,不在前端)
 
@@ -177,11 +179,30 @@ KUSER_GRACE_DAYS:    int = Field(ge=0, le=30)     # 旧钥宽限期(天),基线 
 
 会话表是内存 shell 状态(同原型 `_refresh_token_pool`,已随 0027 拆除),进程重启即失效,重新登录即可。已落地 [`app/auth/session.py`](../app/auth/session.py)([changes/0055](refactor/changes/0055-p5-session-store.md)):
 
-- `SessionStore` 四个方法:`create(name,nickname,now)->(session_id, Session)`、`lookup(sid,now)`(过期则删除并返 None)、`revoke`、`prune(now)`。
+- `SessionStore` 的方法:`create(name,nickname,now)->(session_id, Session)`、`lookup(sid,now)`(过期则删除并返 None)、`revoke(sid)->bool`、`revoke_all_for_name(name, except_id=None)->int`、`rename_nickname(name,new_nick)->int`、`prune(now)`。
 - `Session{name,nickname,token,expires_at}`:`session_id=token_urlsafe` 是公开句柄,`token=token_bytes(32)` 是秘密,用于派生逐帧密钥(见 [channel.py](../app/auth/channel.py))。
 - 时钟外移:`now` 显式传入,同 timer.md;`exp=now+SESSION_TTL_SECONDS`,做服务器兜底。
 
 登录只返回 `{session_id, session_token, exp}`,无 JWT;此后 ws 与 REST 都用会话密钥加密(见 §加密信道)。
+
+#### 吊销(0097)
+
+**吊销 = 摘表项 + 就地把那个 `Session` 判死(`expires_at = 0`)。** 只摘表项不够:活 ws 连接持有的是 `Session` **对象**和从它派生的 `SecureChannel`,收帧与出站都只比对 `conn.session.expires_at`、从不回头查表(见上 §会话过期 的 exp 兜底)。判死对象才能让那条既有的强制路径在**下一帧(任一方向)** 把连接关掉(4401),连「双向零流量的连接活到下次有活动」这个例外都原样继承。
+
+两个消费者:
+
+- **`POST /user/logout`**:吊销发起方自己这一个会话(见 [rest.md](rest.md))。前端「退出」必须调它——只清本地的话,服务器上那把 token 一直有效到 TTL 自然到期。
+- **改密码**:吊销该账号**其它**会话,留下当前这个(见下 §密码存储)。
+
+按 `name` 找会话是线性扫 `_by_id`(`rename_nickname` 同款),**不建 `name→sessions` 索引**:在线 ≤20,而索引是第二份事实源,`create`/`lookup` 惰性删/`prune`/`revoke` 四处都得维护,漂一处就是「吊销了但没吊销干净」。
+
+吊销**不是即时屏障**,三处边界如实记:
+
+- **零流量的连接活到下次有活动**——继承自 exp 兜底的同一条例外(见上 §会话过期)。无流量即无泄露面,但它在 `world` 里仍占着座、presence 仍报在线,直到被顶替或清理。
+- **已经进门的那一帧照常执行**。吊销只挡「下一帧」;此刻正在 GameLoop 里处理的命令会照常 commit、照常落库。要做到「吊销即刻起没有任何命令再生效」得引入屏障,本规模不做。
+- **偷的若正是你手上这把 token(同一 `session_id`),改密赶不走他**:`except_id` 放过的是「当前这个会话」,而他与你共用它。补救是改完密码**再登出一次**(现在登出是真的了),重新登录即换新会话。
+
+**够不着的那一块,如实记:`K_user` 泄露后没有带外吊销通道。** [`kuser_admin.py`](../scripts/kuser_admin.py) 是独立进程,而会话表是服务器进程的内存态——CLI 结构上伸不进去。所以 `issue --reset` 只换钥与密码,**不动已建会话**;要立刻掐断,唯一手段是**重启服务器**(重启即清空会话表)。不要以为 `--reset` 顺带清了会话。
 
 ## 加密信道(登录后一切流量:ws 与 REST 同构)
 

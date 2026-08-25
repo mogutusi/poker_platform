@@ -81,12 +81,16 @@
 - **机理**:`handle` 的 `except Exception` 只裹住 `reduce()` 一行;`commit` / `_audit_applied` / `dispatch` 抛出的异常会冒出去杀掉唯一的状态写者协程,而且没有 watchdog。这与 [architecture.md](../architecture.md)「接住 → 继续处理下一条」的承诺不符。
 - **修法**:把 `except` 提到裹住 commit/dispatch;另外给 run task 加 done-callback 做重启或告警。
 
-### BUG-8 · 会话无法吊销
+### ~~BUG-8 · 会话无法吊销~~ —— **0097 已修(部分:进程内那半;跨进程那半改为如实记档)**
 
-- **来源**:[0072·N5](changes/0072-architecture-audit.md)
+- **来源**:[0072·N5](changes/0072-architecture-audit.md) · **修于 [0097](changes/0097-revocation-that-actually-bites.md)**
 - **症状**:`K_user` 泄露后即使用 `issue --reset` 换了钥,已经建立的会话仍然有效,直到 `SESSION_TTL` 自然到期。
 - **机理**:`SessionStore.revoke` 全仓零调用者——既没有登出端点,也没有管理员吊销通道。
-- **修法**:补吊销通道(登出端点,或建 `name→sessions` 索引供改密/reset 时撤销)。若确认 v1 就是不做,则要在 [auth.md](../auth.md) 显式记档「不吊销,靠 TTL + 重启」,不能留成隐性缺口。
+- **登记时漏了两件事,0097 查出来并一并修了**:
+  1. **`revoke` 就算有人调也不生效**。它只 `pop` 表项,而活 ws 连接持有的是 `Session` 对象与从它派生的 `SecureChannel`,收发两侧都只比对 `conn.session.expires_at`、从不回头查表——已经连着的人照样收发。修法是 `revoke` 就地把对象判死(`expires_at=0`),复用 0070 那条既有强制路径,下一帧即 4401 关连接。
+  2. **前端「退出」是假的**:只清本地,一个字都没告诉服务器。现已真的调 `POST /user/logout`。
+- **登记给的修法有一处不成立**:「建 `name→sessions` 索引」不需要——同类的 `rename_nickname` 一直是线性扫 `_by_id`,在线 ≤20 的规模下索引只是第二份要维护的事实源。
+- **有一半在架构上做不到,已改为如实记档**:`issue --reset` 走的是 `kuser_admin.py`,**独立进程**,伸不进服务器内存里的会话表。`K_user` 泄露场景下要立刻掐断,唯一手段是重启服务器;这条已写进 [auth.md](../auth.md) §吊销,不再是隐性缺口。
 
 ### ~~BUG-9 · 重连/顶替后免盲投票面板消失~~ —— **0088 已修**
 
@@ -170,6 +174,7 @@
 | 0072·N-e32(BUG-10)| 离场者收不到自己那手的结算(广播按 commit 后的成员表解析)| 0091 |
 | 0072·N-e10/N-e11(BUG-12)| db-migrations.md 示例照抄会崩 + create_all/Alembic 铁律无路径可守(文档层)| 0095 |
 | 0072·N-e16(BUG-13)| `_evict` 不清 `waive_entry_for` → 离房再进(或改名接盘旧 nick)凭残留快照免入局 BB | 0096 |
+| 0072·N5(BUG-8)| 会话无法吊销:`revoke` 零调用者,且只 pop 表项挡不住已连着的人;前端「退出」只清本地 | 0097 |
 
 ## 误报留档(别再「发现」一次)
 

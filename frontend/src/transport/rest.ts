@@ -143,7 +143,9 @@ export function fetchProfile(): Promise<Profile> {
  * 改密码。要验旧密码是第二因子:光有会话 token 改不动密码,盗到 token 的人锁不死真用户。
  *
  * 失败按 RestError.status 分:401 信封没过(用新 seq 重试一次再判要不要重登)· 403 旧密码错或该账号未启用密码
- * · 400 缺参/新密码为空 · 500 服务端。改完**不会**吊销其它会话。
+ * · 400 缺参/新密码为空 · 500 服务端。
+ *
+ * 改成功会**吊销该账号在别处的会话**(0097),当前这个留着;那些设备的 ws 会在下一帧被 4401 关掉。
  */
 export function changePassword(oldPassword: string, newPassword: string): Promise<{ status: string }> {
   return postSealed<{ status: string }>('/user/password', {
@@ -161,4 +163,14 @@ export function changePassword(oldPassword: string, newPassword: string): Promis
  */
 export function changeNickname(newNickname: string): Promise<{ status: string; nickname: string }> {
   return postSealed<{ status: string; nickname: string }>('/user/nickname', { new_nickname: newNickname })
+}
+
+/**
+ * 登出:让服务器吊销这个会话。
+ *
+ * 不调它的话「退出」只是清本地——服务器上那把 session_token 一直有效到 SESSION_TTL 自然到期,
+ * 谁拿到它都还能照常收发(0097 / BUG-8)。只吊销当前这一个会话,别的设备不受影响。
+ */
+export function logout(): Promise<{ status: string }> {
+  return postSealed<{ status: string }>('/user/logout', {})
 }

@@ -311,5 +311,6 @@ POST /user/login   { name, iv, blob }
 | 端点 | 内层请求 | 内层响应 / 失败 |
 |---|---|---|
 | `POST /user/me` | `{}` | `{name, nickname, points}`,其中 `points` 是 DB 滞后值(精确余额看 ws 的 `state_snapshot` 或买入广播) |
-| `POST /user/password` | `{old_password, new_password}` | `{status:"ok"}`;旧密码错/未启用 → `403`,缺参/空 → `400` |
+| `POST /user/password` | `{old_password, new_password}` | `{status:"ok"}`;旧密码错/未启用 → `403`,缺参/空 → `400`。**成功即吊销该账号在别处的会话**,当前这个留着(0097)|
 | `POST /user/nickname` | `{new_nickname}` | `{status:"ok", nickname}`;仅大厅可改(在房 → `403`),撞名 → `409`,同名/空/首尾空白/超长 → `400` |
+| `POST /user/logout` | `{}` | `{status:"ok"}`;吊销**当前这一个**会话(别的设备不受影响)。此后该 `sid` 一律 `401`,而**已经连着的 ws 在下一帧被关**(`4401`)。无其它失败臂(0097)|

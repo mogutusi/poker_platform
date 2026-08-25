@@ -20,7 +20,7 @@ class Session:
     name: str  # 登录账号(不可变;登录定位用户/选 K_user)
     nickname: str  # 游戏昵称(握手后投 Connect(nick) 接入大厅)
     token: bytes = field(repr=False)  # 32B 会话票据(= session_token;秘密,派生逐帧密钥)。repr=False:脱敏红线,防误 print/log 泄露(log.md)
-    expires_at: float  # 过期墙钟(epoch 秒);now >= 此值即失效(服务器 exp 兜底)
+    expires_at: float  # 过期墙钟(epoch 秒);now >= 此值即失效(服务器 exp 兜底)。`0.0` 是**吊销墓碑**:revoke 就地写入,让持有本对象的活连接下一帧即被判过期关掉(见 SessionStore.revoke)
     channel: SecureChannel | None = field(default=None, repr=False)  # 本会话逐帧信道(ws 首次握手 get-or-derive 缓存;跨重连复用 → seq 逐会话连续,见 changes/0061)。repr=False:含密钥,脱敏红线
     rest_window: ReplayWindow | None = field(default=None, repr=False)  # 本会话 REST 防重放滑动窗(首个 REST 请求 lazy 建;与 ws seq 分域独立,见 changes/0062)
 
@@ -53,9 +53,27 @@ class SessionStore:
             return None
         return session
 
-    def revoke(self, session_id: str) -> None:
-        # 吊销单个会话(登出 / 疑似泄露);未知 id 无害幂等。
-        self._by_id.pop(session_id, None)
+    def revoke(self, session_id: str) -> bool:
+        # 吊销单个会话(登出 / 改密后清其它设备);未知 id 无害幂等,返回是否真的吊销了一条。
+        # **摘表项还不够**:活 ws 连接持有的是 Session 对象与从它派生的 SecureChannel,每帧只比对
+        # conn.session.expires_at(receiver 收帧 / sender 出站),从不回头查表——只 pop 的话,已经连着的人
+        # 照样收发,而吊销要防的恰恰是「凭证已泄露、对方可能已连着」。所以就地把对象判死,复用 0070 那条
+        # 既有强制路径:下一帧(任一方向)即关连接 4401。零流量的连接活到下次有活动,同 auth.md 记的例外。
+        session = self._by_id.pop(session_id, None)
+        if session is None:
+            return False
+        session.expires_at = 0.0
+        return True
+
+    def revoke_all_for_name(self, name: str, *, except_id: str | None = None) -> int:
+        # 吊销该登录账号的全部会话(改密自救:旧会话不清,改密就防不住已泄露的 token),返回吊销条数。
+        # except_id 保留当前这一个,免得改密的人自己被踢下线。
+        # 线性扫而不建 name→ids 索引:同类的 rename_nickname 已是同款扫法,规模锁死在线 ≤20;
+        # 索引是第二份事实源,create/lookup 惰性删/prune/revoke 四处都要维护,漂一处就是「吊销不干净」。
+        targets = [sid for sid, session in self._by_id.items() if session.name == name and sid != except_id]
+        for sid in targets:
+            self.revoke(sid)
+        return len(targets)
 
     def rename_nickname(self, name: str, new_nick: str) -> int:
         # 改昵称联动(changes/0065):该登录账号 name 的**全部**会话(含其它设备)nickname 改为 new_nick,

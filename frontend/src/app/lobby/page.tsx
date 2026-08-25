@@ -10,6 +10,7 @@ import {
   fetchLeaderboard,
   fetchProfile,
   fetchRooms,
+  logout,
   type HandRecord,
   type LeaderboardEntry as ApiLeaderboardEntry,
   type RoomMeta,
@@ -177,8 +178,16 @@ export default function LobbyPage() {
   }
 
   const handleLogout = () => {
-    // 断连接之外还要清私聊:它不随离开房间清,只随会话结束清,
-    // 否则换个账号登进来会看到上一个人的私信。
+    // 先告诉服务器吊销这个会话,再清本地。不告诉的话「退出」只是本地假象:服务器上那把
+    // session_token 一直有效到 SESSION_TTL 到期,谁拿到都还能收发(0097 / BUG-8)。
+    //
+    // best-effort:吊销失败(断网、服务器挂了)也照样把人退出去。本地已经清空、ws 也断了,
+    // 卡在这里只会让用户退不出去;那把 token 最坏也就活到自然到期,与修之前同级。
+    //
+    // **顺序是必须的,不是风格**:logout() 同步地读会话、取 seq、封好帧,之后才 await fetch;
+    // 所以它必须排在 endSession() 之前。反过来写的话 requireSession() 会抛,被 catch 吞掉,
+    // 「退出」就又变回只清本地了——而且一声不响。
+    void logout().catch(() => undefined)
     endLocalState()
     endSession()
     router.replace("/")

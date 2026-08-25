@@ -1,4 +1,5 @@
-# 用户资料 REST(rest.md §用户资料;P5 加密信封消费者,见 changes/0062 /user/me、0064 /user/password、0065 /user/nickname)。
+# 用户资料 REST(rest.md §用户资料;P5 加密信封消费者,见 changes/0062 /user/me、0064 /user/password、
+# 0065 /user/nickname、0097 /user/logout)。
 # 信封拆包(open_request:查会话→REST 域密钥→MAC→解密→防重放窗)→ 身份 = 会话 name → 读/写 DB → 信封封回。
 # 错误分层:信封不过=401(secure.py 统一);业务失败(旧密码错·在房=403 / 撞名=409 / 请求畸形=400);基础设施=500。
 # 改昵称是独立工厂 make_nickname_router(需 Presence/conns,依赖面不同,免动 make_profile_router 既有签名)。
@@ -80,7 +81,25 @@ def make_profile_router(
         except Exception:
             log.exception("change_password: write failed")
             raise HTTPException(status_code=500, detail="internal")
+        # 改密即吊销该账号的其它会话(0097 翻掉 0064 的「v1 不吊销」):改密要求旧密码作第二因子,所以
+        # 能走到这里的必是知道旧密码的本人;而「怀疑号被盗 → 改密码」是用户唯一的自救手段,旧会话还活着
+        # 这个手段就等于没有。留下当前 sid,免得把正在操作的人自己踢下线。吊销会就地判死 Session 对象,
+        # 别处那些连接在下一帧被关(4401,见 auth/session.py revoke)。
+        revoked = session_store.revoke_all_for_name(session.name, except_id=req.sid)
+        if revoked:
+            log.info("password changed: revoked %d other session(s)", revoked)  # 不记 name/token(脱敏红线)
         return seal_response(session, seq, {"status": "ok"})
+
+    @router.post("/user/logout", response_model=SecureResponse)
+    async def logout(req: SecureRequest) -> SecureResponse:
+        # 登出(信封内参 {}):吊销发起方自己这一个会话。信封验过 ⇒ req.sid 就是被认证的那个会话句柄。
+        # 幂等:重复登出、或会话已过期,信封那一关先回 401,走到这里必然吊销成功。
+        # 先封响应再吊销:seal_response 用的是会话密钥,而吊销会把这个 Session 判死——虽然 seal 本身不查
+        # expires_at,但顺序写死才不依赖那个巧合,客户端也才一定收得到这次确认。
+        session, seq, _params = open_request(session_store, req, now())  # 信封不过 → 统一 401
+        response = seal_response(session, seq, {"status": "ok"})
+        session_store.revoke(req.sid)
+        return response
 
     return router
 

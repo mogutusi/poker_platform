@@ -119,8 +119,9 @@ export default function SettingsPage() {
       await changePassword(oldPassword, newPassword)
       setOldPassword("")
       setNewPassword("")
-      // 后端明确「改密码不吊销其它会话」(rest.md §用户资料),所以别吓唬用户说要重新登录。
-      setPasswordMsg({ ok: true, text: "密码已更新。当前会话继续有效,下次登录用新密码。" })
+      // 改密会吊销该账号在别处的会话(0097),当前这个留着。要如实说:别处那些设备会被踢回登录页,
+      // 用户得知道是自己这一下造成的,否则对面只看到一句「会话已过期」,对不上因果。
+      setPasswordMsg({ ok: true, text: "密码已更新。你在其它设备上的登录已被退出;当前设备继续有效,下次登录用新密码。" })
     } catch (err) {
       const common = describeCommon(err)
       if (common) setPasswordMsg({ ok: false, text: common })
@@ -236,7 +237,7 @@ export default function SettingsPage() {
           <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">Password</p>
           <p className="text-lg font-semibold text-primary">修改密码</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            要填旧密码:光有会话改不动密码,盗到会话的人也就锁不死你。改完其它设备的登录状态不受影响。
+            要填旧密码:光有会话改不动密码,盗到会话的人也就锁不死你。改完会把你在其它设备上的登录一并退出。
           </p>
           <form onSubmit={handlePassword} className="mt-4 grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">

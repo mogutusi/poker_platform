@@ -95,12 +95,13 @@ POST /hands  信封内 {room?, user?, before?, limit?}  →  {hands: [HandRecord
 
 ## 用户资料 profile —— /user/me 已落地(0062,首个信封消费者)
 
-一句话:三个带身份的端点,全走加密信封;密码和昵称是同步直写 DB,不走 delayDB。
+一句话:四个带身份的端点,全走加密信封;密码和昵称是同步直写 DB,不走 delayDB。
 
 ```
 POST  /user/me            →  信封内 { name, nickname, points }   # 已落地(0062):app/rest/profile.py,points 取 DB(滞后)
-POST  /user/password      →  信封内 { old_password, new_password } → { status:"ok" }  # 已落地(0064):验旧 → 重算 salt$rounds$digest → 同步直写
+POST  /user/password      →  信封内 { old_password, new_password } → { status:"ok" }  # 已落地(0064):验旧 → 重算 salt$rounds$digest → 同步直写;成功即吊销别处会话(0097)
 POST  /user/nickname      →  信封内 { new_nickname } → { status:"ok", nickname }  # 已落地(0065):仅大厅;DB+会话表+连接键三处联动
+POST  /user/logout        →  信封内 { } → { status:"ok" }  # 已落地(0097):吊销当前这一个会话
 ```
 
 **`/user/me`**
@@ -114,8 +115,16 @@ POST  /user/nickname      →  信封内 { new_nickname } → { status:"ok", nic
   1. 先验旧密码(`verify_password`)。这是第二因子,防止盗到 token 的人直接锁死真用户。
   2. 重算 `hash_password(new, PWD_HASH_ROUNDS)`,用新盐。
   3. 同步直写 `db/user_writes.update_password_hash`。鉴权列是 DB 权威、无内存副本,所以不走 delayDB(见 [storage.md](storage.md)「鉴权列写路径」)。
+  4. **吊销该账号其它会话**(0097),留下当前这个。
 - 错误分层:信封不过 → 401;旧密码错、或该账号未启用 → 403;缺参、新密码空、参数非串 → 400;DB 错、会话 name 查无此行 → 500。
-- v1 不吊销其它会话。改密码只防未来登录,现有已认证会话仍有效;撤销需要 name→sessions 索引,记为 future。
+- **改密即吊销其它会话**([0097](refactor/changes/0097-revocation-that-actually-bites.md) 翻掉此前的「v1 不吊销」)。旧说法还附了个错误的前提——「撤销需要 name→sessions 索引」:不需要,同类的 `rename_nickname` 一直是线性扫 `_by_id`,在线 ≤20 的规模下再建索引只是多一份要维护的事实源。吊销会就地判死 `Session` 对象,所以别处那些设备的活 ws 在下一帧被 4401 关掉(见 [auth.md](auth.md) §吊销)。失败(旧密码错)不吊销任何东西。
+
+**`/user/logout`**(0097)
+
+- 内层参数 `{}`,响应 `{"status": "ok"}`。吊销发起方自己那一个会话——信封验过 ⇒ `sid` 就是被认证的会话句柄,不需要也不接受「吊销谁」这种参数。
+- 只吊销自己这一个,不是「退出所有设备」;后者是改密码的语义。
+- 错误分层:信封不过(含 sid 未知/已吊销/已过期)→ 401;此外没有失败臂,幂等。
+- **先封响应再吊销**:响应用会话密钥封回,顺序写死才不依赖「seal 恰好不查 exp」这个巧合。
 
 **`points`**
 

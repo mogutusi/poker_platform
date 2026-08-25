@@ -147,3 +147,23 @@ async def test_recv_frame_ok_before_expiry(monkeypatch):
     monkeypatch.setattr(receiver.time, "time", lambda: 1030.0)  # now < exp
     assert await receiver._recv_frame(conn) is None
     assert conn.ws.closed_code == 4400  # 不是 4401:过期检查放行,倒在 MAC(垃圾帧)
+
+
+async def test_revoked_session_closes_the_live_connection(monkeypatch):
+    # 0097(BUG-8)的整条链:吊销 → 那条**已经连着**的 ws 在下一帧被 4401 关掉。
+    # 这是吊销「真的生效」的判据。只把表项 pop 掉是不够的:conn 持有的是 Session 对象与从它派生的
+    # channel,收发两侧都只比对 conn.session.expires_at、从不回头查表(所以 revoke 必须判死对象)。
+    from app.shell import receiver
+    from app.auth.channel import SecureChannel
+    from app.shell.connection import Connection
+
+    store = SessionStore(ttl_seconds=60)
+    sid, session = store.create("alice", "Alice", now=1000.0)  # exp = 1060,尚未过期
+    channel = SecureChannel.derive(session.token, gameconfig.WS_FRAME_MAX_BYTES)
+    conn = Connection.create(nick="Alice", session_id=sid, ws=_FakeWS(), channel=channel, session=session)
+
+    monkeypatch.setattr(receiver.time, "time", lambda: 1030.0)  # now < exp:不吊销的话这帧走到 open
+    store.revoke(sid)
+
+    assert await receiver._recv_frame(conn) is None
+    assert conn.ws.closed_code == 4401  # 不是 4400:是被判死拦在 open 之前,不是烂帧

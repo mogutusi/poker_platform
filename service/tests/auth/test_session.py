@@ -65,10 +65,46 @@ def test_multiple_sessions_coexist_per_name():
 def test_revoke_removes_and_is_idempotent():
     store = _store()
     sid, _ = store.create("n", "nick", _T0)
-    store.revoke(sid)
+    assert store.revoke(sid) is True  # 真的吊销了一条
     assert store.lookup(sid, _T0) is None
-    store.revoke(sid)  # 幂等,未知 id 无害
-    store.revoke("never-existed")
+    assert store.revoke(sid) is False  # 幂等,未知 id 无害
+    assert store.revoke("never-existed") is False
+
+
+def test_revoke_kills_the_held_session_object():
+    # 摘表项不够(0097):活 ws 连接持有的是 Session **对象**,每帧只比对 conn.session.expires_at
+    # (receiver 收帧 / sender 出站),从不回头查表。只 pop 的话已经连着的人照样收发,而吊销要防的
+    # 恰恰是「凭证已泄露、对方可能已连着」。所以 revoke 必须就地把对象判死,复用 0070 那条强制路径。
+    store = _store()
+    sid, session = store.create("n", "nick", _T0)
+    store.revoke(sid)
+    assert session.expires_at == 0.0  # 判死:任何持有该对象的连接下一帧即被 4401 关掉
+    assert _T0 >= session.expires_at  # 以「过期」的形式表达,才走得进既有的兜底检查
+    assert len(store) == 0  # 「摘表项」那一半:别只判死不摘,否则死会话一直占着表(revoke 是两件事)
+
+
+def test_revoke_all_for_name_spares_current_and_other_accounts():
+    # 改密自救:清该账号其它设备的会话,留下当前这个,不碰别人的。
+    store = _store()
+    keep, keep_session = store.create("alice", "Alice", _T0)
+    other1, s1 = store.create("alice", "Alice", _T0)
+    other2, s2 = store.create("alice", "Alice", _T0)
+    bob, bob_session = store.create("bob", "Bob", _T0)
+
+    assert store.revoke_all_for_name("alice", except_id=keep) == 2
+    assert store.lookup(keep, _T0) is keep_session and keep_session.expires_at > _T0  # 自己还在
+    assert store.lookup(other1, _T0) is None and store.lookup(other2, _T0) is None
+    assert s1.expires_at == 0.0 and s2.expires_at == 0.0  # 那两台设备的活连接也会被踢
+    assert store.lookup(bob, _T0) is bob_session and bob_session.expires_at > _T0  # 别人的会话不受牵连
+
+
+def test_revoke_all_for_name_without_exception_clears_the_account():
+    store = _store()
+    sid_a, _ = store.create("alice", "Alice", _T0)
+    sid_b, _ = store.create("alice", "Alice", _T0)
+    assert store.revoke_all_for_name("alice") == 2  # 不留例外 → 全清
+    assert store.lookup(sid_a, _T0) is None and store.lookup(sid_b, _T0) is None
+    assert store.revoke_all_for_name("nobody") == 0  # 无此账号:0 条,不报错
 
 
 def test_prune_clears_expired_only():

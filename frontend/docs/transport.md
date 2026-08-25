@@ -87,7 +87,7 @@ ws://<host>/ws?sid=<session_id>
 
 ## 五、REST 信封
 
-**每一个端点都要**(`/lobby/rooms`、`/leaderboard`、`/hands`、`/user/me`、`/user/password`、`/user/nickname`):
+**每一个端点都要**(`/lobby/rooms`、`/leaderboard`、`/hands`、`/user/me`、`/user/password`、`/user/nickname`、`/user/logout`):
 
 ```
 POST <endpoint>
