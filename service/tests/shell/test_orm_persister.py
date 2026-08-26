@@ -343,3 +343,17 @@ async def test_persistwriter_requeues_on_orm_failure():
     writer = PersistWriter(buf, OrmPersister(sm), flush_interval_s=0.001, drain_timeout_s=0.5, max_retry=100)
     assert await writer.flush_once() is True
     assert not buf.is_empty()  # 整批回灌,留待重试(毒丸阈值 100,未触发)
+
+
+# ── 已读游标只前进:回拨的写不得覆盖(BUG-11 / 0098)──
+async def test_dm_cursor_never_moves_backwards():
+    # 游标一表三用(未读判据 / 发件人已读回执 / 保留清理),写小了会让已读私信重新变未读被重推、
+    # 让对面看到已读退回未读、让本可删的行赖着不走。唯一写者在同一事务里比较,天然 race-free。
+    sm = await _setup()
+    p = OrmPersister(sm)
+    await p.flush({("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_DM2)}, [])
+    await p.flush({("dm_cursor", "1", "2"): DMReadCursorWrite(reader_uid=1, peer_uid=2, read_through_ts=T_DM)}, [])  # 回拨
+    async with sm() as s:
+        row = await s.get(DMReadCursor, (1, 2))
+    # 断言「停在较新的那个」而不是字面量:比的是两次写的先后关系,改了 T_DM* 的取值也仍然成立
+    assert _naive(row.read_through_ts) == _naive(max(T_DM, T_DM2))

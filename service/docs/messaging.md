@@ -204,6 +204,18 @@
 - 用 shell 盖的墙钟 `created_at` 排序 / 比较,同 [db.md](db.md)「墙钟由 shell 盖」,避开自增 id 跨重启不单调的坑。
 - `msg_id` 只作 `DMWrite` 的 `dedupe_key` + wire 引用。
 
+**游标只前进,且不超过服务器此刻**([0098](refactor/changes/0098-read-cursors-only-move-forward.md))
+
+`read_through` 是客户端回传的,两头都要守——它一表三用,写歪一处三处全歪。
+
+| 方向 | 守在哪 | 不守会怎样 |
+|---|---|---|
+| 不许回拨 | `OrmPersister._upsert_dm_cursor`:旧值已在手、唯一写者、同一事务 ⇒ race-free | 已读私信重新变未读被重推;对面看到已读退回未读;本可删的行赖着不走 |
+| 不许指向未来 | `route_dm_mark_read`:钳到 shell 此刻 | 「什么都读过了」——此后到达的私信永不进登录补收,过保留期还会被 `cleanup_dms` 当「已读且过期」真删掉 |
+
+上界钳在路由层是因为**只有 shell 有墙钟**;下界钳在写层是因为路由读到的旧值可能已被写缓冲超越(delayDB 异步追平)。
+比较一律经 `db/dm_records.as_utc`:游标列是 `DateTime(timezone=True)`,pg 带 tz 回来而 **sqlite 读回丢 tz**,naive 与 aware 直接比会 `TypeError` —— 落在唯一写者里就是整批状态写被毒死、回灌重试永不成功。
+
 **保留期**([0041](refactor/changes/0041-dm-retention-cleanup.md))
 
 - 未读保留直到被读;已读后再留 `DM_READ_RETENTION_SECONDS`,默认 7 天,进 [config.md](config.md)。
@@ -215,8 +227,11 @@
 
 1. 发后未 flush 即崩 → 丢最近几条,同手牌记录。
 2. 极小窗:A 发给离线 B,append 还在缓冲未落库时 B 恰好登录读 DB → 本轮漏但不丢;下个 flush 进 DB,下次拉取或 A 在线时可见。
+3. **同一 flush 窗内的游标回拨仍会生效**(0098 记档,不修):状态写在 `WriteBuffer` 里按键**后写覆盖**,所以同窗内先标读 T2、再标读 T1,进库的是 T1——单调守卫在唯一写者处,它只看得到「库里的旧值」,看不到被覆盖掉的 T2。
+   **后果是保守的**:游标偏小只会让 T1..T2 那几条在下次补收时重发一遍,**绝不会**误删(`cleanup_dms` 要求 `游标 >= created_at`,游标低 = 更不敢删)。窗口至多一个 flush 周期,且正常客户端本就单调上报。
+   不修的理由:要堵它得让路由去读写缓冲里的待落值,等于把「只前进」这条规则复制到第二处;或者给通用的 `WriteBuffer` 加按类型的合并逻辑,破坏它「状态写一律后写覆盖」的单一语义。两者都比这个保守窗口更糟。
 
-要消掉这个窗口可以加「内存未读镜像」,见待定。
+要消掉第 2 条窗口可以加「内存未读镜像」,见待定。
 
 **隐私**
 

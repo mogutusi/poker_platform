@@ -116,7 +116,7 @@ async def load_password_for_change(
         return None if user is None else (user.id, user.hash_password)
 
 
-def _as_utc(dt: datetime) -> datetime:
+def as_utc(dt: datetime) -> datetime:
     # DM 时间戳一律 UTC(shell 盖 datetime.now(timezone.utc))。sqlite 读 DateTime(timezone=True) 丢 tz 标签 → naive;
     # 补回 UTC,使登录补收的 wire 形(DMDelivered.created_at / DMRead.read_through)与实时路径一致(序列化均带 Z,
     # 守 wire-protocol-guide「同形」契约;见 changes/0040 自 review)。postgres 本就返回 aware,此处幂等无害。
@@ -188,7 +188,7 @@ async def list_hands(
             for hid, nick, init, fin in (await session.execute(pstmt)).all():
                 parts.setdefault(hid, []).append((nick, init, fin))
         return [
-            (hid, dk, _as_utc(st), _as_utc(et), pot, tuple(sorted(parts.get(hid, []))))
+            (hid, dk, as_utc(st), as_utc(et), pot, tuple(sorted(parts.get(hid, []))))
             for hid, dk, st, et, pot in hand_rows
         ]
 
@@ -230,7 +230,7 @@ async def load_unread_dms(
             .order_by(DMMessage.created_at)  # 旧→新,客户端按序渲染
         )
         return [
-            (key, nick, text, _as_utc(ts)) for key, nick, text, ts in (await session.execute(stmt)).all()
+            (key, nick, text, as_utc(ts)) for key, nick, text, ts in (await session.execute(stmt)).all()
         ]  # _as_utc:sqlite 读回 naive → 补 UTC,补收 wire 形与实时一致
 
 
@@ -245,4 +245,4 @@ async def load_read_receipts(
             .join(User, User.id == DMReadCursor.reader_uid)  # 取读者显示名
             .where(DMReadCursor.peer_uid == peer_uid)
         )
-        return [(nick, _as_utc(ts)) for nick, ts in (await session.execute(stmt)).all()]  # 同上,补 UTC tz
+        return [(nick, as_utc(ts)) for nick, ts in (await session.execute(stmt)).all()]  # 同上,补 UTC tz

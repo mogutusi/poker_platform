@@ -111,6 +111,7 @@
 
 - `read_through` 回传你收到的 `dm_delivered.created_at`;后端落已读游标,对方在线即回 `dm_read`(见 0039)。
 - 对端不存在 → `error(INVALID_MESSAGE)`;`peer_nick` 是自己 → `error(CANNOT_DM_SELF)`。
+- **游标只前进,且不会超过服务器此刻**(0098):回拨的值服务器不采纳,指向未来的值被钳到「现在」。两者都**不报错**——游标是幂等的进度上报,不是命令。所以 `dm_read` 回执里的 `read_through` 可能**小于**你送的值:那是服务器**实际采纳**的进度,以它为准。
 
 > **`player_action.bet_amount` 是「本街目标总额」,不是增量:**跟注 = 设成当前 `last_bet`,加注 = 设成更大的目标额,all-in = 设成你的全部可用额;`fold`/`check` 不带 `bet_amount`。
 

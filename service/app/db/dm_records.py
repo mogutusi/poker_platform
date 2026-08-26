@@ -23,7 +23,8 @@ class DMWrite(PersistPayload):
 
 @dataclass(frozen=True)
 class DMReadCursorWrite(PersistPayload):
-    # 已读游标(状态写,按 (reader,peer) 覆盖只留最新):某收件人读某对端读到了几时(含)。
+    # 已读游标(状态写,按 (reader,peer) 覆盖):某收件人读某对端读到了几时(含)。
+    # **落库时只前进不后退**(0098):这是状态写里唯一一个不「后写必覆盖」的键,守卫在唯一写者处。
     # 一表两用(见 messaging.md):未读 = 该会话 DMWrite.created_at > read_through_ts;发件人已读回执 = 查 peer=自己 的行。
     reader_uid: int  # 读者(收件人)不可变 User.id —— StateKey 之一
     peer_uid: int  # 对端(发件人)不可变 User.id —— key=("dm_cursor", reader_uid, peer_uid)

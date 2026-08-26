@@ -3,7 +3,7 @@
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.pool import StaticPool
 
@@ -381,3 +381,53 @@ async def test_rename_during_uid_lookup_does_not_lose_dm():
     assert (snap[0].from_uid, snap[0].to_uid, snap[0].text) == (1, 2, "hey")  # 仍按发起时身份落库
     out = drain(bob)
     assert len(out) == 1 and out[0].from_nick == "alice"  # 实时投递也用快照,与落库同源
+
+
+# ── 标读:游标不许指向未来(BUG-11 的另一半,0098)──
+async def test_dm_mark_read_clamps_future_cursor():
+    # 远期游标会让「什么都读过了」:此后到达的私信永不进登录补收,过了保留期还会被 cleanup_dms 真删掉。
+    # created_at 全由 shell 盖钟,客户端回传的值源自服务器发出的 DMDelivered.created_at,故合法值不可能超过此刻。
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns, alice, bob, persist = _both_online()
+    before = datetime.now(timezone.utc)
+    far_future = before + timedelta(days=365)
+
+    await route_dm_mark_read(alice, _mark("bob", far_future), conns=conns, persist=persist, sessionmaker=sm)
+
+    written = persist.snapshot()[0].read_through_ts
+    assert written < far_future  # 没有原样采纳
+    assert before <= written <= datetime.now(timezone.utc)  # 钳到了「此刻」
+    ack = drain(bob)[0]
+    assert ack.read_through == written  # 回执报的是采纳后的值,不是客户端自报的
+
+
+# ── 标读:客户端时刻一律归一成 UTC 之后再落(naive 不炸、带偏移的不许绕过钳位)──
+async def test_dm_mark_read_normalises_client_timestamp_to_utc():
+    # 两件事一起钉:(1) naive 值与 aware 的 now 直接比会 TypeError,靠 as_utc 归一;
+    # (2) **存的必须就是比过的那个值**。原样存一个带 +08:00 的「过去」时刻,sqlite 落库丢 tz 标签、
+    # 只存墙钟数字,读回被当 UTC ⇒ 凭空变成 8 小时后的未来游标,正好绕过钳位(自 review 实测)。
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns, alice, bob, persist = _both_online()
+    naive_past = datetime(2026, 1, 1, 0, 0, 0)  # 无 tzinfo
+
+    await route_dm_mark_read(alice, _mark("bob", naive_past), conns=conns, persist=persist, sessionmaker=sm)
+
+    written = persist.snapshot()[0].read_through_ts
+    assert written.tzinfo is not None and written.utcoffset() == timedelta(0)  # 归一到 UTC,不是原样
+    assert written == naive_past.replace(tzinfo=timezone.utc)  # 同一时刻,只是补上了 tz
+
+
+# ── 标读:带非 UTC 偏移的「过去」时刻不得变成未来游标(自 review 抓到的高危绕过)──
+async def test_dm_mark_read_offset_timestamp_cannot_become_future_cursor():
+    sm = await _seeded_sm({"alice": 1, "bob": 2})
+    conns, alice, bob, persist = _both_online()
+    now = datetime.now(timezone.utc)
+    # 绝对时刻确实在过去(1 分钟前),但用 +08:00 表示:钳位比较通过,原样落库就会跳到 8 小时后
+    shifted_past = (now - timedelta(minutes=1)).astimezone(timezone(timedelta(hours=8)))
+
+    await route_dm_mark_read(alice, _mark("bob", shifted_past), conns=conns, persist=persist, sessionmaker=sm)
+
+    written = persist.snapshot()[0].read_through_ts
+    # 判据用「墙钟数字」而非绝对时刻:sqlite 存的就是这几个数字,读回按 UTC 解读。
+    # 原样落库时它们是 21:xx(未来),归一后才是 13:xx(真的过去)。
+    assert written.replace(tzinfo=timezone.utc) <= now  # 去掉 tz 标签之后仍不在未来 ⇒ 落库读回也不会跳

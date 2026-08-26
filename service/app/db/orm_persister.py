@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
 from app.db.dm_records import DMReadCursorWrite, DMWrite
+from app.db.queries import as_utc
 from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,13 @@ class OrmPersister:
         if existing is None:
             session.add(DMReadCursor(reader_uid=reader, peer_uid=peer, read_through_ts=ts))
         else:
-            existing.read_through_ts = ts  # 后写覆盖:只留最新进度(状态写语义)
+            # **只前进,不后退**(BUG-11/0098):游标是客户端回传的,而它一表三用——未读判据、发件人已读回执、
+            # 保留清理。写小了会让已读私信重新变未读被重推、让对面看到已读退回未读、让本可删的行赖着不走。
+            # 钳在这里是因为唯一写者 + 旧值已在手 + 同一事务 ⇒ 天然 race-free;放路由层则读到的是可能被
+            # 写缓冲超越的旧值(delayDB 异步追平)。比较走 as_utc:sqlite 读回的旧值是 naive,直接比会 TypeError
+            # 毒死整批(见 db/queries.as_utc)。不写 SQL 是因为方言分叉:GREATEST 在 sqlite 没有,max(a,b) 在 pg 是聚合。
+            if as_utc(ts) > as_utc(existing.read_through_ts):
+                existing.read_through_ts = ts
 
     async def _apply_event_write(self, session: AsyncSession, payload: PersistPayload) -> None:
         match payload:

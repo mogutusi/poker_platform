@@ -21,7 +21,7 @@ core 不碰 DB,落库全在 shell。
 
 | 类别 | 语义 | 例子 | 落库 | 能否覆盖 | 键 |
 |---|---|---|---|---|---|
-| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` / 已读游标 `DMReadCursorWrite` | 定向 UPDATE 或 UPSERT | 可覆盖(同键只留最新) | `(table, pk)` |
+| **状态写**(state-write) | 实体「现在的样子」 | 全局积分 `points` / 已读游标 `DMReadCursorWrite` | 定向 UPDATE 或 UPSERT | 可覆盖(同键只留最新);**例外**:已读游标只前进不后退(0098) | `(table, pk)` |
 | **事件写**(append-write) | 「发生过一件事」 | 手牌记录 + 参与者 / 私信 `DMWrite` | INSERT | 不可覆盖(每条都落) | 业务唯一键(幂等) |
 
 归类判据:这条数据描述「实体当前状态」,还是「一次已发生的事实」?拿不准就默认归事件写——覆盖本该追加的数据会静默丢失。
@@ -208,7 +208,7 @@ class DMWrite(BaseModel):
 class DMReadCursorWrite(BaseModel):
     reader_uid: int          # 读者(收件人)User.id —— StateKey 之一
     peer_uid: int            # 对端(发件人)User.id —— key=("dm_cursor", reader_uid, peer_uid)
-    read_through_ts: datetime # 读到此刻为止(含);未读 = created_at > read_through_ts;后写覆盖前写
+    read_through_ts: datetime # 读到此刻为止(含);未读 = created_at > read_through_ts;**只前进不后退**(0098)
 ```
 
 - **墙钟由 shell 盖**:core 不读时钟。`end_time` 产出时为 None,dispatch(shell)盖 `now()` 再进缓冲;`start_time` 是 core 从 `StartHand` 携带进来的值(见 [core.md](core.md))。

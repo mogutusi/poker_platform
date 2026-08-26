@@ -28,7 +28,8 @@ def _state_key(payload: PersistPayload) -> StateKey | None:
             # 全局积分按不可变 uid 覆盖;key 全用 str(匹配 StateKey 类型),真主键在 to_orm 时取 payload.uid 原值。
             return ("user", str(payload.uid))
         case DMReadCursorWrite():
-            # 已读游标状态写:按 (reader,peer) 覆盖只留最新进度(同会话后写盖前写,见 messaging.md / changes/0039)。
+            # 已读游标状态写:按 (reader,peer) 覆盖(同会话后写盖前写,见 messaging.md / changes/0039)。
+            # 注意缓冲层照旧「后写覆盖」;**单调性守在落库处**(0098),故同一 flush 窗内的回拨仍会生效(已记档为保守窗口)。
             return ("dm_cursor", str(payload.reader_uid), str(payload.peer_uid))
         case HandRecordWrite():
             return None  # 手牌记录是事件写,逐条追加(dedupe_key 幂等,内存不去重)

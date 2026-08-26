@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app import gameconfig
 from app.core.errors import Err, ErrorCode
 from app.db.dm_records import DMReadCursorWrite, DMWrite
-from app.db.queries import load_read_receipts, load_uids_by_nicks, load_unread_dms
+from app.db.queries import as_utc, load_read_receipts, load_uids_by_nicks, load_unread_dms
 from app.shell.connection import Connection, ConnectionManager
 from app.shell.persist import WriteBuffer
 from app.wire import client as wire_client
@@ -115,12 +115,23 @@ async def route_dm_mark_read(
             ErrorMessage.from_err(Err(ErrorCode.INTERNAL, f"用户 {reader_nick} 无 DB 账号行"))
         )
         return
+    # 游标不许指向未来(BUG-11 的另一半,0098):`created_at` 全由 shell 盖钟,客户端回传的值源自它收到的
+    # `DMDelivered.created_at`,所以合法游标不可能超过此刻。不钳的话,一个远期游标会让「什么都读过了」——
+    # 此后到达的私信永远不进登录补收,过了保留期还会被 cleanup_dms 当「已读且过期」真删掉(未读永不删的保护
+    # 就此失效)。
+    # **先归一再取小,存的必须就是比过的那个值**:客户端送的可能是 naive、也可能带非 UTC 偏移。sqlite 落
+    # `DateTime(timezone=True)` 时**丢掉 tz 标签、只存墙钟数字**,所以原样存一个 `+08:00` 的「过去」时刻,
+    # 读回来会被当成 UTC —— 凭空变成 8 小时后的未来游标,恰好绕过这里的钳位(自 review 实测,见 changes/0098)。
+    # 两步都不能省:`as_utc` 只给 naive 补标签,`astimezone` 才把带别的偏移的值真正换算到 UTC。
+    # 只做前者的话,一个 `+08:00` 的合法过去时刻会原样落库 → 丢标签 → 读回当 UTC → 跳到 8 小时后。
+    now = datetime.now(timezone.utc)  # shell 盖墙钟(同 route_direct_message)
+    read_through = min(as_utc(msg.read_through).astimezone(timezone.utc), now)
     persist.put(
-        DMReadCursorWrite(reader_uid=reader_uid, peer_uid=peer_uid, read_through_ts=msg.read_through)
-    )  # 状态写:按 (reader,peer) 覆盖只留最新进度
+        DMReadCursorWrite(reader_uid=reader_uid, peer_uid=peer_uid, read_through_ts=read_through)
+    )  # 状态写:按 (reader,peer) 覆盖只留最新进度;回拨由唯一写者挡(见 orm_persister._upsert_dm_cursor)
     peer = conns.get(msg.peer_nick)  # 发件人(对端)在线判断
     if peer is not None:  # 在线 → 实时回执(尽力而为,同 DMDelivered)
-        _try_deliver(peer, DMRead(reader_nick=reader_nick, read_through=msg.read_through))  # 同用快照
+        _try_deliver(peer, DMRead(reader_nick=reader_nick, read_through=read_through))  # 回执报采纳后的值,别报客户端自报的
 
 
 async def deliver_dm_catch_up(

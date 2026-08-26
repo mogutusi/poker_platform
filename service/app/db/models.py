@@ -67,4 +67,4 @@ class DMReadCursor(SQLModel, table=True):
     peer_uid: int = Field(foreign_key="user.id", primary_key=True)  # 对端(发件人)不可变账号主键(FK → user.id)
     read_through_ts: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
-    )  # 读到此刻为止(含);后写覆盖前写(状态写,只留最新进度)
+    )  # 读到此刻为止(含);状态写,但**只前进不后退**——落库时比旧值更晚才写(0098,见 orm_persister._upsert_dm_cursor)
