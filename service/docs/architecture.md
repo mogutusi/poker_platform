@@ -184,7 +184,7 @@ reduce 按 world 的真相分三类处理:
 
 ## 客户端协议契约(单一事实源 + 代码生成)
 
-wire 消息(`ServerMessage`/`ClientMessage`)只在后端 Pydantic 写一份,前端 TS 类型自动生成,不手写第二份。反例就在手边:[frontend/src/types/poker.ts](../../frontend/src/types/poker.ts) 的 `chips`/`phase` 已经和后端 enum 漂移,原因就是手写。
+wire 消息(`ServerMessage`/`ClientMessage`)只在后端 Pydantic 写一份,前端 TS 类型自动生成,不手写第二份。**这条规矩是有代价换来的**:[frontend/src/types/poker.ts](../../frontend/src/types/poker.ts) 里手写过一份协议形状,两种漂移各出了一次——`Player.chips` 是**字段名**对不上(后端叫 `points`),`GameState.phase` 是**枚举取值**对不上(后端是 `pre_flop`/`flop`/…)。那份手写件已于 [0099](refactor/changes/0099-retire-the-mockup-types.md) 删除(数引用时发现它零消费者),`poker.ts` 现在只剩牌面渲染用的 `Card`。
 
 - 每条消息带一个 `type` 字面量,构成可辨识联合(discriminated union),Pydantic 与 TS 一一对应。
 - 后端 Pydantic 是唯一事实源,TS 由 codegen 产出。ws 消息走自包含的 Python 生成器 [scripts/gen_wire_ts.py](../scripts/gen_wire_ts.py),不依赖 node;REST 走 OpenAPI 加 `openapi-typescript`(P7)。治理与缘由见 [wire.md](wire.md)。消息清单在 .py 及其生成产物里,不在文档里。

@@ -11,7 +11,7 @@
 一句话:只 import `frontend/src/types/wire.gen.ts`,别的都不是协议。
 
 - 它是后端 Pydantic 自动生成的 TS 类型:只 import,绝不手改——改了下次 codegen 会覆盖,而且后端有漂移守门测试。
-- 旧的手写 `src/types/poker.ts` 不是协议,是 UI mockup 聚合类型 + 本地 mock 牌局逻辑;协议一律改用 `wire.gen.ts`。
+- `src/types/poker.ts` **不是协议**,现在只剩牌面渲染用的 `Card`。它曾经还装着一份手写的协议形状(`Player`/`GameState`…)和一套本地 mock 牌局逻辑——mock 逻辑随 [0078](refactor/changes/0078-frontend-table-wiring.md) 接线时删除,手写类型随 [0099](refactor/changes/0099-retire-the-mockup-types.md) 删除(数引用发现零消费者)。协议一律来自 `wire.gen.ts`。
 
 `wire.gen.ts` 里有四类东西:
 
@@ -233,10 +233,12 @@
 
 > 登录补收对前端透明:(重)连上后,后端会主动私发两类消息,你不用发任何请求——你离线期间的未读 `dm_delivered`(顺序旧→新),以及别人读你消息的 `dm_read`。它们与在线实时消息同形,按 `msg_id` 去重即可。
 
+> 前端 WS client 与组件消费**已交付**([0078](refactor/changes/0078-frontend-table-wiring.md) 起 store 即按 `wire.gen.ts` 写,本地 mock 牌局逻辑同批删除;`poker.ts` 的手写协议残留随 [0099](refactor/changes/0099-retire-the-mockup-types.md) 清完)。此前本节把它列在「还没有」里,是 0078 之后没回来改的陈迹。
+
 **还没有**
 
 - REST DTO 的 TS 生成。本机无 node,`openapi-typescript` 待解(见 [wire.md](wire.md))。后果:§10 各端点的形状暂以后端 `.py` 为准;手写调用时别把它们塞进 `wire.gen.ts`,那是 ws codegen 的只读产物。
-- 前端 WS client / 组件消费本身。用 `wire.gen.ts` + 本指南实现,替换 mock 的 `poker.ts`。
+
 
 ## 9. 怎么连
 

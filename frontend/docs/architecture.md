@@ -59,7 +59,7 @@ REST 走另一条路,只用于事后查询和账号操作:排行榜、手牌历�
 
 `src/types/poker.ts` 是 UI 自己的展示类型(牌面渲染等),**不是协议类型**。两者不许混:凡是和服务器交换的数据,类型来自 `wire.gen.ts`。
 
-> 历史包袱:`poker.ts` 里的 `chips`/`phase` 早已和后端 enum 漂移(后端是 `pre_flop`/`flop`/…,见 `HandStatus`)。接线时把协议面全部换成 `wire.gen.ts`,`poker.ts` 只留纯 UI 用途。
+> 这条曾经被破坏过:`poker.ts` 里手写过一份协议形状,两种漂移各出一次——`Player.chips` 是**字段名**对不上(后端叫 `points`),`GameState.phase` 是**枚举取值**对不上(后端是 `pre_flop`/`flop`/…,见 `HandStatus`)。**已于 [0099](../../service/docs/refactor/changes/0099-retire-the-mockup-types.md) 清理**——数引用发现那几个接口(以及唯一用到它们的 `PlayerSeat` 组件)零消费者,协议面早就走 `wire.gen.ts` 了,于是连同死代码一并删除。`poker.ts` 现在只剩 `Card`。
 
 ## 身份不进报文
 

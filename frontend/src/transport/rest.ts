@@ -4,6 +4,7 @@
 // 牌局操作一律走 ws,不在这里。
 
 import { bytesToHex, bytesToUtf8, hexToBytes, openFrame, sealFrame, utf8ToBytes } from '@/crypto'
+import type { RoomStatus } from '@/types/wire.gen'
 import { API_BASE_URL } from './config'
 import { nextRestSeq, requireSession } from './session'
 
@@ -18,7 +19,7 @@ export interface RoomMeta {
   max_seats: number
   seated: number
   watching: number
-  status: 'pending_start' | 'hand_started'
+  status: RoomStatus  // 取 codegen 产物,不手抄字面量:抄一份就是第二处会漂的协议事实源(0099)
 }
 
 export interface LeaderboardEntry {

@@ -4,7 +4,7 @@
 
 一句话:本文只管协议怎么治理,不列字段。
 
-具体消息(字段、类型)只写在后端 Pydantic(.py),由 codegen 生成前端 TS,是单一事实源;不在本文或前端手写第二份——写进 md 必然和代码漂移,反例:手写的 [frontend/src/types/poker.ts](../../frontend/src/types/poker.ts) 里 `chips`/`phase` 已和后端 enum 漂移。
+具体消息(字段、类型)只写在后端 Pydantic(.py),由 codegen 生成前端 TS,是单一事实源;不在本文或前端手写第二份——写进 md 必然和代码漂移。**前车之鉴**:[frontend/src/types/poker.ts](../../frontend/src/types/poker.ts) 曾手写过一份协议形状,很快就漂了两处——`Player.chips` 字段名对不上(后端叫 `points`),`GameState.phase` 枚举取值对不上(后端是 `pre_flop`/…);那几个接口后来被证实一个消费者都没有,已随死代码删除([0099](refactor/changes/0099-retire-the-mockup-types.md))。教训仍然成立:手写第二份就会漂。
 
 本文只定五件事:codegen 管线、消息形状约定、隐私红线、与 `Command`/`Event` 的对应、演进规则。
 
