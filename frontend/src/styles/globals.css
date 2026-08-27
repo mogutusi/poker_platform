@@ -3,6 +3,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* v4 是 CSS-first 配置:v3 的 tailwind.config.js 不再被读取(0101 已删)。
+   这里只留**还在用的**那一个 token —— layout.tsx 根容器的渐变起始色。
+   其余 poker 系列、card 系列与两个动画,在 0099 删掉 Chip.tsx 之后已零引用,一并随配置文件删除。 */
+@theme {
+  --color-poker-green: #0f5132; /* 牌桌绿:全站根容器渐变起点 */
+}
+
 :root {
   /* Texas Poker Theme - Rich casino colors */
   --background: oklch(0.12 0.02 30); /* Deep dark brown/black */

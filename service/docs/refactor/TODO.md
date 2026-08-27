@@ -159,8 +159,8 @@
 - [x] **0080·B** 界面上验加注与 min-raise — **0088 补齐 min-raise**(下限上 wire 后,浏览器里「别人大额加注之后不填金额直接点 Raise」被服务器接受,输入框的 `min` 也断言成服务器给的那个数);**0085 做掉加注**:`e2e/raise.spec.ts` 在真浏览器里输入金额点 Raise,断言两边底池都变大(广播回来的,不是本地画的);顺带发现**底池从来没渲染过**(`state.pot` 算了不用),已补。**余**:三人以上与边池的**界面**表现仍未验(界面只显示一个总底池,不显示分层)
 - [x] **0079·B** 断线重连在浏览器里验 — **0087 完成**:`e2e/reconnect.spec.ts` 两个用例(掉线重连 / 同账号别处登录)。seq 跨重连继续累加与快照对齐**本来就对**,被验证的是它们;而**一次抓出四个缺陷**:每次重连都把自己从座位上退下来(`ALREADY_IN_ROOM` 被当成「挂在别的房间」)、开局底池显示 0、整轮 preflop 的跟注都发成 `bet(0)` 被拒(前端自己推「换街即清零」,而开局那条 `PRE_FLOP` 上盲注已下)、被顶替后两边无限互顶(顶替关闭码是 1000,客户端分不出掉线,新增 **4409**)。顺带发现 `showdown.spec.ts` 是假绿的(推进循环一路空转到 `ACTION_TIMEOUT`),已改真
 - [x] **0076·M7** 协议面换 `wire.gen.ts`,`poker.ts` 退回纯 UI 用途 — **0099 已完成,但登记的判断与实际不符**:协议面**基本早就换完了**(store 的 `room.ts`/`dm.ts`/`joinFlow.ts` 一直用 `wire.gen.ts`;`game/page.tsx` 的 `Seat`/`SeatPlayer` 是本地视图模型,带 `avatar` 这种 wire 上没有的字段,不是协议类型)。自 review 另抓出 `transport/rest.ts` 里一份手抄的 `RoomStatus` 字面量,已改引 codegen。而被反复记档的 `chips`/`phase` 漂移**只活在零引用的死代码里**——`Player`/`GameState`/`GameAction`/`ApiResponse`/`WebSocketMessage` 五个接口 + 唯一用到 `Player` 的孤儿组件 `PlayerSeat`(及其专属的 `Chip`)。所以这条不是重构而是删除,删完 `poker.ts` 只剩 `Card`(牌面渲染,architecture.md 明确允许)
-- [ ] **0076·M3** Tailwind 配置 v3/v4 并存:`globals.css` 已是 v4(`@import "tailwindcss"`),`tailwind.config.js` 仍是 v3 风格且 v4 不自动读它 → 加 `@config` 或迁进 CSS 的 `@theme` 并删文件(`components.json` 也仍指着它)
-- [ ] **0076·M4** `layout.tsx` 的 `import '/src/styles/globals.css'` 用根绝对路径,不稳;惯用写法是 `'@/styles/globals.css'`(合并前本仓那句 `'./styles/globals.css'` 本就是坏的)。待有 node 能验证时改
+- [x] **0076·M3** Tailwind 配置 v3/v4 并存 — **0101 已修**,而且**不只是整洁性**:v4 不读那份 v3 配置 ⇒ 全站根容器的 `from-poker-green` 一直是死的(实证:改前 `.next` 产物里 grep `0f5132` **0 命中**,改后 1 命中,渐变一直只有后半截生效)。整份配置只有这一个 token 被引用,其余在 0099 删 `Chip.tsx` 后已零引用 ⇒ 迁进 `@theme` 一个、删文件、`components.json` 置空
+- [x] **0076·M4** `layout.tsx` 的根绝对 import — **0101 已改**成 `'@/styles/globals.css'`(与 M3 同批,`tsc` + `build` + 16 浏览器用例复验)
 - [ ] **0076·M5/M6**(low)`package.json` 声明约 50 个 Radix 包、实际只用 2 个,可裁剪;`src/pics/poker-room.png` 单张 3.4M,建议转 WebP/AVIF
 
 ## 前端页面与功能(0081 起)— 台账见 [changes/0081](changes/0081-lobby-hub-settings-history-dm.md)
