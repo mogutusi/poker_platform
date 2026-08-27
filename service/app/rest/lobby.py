@@ -1,4 +1,4 @@
-# REST 大厅房间列表(lobby.md「房间列表(REST 读)」/ rest.md)。GET /lobby/rooms → [RoomMeta]。
+# REST 大厅房间列表(lobby.md「房间列表(REST 读)」/ rest.md)。POST /lobby/rooms → {"rooms": [RoomMeta]}(0094 起走信封)。
 #
 # 这是**唯一读 `world` 的 REST 端点**:房间花名册/头数是内存权威、从不落库(storage.md 房态不持久),DB 里没有;
 # 其余 REST(leaderboard/hands/profile)读的是结算后落库的数据,才守 rest.md「只读 DB」。读的是 committed world:

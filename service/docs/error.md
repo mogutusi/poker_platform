@@ -38,7 +38,6 @@ class ErrorCode(str, Enum):
     ALREADY_IN_ROOM = "ALREADY_IN_ROOM"   # 已在别的房间(单房间约束,见 lobby.md/user.md)
     NO_SUCH_ROOM = "NO_SUCH_ROOM"         # JoinRoom 目标房不存在
     ROOM_FULL = "ROOM_FULL"               # JoinRoom 满座
-    CANT_CHANGE_NICK_IN_ROOM = "CANT_CHANGE_NICK_IN_ROOM"   # 在房间内不能改昵称(见 rest.md/lobby.md)
     INTERNAL = "INTERNAL"
     # 权威清单以 app/core/errors.py 为准,本块是示意。实现还有 NOT_IN_ROOM/SEAT_TAKEN/
     # NOT_YOUR_SEAT/INVALID_STATUS_TRANSITION/HAND_IN_PROGRESS/ILLEGAL_ACTION/

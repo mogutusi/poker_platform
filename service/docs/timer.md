@@ -46,7 +46,7 @@ def now() -> float:
 
 @dataclass
 class _ActionDeadline:
-    nickname: str
+    nick: str
     hand_seq: int       # 这一手的房内单调号 = hand.seq;与 room/epoch 一起构成 Timeout 的身份(0090)
     epoch: int          # 回合新鲜度判据 = core.md 的 hand.epoch(每次行动推进/街道切换自增),防误触
     fire_at: float
@@ -59,19 +59,19 @@ class Timer:
         self._liveness: dict[str, float] = {}            # nick -> 到期时刻(按 nick 单键,见上)
 
     # ── 游戏层:由 GameLoop.dispatch 调用(reduce 产出 TurnChanged / ClearAction)──
-    def on_turn_changed(self, room, nickname, hand_seq, epoch, timeout_s=None):
+    def on_turn_changed(self, room, nick, hand_seq, epoch, timeout_s=None):
         s = gameconfig.ACTION_TIMEOUT if timeout_s is None else timeout_s
-        self._action[room] = _ActionDeadline(nickname, hand_seq, epoch, now() + s)   # 同房间覆盖 = 取消上一回合
+        self._action[room] = _ActionDeadline(nick, hand_seq, epoch, now() + s)   # 同房间覆盖 = 取消上一回合
 
     def clear_action(self, room):
         self._action.pop(room, None)
 
     # ── 连接层:断线装表 / 重连拆表(0070;调用方只知 nick、不读 world)──
-    def arm_cleanup(self, nickname):        # 断线时刻起算占座窗口(Receiver 退出 / dispatch 踢慢客户端)
-        self._liveness[nickname] = now() + gameconfig.LIVENESS_TIMEOUT
+    def arm_cleanup(self, nick):        # 断线时刻起算占座窗口(Receiver 退出 / dispatch 踢慢客户端)
+        self._liveness[nick] = now() + gameconfig.LIVENESS_TIMEOUT
 
-    def cancel_cleanup(self, nickname):     # 窗口内重连/顶替:拆表(竞态漏拆由 reduce OFFLINE staleness 兜)
-        self._liveness.pop(nickname, None)
+    def cancel_cleanup(self, nick):     # 窗口内重连/顶替:拆表(竞态漏拆由 reduce OFFLINE staleness 兜)
+        self._liveness.pop(nick, None)
 ```
 
 配套事件属 [architecture.md](architecture.md) 的 Event B 组:同步派发、不走队列。dispatch 把 `TurnChanged(room, acting_nick, hand_seq, epoch)` 路由到 `on_turn_changed`,把 `ClearAction(room)` 路由到 `clear_action`。
@@ -87,11 +87,11 @@ class Timer:
             t = now()
             for room, d in list(self._action.items()):
                 if t >= d.fire_at:
-                    self._inbox.put_nowait(Timeout(nickname=d.nickname, room=room, hand_seq=d.hand_seq, epoch=d.epoch))
+                    self._inbox.put_nowait(Timeout(nick=d.nick, room=room, hand_seq=d.hand_seq, epoch=d.epoch))
                     del self._action[room]                    # 一次性,触发即删
             for nick, fire_at in list(self._liveness.items()):
                 if t >= fire_at:
-                    self._inbox.put_nowait(Cleanup(nickname=nick))   # 同上,不带 room
+                    self._inbox.put_nowait(Cleanup(nick=nick))   # 同上,不带 room
                     del self._liveness[nick]
 ```
 
@@ -102,12 +102,12 @@ staleness = 「这条命令还新鲜吗」。Timer 永远可能投出已过期�
 ```python
 # reduce 处理 Timeout:这条队是为「哪一手的哪一回合」排的?三项全等才算新鲜
 if room.hand is None or work.room_name != cmd.room or room.hand.seq != cmd.hand_seq \
-        or not is_still_acting(room.hand, cmd.nickname, cmd.epoch):
+        or not is_still_acting(room.hand, cmd.nick, cmd.epoch):
     return [], None                 # 换房 / 换手 / 回合已推进 → 过期,忽略
 # 仍是该回合该玩家 → 执行默认动作(能 check 则 check,否则 fold)
 
 # reduce 处理 Cleanup:仍离线才退筹释座
-if room.users_in_room.get(cmd.nickname) is not UserStatus.OFFLINE:
+if room.users_in_room.get(cmd.nick) is not UserStatus.OFFLINE:
     return [], None                 # 已重连 → 忽略
 ```
 

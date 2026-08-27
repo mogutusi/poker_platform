@@ -101,14 +101,14 @@ POST /lobby/rooms 信封内 {} → {rooms: [RoomMeta]}   # app/rest/lobby.py:lis
 - 实时头数与状态读的是已 committed 的 `world.rooms[r]`。它只读、只用于展示、允许滞后一拍,不参与实时判定。这是唯一读 `world` 的 REST 端点,见 [storage.md](storage.md) 与 [rest.md](rest.md) §共同原则。
 - 投影函数 `list_rooms` 纯同步、无 `await`,所以相对唯一写者 GameLoop 是原子读,不会读到撕裂状态。这与 [presence.md](presence.md) 的只读范式相同。
 - v1 由客户端轮询,人数 ≤20,几秒一次足够。实时推送(`LobbyBroadcast`)见「待定」。
-- `RoomMeta` 是 REST DTO,不是 `Room`:完整游戏状态(`deck`、`hand`、各人筹码)绝不上 lobby,见 [wire.md](wire.md)。它不进 ws 的 `ServerMessage` 联合,所以也不进 `wire.gen.ts`;前端的 REST 类型走 openapi,P7 因无 node 环境待解,见 [changes/0048](refactor/changes/0048-rest-lobby-rooms.md)。
+- `RoomMeta` 是 REST DTO,不是 `Room`:完整游戏状态(`deck`、`hand`、各人筹码)绝不上 lobby,见 [wire.md](wire.md)。它不进 ws 的 `ServerMessage` 联合,所以也不进 `wire.gen.ts`;前端的 REST DTO 目前**手写**在 [frontend/src/transport/rest.ts](../../frontend/src/transport/rest.ts)(枚举字段仍从 codegen 产物 `wire.gen.ts` 取,不手抄字面量,见 0099)。`openapi-typescript` 管线仍未接——但**原先「本机无 node」的理由自 0077 起不成立**(已装 Node 24);真正的阻塞见 [rest.md](rest.md)「共同原则 4」:0094 之后 OpenAPI 里只剩信封,DTO 在密文内层。
 - dev 环境明文、无鉴权,与 dev 的 ws 端点一致:它只暴露房间配置和头数,没有隐私。P5 加密信道上线时,按 [rest.md](rest.md)「REST 走会话密钥信封」补齐;不用 JWT(0057)。
 
 ## 改昵称(你的决策:只能不在房间时)—— 已落地(0065)
 
 只有在大厅才能改昵称。
 
-- 判据:nick 不在 `world.users`。在房间内一律拒绝:REST 返回 403;ws 侧的 `CANT_CHANGE_NICK_IN_ROOM` 错误码保留给未来的 ws 形态。
+- 判据:nick 不在 `world.users`。在房间内一律拒绝:REST 返回 403;改昵称目前**只有 REST 形态**,在房即 403;**`ErrorCode` 里并没有** `CANT_CHANGE_NICK_IN_ROOM` 这个成员,将来真开 ws 形态时再加。
 - 原因:`nickname` 是 `world` 的键,座位、`contributed`、ConnectionManager 都按它索引,正在用的时候改会导致键错乱。
 - 落点见 [0065](refactor/changes/0065-p7-change-nickname.md):REST `POST /user/nickname`,走加密信封,直接改 DB、会话表和连接键,不经 reduce。下一次 `JoinRoom` 自然就用新 nick 当键。详见 [rest.md](rest.md) §用户资料。
 
@@ -123,5 +123,5 @@ POST /lobby/rooms 信封内 {} → {rooms: [RoomMeta]}   # app/rest/lobby.py:lis
 
 - 建房余项。包括:建房时自定盲注/买入/座位,做法是往 `join_room` 报文加 `create` 字段让创建者设参,现在用的是 `gameconfig` 默认值加建后调参;房名冲突与命名规则;建房数量上限。本规模是内网 ≤20 人,暂不设这些限制。
 - 实时房间列表推送。新增 `LobbyBroadcast(msg)` 事件,由 dispatch 发给所有大厅连接,即那些 nick 不在 `world.users` 的连接;建房、销房时增量推送。v1 先用轮询 `POST /lobby/rooms`(0048;0094 起走信封)。
-- 离桌中途在局的精确处理:接 [timer.md](timer.md) 的 `Cleanup` 与弃牌规则。
-- messaging(私聊 + 房聊):见 [messaging.md](messaging.md)。完整 presence 只读视图仍待单列。
+
+- messaging(私聊 + 房聊)与 presence 均已落地,不再是待定:房聊 0021/0033/0036/0071、私聊 0038-0041(见 [messaging.md](messaging.md));presence 只读视图 0037,已单列成 [presence.md](presence.md)。

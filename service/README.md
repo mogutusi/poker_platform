@@ -108,7 +108,8 @@ The unauthenticated `/dev/ws?nick=` shortcut was retired in refactor 0086.
 ```bash
 poetry env activate
 uvicorn app.shell.lifespan:app
-# → http://127.0.0.1:8000  (preset dev users: alice/bob/carol/dave/eve/frank)
+# → http://127.0.0.1:8000  (10 seeded dev users: alice/bob/carol/dave/eve/frank for manual work;
+#    smoke1..3 reserved for the smoke scripts, gina for browser cases — do not reuse across suites)
 ```
 
 If this does not work, **open a new terminal** and try again.

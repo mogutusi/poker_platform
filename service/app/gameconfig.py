@@ -9,7 +9,7 @@
 # 路径锚定本模块目录(不依赖 CWD;测试/alembic/uvicorn 的工作目录不保证是 service/)。
 #
 # 访问接口:`from app import gameconfig` → `gameconfig.ACTION_TIMEOUT`(经模块 __getattr__ 委托单例 config,
-# 见文件末;保持 0018 起的调用接口不变)。与基础设施配置 app/config.py(DATABASE_URL/JWT…,另一轨)分开。
+# 见文件末;保持 0018 起的调用接口不变)。与基础设施配置 app/config.py(DATABASE_URL,另一轨)分开。
 
 from pathlib import Path
 from typing import Literal

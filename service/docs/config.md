@@ -58,8 +58,8 @@ class Timer:
 相关落地:
 
 - `SetSmallBlind`/`SetBuyIn` 的盲注与买入上下限(`MIN/MAX_SMALL_BLIND`、`MIN/MAX_BUY_IN`)已随该命令补入(0043,见 [changes/0043](refactor/changes/0043-room-config-commands.md)),由 shell 在进 reduce 前防护,因为 core 不 import config。
-- 基础设施的 `DATABASE_URL` 收编进另一轨 `app/config.py`(0045,见 [changes/0045](refactor/changes/0045-infra-config.md) + [dev.md](dev.md)「两套配置文件」)。JWT 等随 P5 处理。
-- 默认值哲学分三档:游戏参数(gameconfig)无默认,缺值即崩;基础设施 `DATABASE_URL` 有安全的 dev 默认,缺省是 sqlite,不配 `.env` 也能跑;未来的密钥(JWT)必须无默认,fail-closed。
+- 基础设施的 `DATABASE_URL` 收编进另一轨 `app/config.py`(0045,见 [changes/0045](refactor/changes/0045-infra-config.md) + [dev.md](dev.md)「两套配置文件」)。P5 最终没有引入 JWT(身份从解密得出,见 [auth.md](auth.md) / 0057),所以这一轨至今只有 `DATABASE_URL`。
+- 默认值哲学分三档:游戏参数(gameconfig)无默认,缺值即崩;基础设施 `DATABASE_URL` 有安全的 dev 默认,缺省是 sqlite,不配 `.env` 也能跑;日后若真加密钥类配置,必须无默认、fail-closed(P5 没有引入 JWT,见上)。
 - 原型 `app/pokertable/gameconfig.py` 已于 0027 拆除。
 
 ## 新增一个可调参数 = 改三处,只有一处是「值」

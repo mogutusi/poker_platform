@@ -1,15 +1,16 @@
 # 基础设施配置(单一事实源 = service/.env,见 config.md / dev.md「两套配置文件」)。
 #
 # 与游戏可调参数 app/gameconfig.py(poker.env,另一轨)分开:那是「换房/换策略想调的数」,这是
-# 「DATABASE_URL / 未来 JWT 等基础设施/密钥」。
+# 「DATABASE_URL 等基础设施/密钥」。
 #
 # 默认哲学(与 gameconfig 相反,有意):
 #   - gameconfig 字段**无默认** → 缺值启动即崩(游戏参数必须显式)。
 #   - 本模块 DATABASE_URL **有安全 dev 默认**(None → 消费方套本地 sqlite)→ 免 .env 也能跑迁移/dev(dev.md)。
-#   - **但未来密钥(JWT_SECRET,P5)必须无默认(fail-closed)**:密钥缺失应启动即拒,不能偷偷跑一个空密钥。
+#   - **日后若真加密钥类字段,必须无默认(fail-closed)**:密钥缺失应启动即拒,不能偷偷跑一个空密钥。
+#     (P5 最终**没有**引入 JWT——身份从解密得出,见 0057/auth.md;所以这一轨至今只有 DATABASE_URL。)
 #
 # headless 约束(alembic 也 import 本模块的 settings 解析 DATABASE_URL,见 alembic/env.py):
-#   P5 给 Settings 加必填字段时,**必须给默认或拆到独立 settings 类**,以保 alembic 在无该密钥时仍能跑迁移
+#   日后给 Settings 加必填字段时,**必须给默认或拆到独立 settings 类**,以保 alembic 在无该密钥时仍能跑迁移
 #   (迁移是基础设施工具,只需库 URL,不应被应用密钥阻塞)。现仅 DATABASE_URL(有默认)→ 完全 headless-safe。
 
 from pathlib import Path

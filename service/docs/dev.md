@@ -10,7 +10,7 @@
 
 | 文件 | 谁读 | 装什么 |
 |---|---|---|
-| `service/.env`(模板 `.env.example`) | [app/config.py](../app/config.py) 的 `Settings`(0045);[app/db/engine.py](../app/db/engine.py) 与 [alembic/env.py](../alembic/env.py) 也经它读 | `DATABASE_URL`(缺省 sqlite,所以没有 `.env` 也能跑)、未来 JWT 等基础设施/密钥(随 P5 加入,无默认值) |
+| `service/.env`(模板 `.env.example`) | [app/config.py](../app/config.py) 的 `Settings`(0045);[app/db/engine.py](../app/db/engine.py) 与 [alembic/env.py](../alembic/env.py) 也经它读 | `DATABASE_URL`(缺省 sqlite,所以没有 `.env` 也能跑)。**目前就这一个**——P5 最终没有引入 JWT(身份从解密得出,见 0057);日后若真加密钥类字段,必须无默认、fail-closed |
 | `service/app/poker.env`(本地覆盖,可选)+ `service/app/poker.env.example`(提交基线) | [app/gameconfig.py](../app/gameconfig.py) 的 `GameConfig(BaseSettings)`;读 `env_file=(poker.env.example, poker.env)` 两层,后者覆盖前者(0042) | 盲注/买入/超时/队列等游戏可调参数(见 [config.md](config.md));字段没有代码默认值,用 `Field` 定边界 |
 
 两个纪律:`.env` / `poker.env` 都不进 git,`*.example` 提交;`poker.env.example` 不只是模板,还是 gameconfig 的实际加载基线(0042),带 canonical 真值——这里的真值是游戏参数,不是密钥,改字段要同步回它。
@@ -31,7 +31,7 @@ poetry install
 poetry add <pkg>
 poetry add --group dev pytest pytest-asyncio   # 开发依赖(见 testing.md)
 
-# 跑东西(工作目录 service/)。原型入口 app.main 已于 0027 删;当前可跑的是明文 dev shell。
+# 跑东西(工作目录 service/)。原型入口 app.main 已于 0027 删;当前可跑的是 dev shell(逐帧加密,无明文捷径)。
 poetry run uvicorn app.shell.lifespan:app   # 推荐;先 POST /user/login 换 sid,再连 ws://127.0.0.1:8000/ws?sid=<sid>
 poetry env activate                          # 或先激活、再裸跑命令
 .venv/bin/uvicorn app.shell.lifespan:app     # 或直接点名 venv 可执行(等价)
@@ -57,7 +57,7 @@ lock 文件:`poetry.lock` 要提交,别人 `poetry install` 才能复现同样�
 - `ts` 为当前 epoch 秒,须落在 `LOGIN_REPLAY_WINDOW_SECONDS` 窗内;`client_nonce` 每次新随机(0063 重放守卫)。
 - `DEV_PASSWORD`/`DEV_KUSER` 放在 `poker.env`,仅 dev 用,不是生产密钥。
 
-ws 双端点并存(0061):`?sid=` 是加密端点,登录后使用;`?nick=` 是明文端点,dev 脚手架,前端切到加密后退役。
+ws 只有一个端点 `/ws?sid=`:登录换 sid 后连,逐帧加密(0061 接线;明文 `?nick=` 已随 0086 退役,没有明文回退路)。
 
 ### K_user 管理(P5,changes/0066)
 
@@ -144,7 +144,7 @@ ws 双端点并存(0061):`?sid=` 是加密端点,登录后使用;`?nick=` 是明
 ### 绝不提交(已在 [.gitignore](../../.gitignore))
 
 - `*.env` / `.env` / `poker.env`、`*.key`、`.venv/`、`__pycache__/`、`node_modules/`、`original_password.txt`。
-- 秘密零容忍:`K_user`、`session_token`、密码、`JWT_SECRET` 任何形式都不进 git,同 [log.md](log.md) 脱敏红线;新增秘密文件先加 `.gitignore`。
+- 秘密零容忍:`K_user`(含 `DEV_KUSER` 与 DB 里的 `k_cur`/`k_prev`)、`session_token`、密码任何形式都不进 git,同 [log.md](log.md) 脱敏红线;新增秘密文件先加 `.gitignore`。
 - 改配置项提交的是 `*.example`,不含真值;真值留在本地 `.env`/`poker.env`(同 [config.md](config.md))。
 
 ### 认证(一次性设置)

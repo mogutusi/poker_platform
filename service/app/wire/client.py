@@ -86,7 +86,7 @@ class JoinRoom(ClientMessage):
 
 class FetchRoomChat(ClientMessage):
     type: Literal["fetch_room_chat"] = "fetch_room_chat"
-    room: str  # 要拉历史的房名;shell 不读 world 无法解析当前房,故带房名(同 JoinRoom),走 shell 直服务(见 changes/0036)
+    room: str  # 要拉历史的房名;免去读 world 解析「他在哪」,也允许拉任意房的历史(同 JoinRoom),走 shell 直服务(见 changes/0036/0071)
 
 
 class DirectMessage(ClientMessage):

@@ -15,7 +15,7 @@ poetry install                              # 装依赖(按 poetry.lock 精确�
 .venv/bin/uvicorn app.shell.lifespan:app --host 0.0.0.0   # 起服务,默认端口 8000
 ```
 
-起来之后服务**自动**完成:建本地 SQLite 库(`service/poker.db`)→ 建表 → 种好 6 个 dev 用户(`alice`/`bob`/`carol`/`dave`/`eve`/`frank`,各 1000 积分)。不需要跑迁移、不需要建号。
+起来之后服务**自动**完成:建本地 SQLite 库(`service/poker.db`)→ 建表 → 种好 **10 个** dev 用户(各 1000 积分):`alice`/`bob`/`carol`/`dave`/`eve`/`frank` 手动联调用,`smoke1`/`smoke2`/`smoke3` 归冒烟脚本、`gina` 归浏览器用例**专用**——别混用(局中离房要等手牌打完才驱逐,复用账号会让下一个用例进不去房,见 frontend/docs/dev.md)。不需要跑迁移、不需要建号。
 
 > **数据库定位别误会**:设计目标库是 **PostgreSQL**([docs/architecture.md](docs/architecture.md) 技术栈固定,驱动 psycopg3 已随 `poetry install` 装好);"什么都不配就用本地 SQLite"只是 0045 定的**开发便利**(新检出零配置能跑测试/快速联调),不是换了设计。真跑 PostgreSQL 见 §2。
 
@@ -38,8 +38,8 @@ echo 'DATABASE_URL=postgresql+psycopg://user:pass@host:5432/poker' > .env
 ## 3. 验证它活着(三连)
 
 ```bash
-curl http://127.0.0.1:8000/lobby/rooms     # → [](空数组,房间是动态建的)
-curl http://127.0.0.1:8000/leaderboard    # → dev 用户的积分列表
+# 注意:0094 之后**没有明文端点了**,上面这两个 curl 一律回 405。要手工打 REST,
+# 用 frontend/scripts/smoke-client.mjs 的 restCall()(它带信封);验活最省事的是直接跑冒烟。
 cd service && .venv/bin/pytest -q          # 可选:全量测试(约 6 秒)
 ```
 

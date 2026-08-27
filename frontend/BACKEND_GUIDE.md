@@ -67,7 +67,7 @@ Python 参考实现:算法本体在 [`lib/ttxsgm/ttxsgm/`](../lib/ttxsgm/ttxsgm/
 
 | 密钥 | 从哪来 | 干什么 |
 |---|---|---|
-| **`K_user`** | 管理员私下发给用户(微信/当面),**用户在登录界面手动输入**;绝不写死在前端代码、绝不存 localStorage | 只在登录时用一次:加密密码、解密登录响应 |
+| **`K_user`** | 管理员私下发给用户(微信/当面),**用户在登录界面手动输入**;绝不写死在前端代码。本仓前端把它缓存在 `localStorage`——`K_user` 每周轮换,每次登出都重输摩擦太大;这是**有意的取舍,安全性尚未定案**(共享机器 vs 手输摩擦),见 service/docs/auth.md §会话过期 | 只在登录时用一次:加密密码、解密登录响应 |
 | **`session_token`** | 登录响应里下发(32 字节) | 登录后一切流量的密钥源;**只放内存**,刷新页面就重新登录 |
 
 `K_user` 每周轮换。如果登录响应里 `rotate: true`,说明用户输的是**上一代**密钥(还在几天的宽限期内)——登录照常成功,但你应该提示用户"密钥即将失效,请尽快改用管理员新发的密钥"。
@@ -211,7 +211,7 @@ cd service
 .venv/bin/uvicorn app.shell.lifespan:app        # http://127.0.0.1:8000
 ```
 
-- 首次启动自动建 SQLite 库并种好 dev 用户(`alice`/`bob`/`carol`/`dave`/`eve`/`frank`,各 1000 积分)。
+- 首次启动自动建 SQLite 库并种好 **10 个** dev 用户(各 1000 积分):`alice`/`bob`/`carol`/`dave`/`eve`/`frank` 手动联调用,`smoke1`/`smoke2`/`smoke3` 归冒烟脚本、`gina` 归浏览器用例**专用**——别混用(局中离房要等手牌打完才驱逐,复用账号会让下一个用例进不去房,见 frontend/docs/dev.md)。
 - **登录**:dev 用户账号 = 昵称,密码和 K_user 是共享的 dev 值(在 `service/app/poker.env.example` 里的 `DEV_PASSWORD`/`DEV_KUSER`;仅开发用)。登录换到 `sid` 后连 `ws://127.0.0.1:8000/ws?sid=<sid>`。
 - 想开两个人对打:用**不同的 dev 账号**——同一账号第二次登录会顶掉第一条连接(见 §2)。
 - REST **不能**再用裸 `curl` 验了(0094 起没有明文端点):最省事的办法是照 `frontend/src/transport/rest.ts` 的 `postSealed` 走一遍,或用 `frontend/scripts/smoke-client.mjs` 的 `restCall`。
@@ -225,7 +225,7 @@ cd service
 - ❏ REST 401 直接弹"请重新登录" → 先换 seq 重试一次再说(可能只是重放误判)。
 - ❏ 前端本地算牌局结果(能不能 check、谁赢)→ 只信服务器消息。
 - ❏ 把 `acting_position` 当座位号用 → 它是 `players[]` 下标。
-- ❏ `session_token` / `K_user` 存 localStorage → 只准放内存。
+- ❏ `session_token` 存 localStorage → 它只准放内存(`K_user` 是有意的例外,见 §4.2)。
 - ❏ 手改 `wire.gen.ts` → 下次生成就被覆盖,想改类型去改后端 `.py`。
 
 ## 9. 想深入时读什么

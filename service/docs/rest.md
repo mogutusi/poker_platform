@@ -36,7 +36,7 @@
 
 **4. wire/DTO 同源**
 
-- REST 响应模型也是 Pydantic,经 OpenAPI → TS 生成,前端不手写(见 [wire.md](wire.md))。
+- REST DTO **没有** TS 生成,和 ws 不同。0094 把每个端点收进信封后,OpenAPI 里只剩 `SecureRequest`/`SecureResponse`——真正的请求/响应形状在密文内层,schema 看不见,`openapi-typescript` 这条路等于关掉了。前端按 `app/rest/*.py` 的字段注释手写(枚举仍从 `wire.gen.ts` 取,见 0099),别塞进 `wire.gen.ts`。
 
 ## 排行榜 leaderboard —— 已落地(0050)
 
@@ -156,4 +156,4 @@ POST  /user/logout        →  信封内 { } → { status:"ok" }  # 已落地(00
 - 排行榜含桌上筹码的「总身家」:需读 `world`,或把 `in_game_points` 也落库。本规模先不做。
 - 统计维度:胜率、手数、盈亏曲线。基于手牌记录聚合,加查询即可。
 - 资料扩展:头像、签名等。非游戏权威字段放 DB,不进 `UserState`(见 [user.md](user.md))。
-- REST 加密:走会话密钥信封(见 [changes/0057](refactor/changes/0057-p5-unified-encrypted-channel-design.md))。日后上 wss 可整套拆除。
+- 日后若上 wss(反代 + 自动证书),这套应用层信封可整套拆除。**REST 加密本身早已不是待定**:0062 建机制、0094 全量收编,见本文开头「共同原则」。

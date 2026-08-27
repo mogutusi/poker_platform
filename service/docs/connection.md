@@ -150,7 +150,7 @@ class Dispatcher:                                        # 持 world(只读)/con
 
 详见 [auth.md](auth.md),加密路落地见 [0061](refactor/changes/0061-p5-ws-secure-channel-wiring.md)。
 
-客户端 `ws connect ?sid=<session_id>`,不带 room_id;`SessionStore.lookup` 得 `nickname`/`token`,查不到或过期 → ws 关闭码 4401 拒掉,不建 `Connection`。通过后 get-or-derive 会话 `SecureChannel`,建 `Connection(channel=…)`;第一帧 MAC 验过即证明持有 token,伪造/重放首帧 → `FrameError` → 关连接。dev 明文路 `?nick=`(无信道)并存。
+客户端 `ws connect ?sid=<session_id>`,不带 room_id;`SessionStore.lookup` 得 `nickname`/`token`,查不到或过期 → ws 关闭码 4401 拒掉,不建 `Connection`。通过后 get-or-derive 会话 `SecureChannel`,建 `Connection(channel=…)`;第一帧 MAC 验过即证明持有 token,伪造/重放首帧 → `FrameError` → 关连接。`?sid=` 是**唯一** ws 入口——明文 `?nick=` 已于 0086 退役(见上「P5 已全部落地并收尾」)。
 
 `sid` 是公开句柄,嗅探者拿它只能连上顶替、搞 DoS 式干扰:无 token 就造不出合法帧、也读不了密文,故在威胁模型外。「首帧验证前不登记」是后续硬化项(见 0061)。
 
@@ -261,9 +261,9 @@ reduce 收到 `Disconnect` 分三类:
 
 > 非优雅崩溃丢进行中手牌和未 flush 的积分变更。积分非货币,本规模接受(见 [storage.md](storage.md))。
 
-### dev shell(明文脚手架)
+### dev shell(加密端点 + dev 种子)
 
-`shell/lifespan.py` 的 `DevShell.setup()` 启动序:async engine(缺省 `sqlite+aiosqlite`)→ `create_all` 建表(dev 引导,无 Alembic;生产用迁移)→ 幂等种子 dev 用户进 DB → 建空 `world` → `OrmPersister` 落库 → 起 GameLoop/Timer/PersistWriter → 挂 `/dev/ws`。见 [changes/0018](refactor/changes/0018-d-dev-shell.md) / [0029](refactor/changes/0029-p4-db-backed-dev-shell.md)。
+`shell/lifespan.py` 的 `DevShell.setup()` 启动序:async engine(缺省 `sqlite+aiosqlite`)→ `create_all` 建表(dev 引导,无 Alembic;生产用迁移)→ 幂等种子 dev 用户进 DB → 建空 `world` → `OrmPersister` 落库 → 起 GameLoop/Timer/PersistWriter → 挂加密 ws 端点 `/ws`(0086 起唯一入口)。见 [changes/0018](refactor/changes/0018-d-dev-shell.md) / [0029](refactor/changes/0029-p4-db-backed-dev-shell.md)。
 
 关闭 `DevShell.stop()` 反序四步(细节见 [0046](refactor/changes/0046-lifespan-drain.md)):cancel Timer + GameLoop → 同步排空 inbox → cancel PersistWriter + `await drain()`(有界,超 `DB_DRAIN_TIMEOUT_MS` → CRITICAL)→ cancel 各 Sender + `engine.dispose()`。
 
@@ -283,7 +283,7 @@ per-join 载入已落地([0030](refactor/changes/0030-p4-per-join-wire-load.md))
 
 ## 待定 / 未设计
 
-- **大厅 / 房间管理(lobby)**:见 [lobby.md](lobby.md)。已设计:连接模型 2(连接只绑 nick、不绑房间)、`JoinRoom`/`LeaveRoom`、房间列表 REST、静态预置房;动态建房仍待定。
-- **私聊 / 房聊(messaging)**:已落地(房聊 0021/0033/0036;私聊发/读游标/登录补收/保留清理 0038-0041),设计见 [messaging.md](messaging.md)。本文只约定路由(`conns.get(nick)`);shell 侧的 DM 路由 / 房聊环形缓冲写读 / 登录补收尚缺本文正式章节(待补)。
+- **大厅 / 房间管理(lobby)**:见 [lobby.md](lobby.md)。**已全部落地**:连接模型 2(连接只绑 nick、不绑房间)、`JoinRoom`/`LeaveRoom`、房间列表 REST(0048;0094 起走信封)、**动态建房**(0049:房不存在即建、最后一人离开即销毁)。**静态预置房已被删除**,不是「已设计」——见 [lobby.md](lobby.md)「没有静态预置房间」。本节余下真正待定的只有实时推送 `LobbyBroadcast`,以及建房自定参 / 房名规则 / 建房上限。
+- **私聊 / 房聊(messaging)**:已落地(房聊 0021/0033/0036;私聊发/读游标/登录补收/保留清理 0038-0041),设计见 [messaging.md](messaging.md)。本文只约定路由(`conns.get(nick)`);**决定不在本文另开章节**:shell 侧的 DM 路由、房聊历史直服务、登录补收都写在 [messaging.md](messaging.md)(私聊 0038-0041、房聊 0021/0033/0036);本文只约定「按 nick 路由、不进 GameLoop」这条边界。另注:**「房聊环形缓冲」这个 shell 组件 0071 起已不存在**,历史改挂 `Room.chat_history`。
 - **wire 协议清单**:`ClientMessage`/`ServerMessage` 全集 + `StateSnapshot` 字段已写(`app/wire/client.py`/`server.py` + codegen `wire.gen.ts`),治理见 [wire.md](wire.md)。本文只约定路由,不定报文字段。
-- **背压上限取值**:`inbox` / `outbound` 队列大小、慢客户端判定阈值进 [config.md](config.md),具体值实测定。
+- **背压上限的实测校准**:`INBOX_MAX` / `OUTBOUND_MAX` 早已进配置(声明见 `app/gameconfig.py`,取值见 `app/poker.env.example`);慢客户端没有独立阈值,判据就是 `outbound` 满。仍开着的只有一件:当前值按 ≤20 人规模拍定,**没做过压测校准**。

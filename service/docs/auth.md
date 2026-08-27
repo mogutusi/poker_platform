@@ -255,7 +255,7 @@ mac_key = KDF_sm3(session_token + b"\x02", 32)   # ws HMAC-SM3
 - Receiver 收二进制帧走 `open`,Sender 用 `seal` 出站;core/reduce 全程不知有加密。
 - ws 的 selector 落在握手 URL 的 `?sid=`,逐帧省略——连接已绑会话,`open` 只收 `iv‖ct‖mac`。REST 无连接上下文,才逐请求带 selector,落地形是 JSON `{sid, frame}`,其中 `frame`=hex(iv‖ct‖mac)。上面「报文=selector‖iv‖ct‖mac」是概念形,ws 帧不含 selector。
 - 客户端契约:同一会话跨重连须保留 ws seq,仅新登录换会话才重置。否则重连首帧 seq 回退,会被 `stale_seq` 拒。
-- 另:dev 明文 `?nick=` 端点并存,前端切加密后退役。
+- 另:dev 明文 `?nick=` 端点**已于 [0086](refactor/changes/0086-retire-plaintext-endpoint.md) 退役**(前端加解密落地即满足既定退役条件);`/ws?sid=` 是唯一 ws 入口。
 
 ### REST 信封([0062](refactor/changes/0062-p5-rest-envelope-user-me.md))
 

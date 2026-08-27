@@ -76,7 +76,7 @@ public/cards/     54 张牌面图
 cd service && .venv/bin/python -m uvicorn app.shell.lifespan:app --reload
 ```
 
-前端默认连 `http://localhost:8000`,可用 `NEXT_PUBLIC_API_URL` 覆盖。dev 阶段后端还留着明文 `?nick=` 的 ws 端点,但**前端一律走加密端点**,不用明文那条(它会随前端切完加密退役)。
+前端默认连 `http://localhost:8000`,可用 `NEXT_PUBLIC_API_URL` 覆盖。后端只有加密 ws 端点 `/ws?sid=`(明文 `?nick=` 已随 0086 退役),**没有明文回退路**——加密层跑不通就连不上。
 
 ### 端到端冒烟
 

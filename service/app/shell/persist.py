@@ -2,7 +2,8 @@
 # - WriteBuffer:双缓冲,状态写按键覆盖(同键只留最新)、事件写逐条追加;两个生产者(GameLoop.dispatch +
 #   未来私信路由)同步 put(无 await,守不变量 3)。
 # - PersistWriter:唯一消费者,周期「先 swap 同步取走清空,再 await 落库」;失败回灌(更新者优先)、毒丸、优雅 drain。
-#   落库后端抽象在 Persister 协议之后(真实现 to_orm+session 留 P4 三;dev 用 NullPersister 丢弃)。
+#   落库后端抽象在 Persister 协议之后:真实现是 db/orm_persister.OrmPersister(0028 落地,dev 与生产都用它);
+#   NullPersister 是协议的空实现,**只给测试用**(生产路径自 0029 起无条件接 OrmPersister)。
 
 import asyncio
 import logging
