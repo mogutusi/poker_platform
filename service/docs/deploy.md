@@ -234,7 +234,17 @@ journalctl -u poker-backend -o cat | jq 'select(.level=="WARNING" or .level=="ER
 
 **任何 `alembic upgrade/downgrade` 之前先 `pg_dump`**([db-migrations.md](db-migrations.md) §2 的规矩)。
 
-### 6.4 升级(拉新代码)
+### 6.4 积分调整(充值 / 纠错)
+
+平台**没有**管理员积分工具(未竟清单在册),现实姿势是直改 DB——但有一个硬前提:
+
+```sql
+UPDATE "user" SET points = points + 500 WHERE nickname = '<玩家>';
+```
+
+**只能在该玩家不在任何房间时改**。积分是内存权威:他在房里时权威值在服务器内存,离房结算的 `PointsWrite` 会把你的直改整个覆盖掉;不在房时 DB 就是唯一事实,下次 `join_room` 经载入屏障读到新值,**不用重启**(这套机制 0107 实证过)。判断在不在房:让他退出房间即可,或挑深夜改。
+
+### 6.5 升级(拉新代码)
 
 ```bash
 cd /opt/poker_platform && git pull
