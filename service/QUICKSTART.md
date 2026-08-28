@@ -1,6 +1,7 @@
 # QUICKSTART:git pull 之后把后端跑起来
 
 > 目标读者:在另一台机器上 `git pull` 完想立刻把服务跑起来的人。
+> **要的是生产部署(systemd / PostgreSQL / 备份 / 迁移)而不是快跑?** 看 [docs/deploy.md](docs/deploy.md)。
 > 设计上这个仓库是**零配置可跑**的——不需要手工创建任何 `.env`(原因见 §5),首跑只有两步。
 
 ## 1. 首次跑(新机器)

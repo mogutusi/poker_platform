@@ -1,6 +1,6 @@
 # 开发环境:依赖(Poetry)与迁移(Alembic)
 
-本文是项目专属的开发/运维约定,补充根目录 [README.md](../README.md) 的基础命令,重点讲本仓库 env.py 与配置的接线和坑。
+本文是项目专属的开发/运维约定,补充根目录 [README.md](../README.md) 的基础命令,重点讲本仓库 env.py 与配置的接线和坑。**生产部署(Ubuntu + PostgreSQL + systemd + 备份/迁移)另见 [deploy.md](deploy.md)**。
 
 环境:Python ≥ 3.12、PostgreSQL、psycopg3、SQLModel、Alembic、Poetry。
 
