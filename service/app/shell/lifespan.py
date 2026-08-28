@@ -132,7 +132,7 @@ class DevShell:
         self.world = build_dev_world()
         self.dispatcher = Dispatcher(self.world, self.conns, self.persist, self.timer, self.inbox)
         self.gameloop = GameLoop(self.world, self.inbox, self.dispatcher)
-        self.presence = Presence(self.world, self.conns)  # 只读聚合,持稳定 world 引用(commit 原地改其 .users/.rooms)
+        self.presence = Presence(self.world)  # 只读聚合,持稳定 world 引用(commit 原地改其 .users/.rooms)
 
     def start(self) -> None:
         # 起 GameLoop + Timer + PersistWriter(须先 await setup() 建好 gameloop)。三者都是不该返回的常驻循环,

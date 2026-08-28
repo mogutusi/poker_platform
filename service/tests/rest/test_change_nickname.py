@@ -44,7 +44,7 @@ def _wiring(world=None):
     # 组一套 presence/conns(默认空 world = 全员大厅)。
     world = world if world is not None else make_world(rooms={}, users={})
     conns = ConnectionManager()
-    return Presence(world, conns), conns
+    return Presence(world), conns
 
 
 def _endpoint(router):

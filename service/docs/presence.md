@@ -20,19 +20,26 @@ presence 是只读的「谁在线 / 在哪个房 / 什么状态」视图,不是�
 2. 只用于展示或软判定。实时游戏裁定一律在 reduce 内做。
 3. 容忍滞后一拍。`commit` 是替换引用,单线程下读到的要么是旧的、要么是新的,不会撕裂。
 
-这与 [rest.md](rest.md) 的「REST 读房间人数」是同款约定,presence 的作用是把零散读法收口成统一只读 API。
+这与 [rest.md](rest.md) 的「REST 读房间人数」是同款约定。presence 当初的设想是把零散读法收口成统一只读 API;实际只有「在哪个房」这一个问题真的需要收口(见下)。
 
-已落地([changes/0037](refactor/changes/0037-presence.md)):[`Presence(world, conns)`](../app/shell/presence.py) 类,四个只读方法,持稳定 `world` 引用——安全,因为 `commit` 原地替换 `world` 的 `.users`/`.rooms`,每次读到的都是最新提交态。
+已落地([changes/0037](refactor/changes/0037-presence.md)):[`Presence(world)`](../app/shell/presence.py) 类,持稳定 `world` 引用——安全,因为 `commit` 原地替换 `world` 的 `.users`/`.rooms`,每次读到的都是最新提交态。
 
 ```python
 class Presence:                       # app/shell/presence.py
-    def is_online(self, nick) -> bool:          return self._conns.get(nick) is not None
     def current_room(self, nick) -> str | None: return (u.room if (u := self._world.users.get(nick)) else None)
-    def room_headcount(self, room) -> int:      return len(r.users_in_room) if (r := self._world.rooms.get(room)) else 0
-    def online_nicks(self) -> set[str]:         return self._conns.online_nicks()
 ```
 
-两个判定的定义:在线 = 有 live 连接;在房 = `current_room` 非 None,大厅用户不在 `world.users` 里(见 [lobby.md](lobby.md))。两者正交:可以在线但在大厅,也可以在房但 OFFLINE。
+**现在只剩这一个方法。** 0037 当初还给了 `is_online` / `room_headcount` / `online_nicks`,设想是「lobby/messaging/rest/好友共用」;实际到 [0102](refactor/changes/0102-presence-keeps-the-one-method-that-has-a-caller.md) 为止**一个生产调用都没长出来**,而且核实下来**也不该长**:
+
+- `rest/lobby.py` 要的是 `seated`(占座)与 `watching`(观战)两个**更细**的量,不是 `room_headcount` 的成员总数;
+- `messaging.py` 判在线要的是**连接对象本身**(拿去投递),不是布尔;
+- `online_nicks` 是对 `ConnectionManager` 的纯转发,而 `lifespan` 关连接时直接调它才是对的(那是连接生命周期,不是投影)。
+
+所以三者按「不留死代码」删掉;删完 `Presence` 就不再需要 `ConnectionManager`,构造签名也随之收成 `Presence(world)`。**要用时从 git history 取回**,别凭空再造。
+
+> **名字比行为宽**:它现在只答「在哪个房」,不答「在不在线」。没改名是因为 [architecture.md](architecture.md) 不变量 2 的豁免名单、本篇、以及多处交叉链接都点名 presence,改名要一起动而收益纯文字。
+
+「在房」的定义:`current_room` 非 None;大厅用户不在 `world.users` 里(见 [lobby.md](lobby.md))。它与「在线」正交——可以在线但在大厅,也可以在房但 OFFLINE;**判「在线」现在直接问 `ConnectionManager`**。
 
 ## 改昵称:在房判定 + 连接重挂(填 [rest.md](rest.md) 的坑)
 

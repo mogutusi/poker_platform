@@ -131,8 +131,8 @@
 | ~~BUG-12(N-e10/N-e11)~~ | ~~db-migrations.md 的示例配置照抄会启动崩溃,且违反自家铁律~~ —— **0095 已修**(文档层)。**顺带更正登记的措辞**:0072 原文说的是违反自家 **create_all-vs-Alembic** 铁律,不是「配置铁律」——config.md / coding_principle.md 的配置铁律这篇一条都没违反。N-e10:sqlite 示例 URL 照抄进 `.env` 会崩(两个消费方方言形不同),现已写明并改掉示例;N-e11:那条「生产绝不靠 create_all」在代码里无路径可守(lifespan 无条件 `create_all`),现已把口径改实并给出正确顺序 |
 | ~~BUG-13(N-e16)~~ | ~~`_evict` 不清 `waive_entry_for` → 离房再进仍享免盲~~ —— **0096 已修**(`_evict` **只**剔除该 nick,离房各路一并覆盖;回归测钉到筹码面:离房重进要真付入局 BB,同批被免的其他人不受牵连。在座者掉线/起身不弃权,观战者掉线即离场故随离房弃权,论证见 [0096](changes/0096-leaving-forfeits-free-entry.md))|
 | ~~BUG-14(N-e26)~~ | ~~`scripts/scripts.py` 孤儿脚本~~ —— **0092 已删** |
-| BUG-15(N-e34) | `NullPersister` 无生产消费者 —— **0100 核实后建议改判**:它有两个**测试**消费者(`test_persist_writer.py`),是 `Persister` 协议的空实现/测试替身,「只被测试用」不等于死代码。真正错的是文档:`db.md` 说「dev 用 `NullPersister` 直接丢弃」,而 0029 起 `DevShell` 无条件用 `OrmPersister`(该注释 0100 已改实)。**是删类还是改判成「文档说假话」,留待决定** |
-| BUG-16(N-e35) | `Presence` 的三个方法零消费者 —— **0100 核实为真**:`current_room` 有生产调用(改昵称流程 ×2),`is_online`/`room_headcount`/`online_nicks` 只有测试调用。删之前要先答「有没有谁本该用它」(例如 `rest/lobby.py` 是否在手算 headcount),那是设计判断、不是清理,故未并入 0100 |
+| ~~BUG-15(N-e34)~~ | ~~`NullPersister` 无生产消费者~~ —— **0102 改判结案,不删**:它有两个**测试**消费者,是 `Persister` 协议的空实现/测试替身,「只被测试用」不是死代码。**真正的缺陷是文档说假话**(`db.md` 与 `persist.py` 头注都写「dev 用 NullPersister」,而 0029 起 `DevShell` 无条件用 `OrmPersister`),那两处 0100 已改实 ⇒ 本条实际已修完 |
+| ~~BUG-16(N-e35)~~ | ~~`Presence` 的三个方法零消费者~~ —— **0102 已删**(`is_online`/`room_headcount`/`online_nicks`),留下唯一有生产调用的 `current_room`。删前先答了「有没有谁本该用它」:**没有**——lobby 要的是 seated/watching 两个更细的量,messaging 要的是连接对象本身,`online_nicks` 是纯转发。删完 `Presence` 不再需要 `ConnectionManager`,签名收成 `Presence(world)` |
 | ~~BUG-17(N-e36)~~ | ~~`profile.py` 手抄 `_NICKNAME_MAX_LEN`~~ —— **0092 已修**(改为从 `db/models.py` 的 schema 取,带「跟随 schema」的回归测)|
 | ~~BUG-18(C3)~~ | ~~`rest/lobby.py` 手抄 `big_blind=2*`~~ —— **0092 已修**(改引 `blinds.BIG_BLIND_MULTIPLE`,断言改成派生关系)|
 
