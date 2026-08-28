@@ -47,6 +47,12 @@ export interface NickAmount {
   amount: number;
 }
 
+export interface SeatStack {
+  seat_position: number;
+  nickname: string;
+  points: number;
+}
+
 export interface SeatView {
   seat_position: number;
   nickname: string;
@@ -114,6 +120,7 @@ export interface HandEnded {
   type: "hand_ended";
   winnings: NickAmount[];
   refunds: NickAmount[];
+  stacks: SeatStack[];
 }
 
 export interface UserStatusChanged {

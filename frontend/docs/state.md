@@ -13,9 +13,9 @@
 | `HandStarted` | 新一手开始:清上一手的展示、设置盲注位与行动者;底池取 `pot`(**盲注已下,不是 0**)|
 | `HoleCards` | 私发,只给自己:填自己的两张底牌 |
 | `HandStatusChanged` | 街道推进,带新发的公共牌,以及**本街的 `last_bet` 与 `players[]`**——照抄,别自己推「换街了所以清零」(开局那条 `pre_flop` 上盲注已经在桌上,推错会让整轮 preflop 跟注发成 0,见 [changes/0087](../../service/docs/refactor/changes/0087-reconnect-and-displacement-in-browser.md))|
-| `PlayerActed` | 某人行动:更新其筹码/状态、底池、下一个行动者 |
+| `PlayerActed` | 某人行动:更新其筹码/状态、底池、下一个行动者。座位卡片显示的筹码按「在手取 `players[].points`,不在手取 `seats[].points`」合并——服务器快照就是这个口径(`reduce.py` `_state_snapshot`),0106 之前前端只读 seats,座位数字整手牌不动 |
 | `HandShowDown` | 摊牌:这是**唯一**会出现别人底牌的地方。被亮出来的座位要真的**翻面**——渲染成牌背等于把这条事件白收了(0105 之前正是如此)|
-| `HandEnded` | 结算:各家筹码回座。**注意它不是「清屏」信号**:清上一手的展示挂在 `HandStarted`(见上),`HandEnded` 到达后摊牌结果要留在桌上,见下 |
+| `HandEnded` | 结算:各家筹码回座——**结算后的座位筹码就在 `stacks` 里,照抄进 seats(按昵称匹配),别拿 winnings/refunds 去加**(0106 / BUG-20)。**注意它不是「清屏」信号**:清上一手的展示挂在 `HandStarted`(见上),`HandEnded` 到达后摊牌结果要留在桌上,见下 |
 | `UserJoined` / `UserLeft` / `UserStatusChanged` | 房间成员与状态 |
 | `PlayerBoughtIn` | 某人买入 |
 | `RoomConfigChanged` | 盲注/买入额被改 |

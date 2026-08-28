@@ -296,6 +296,10 @@ def test_leave_allin_player_can_still_win_then_evicted():
     assert not hasattr(pw[0], "hole_cards")
     # 守恒:A 退回全局 100 + B 桌上 50 == 锁入 150
     assert 100 + room.seats[1].points == 150
+    # stacks 按**参与者**给,含本手离桌者(BUG-20):A 的座位此刻已释放,但他的结算值(=退回全局
+    # 的那笔)必须在场——同批随后的 UserLeft 会在客户端把座位移掉,顺序无害
+    ended = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandEnded))
+    assert {x.nickname: x.points for x in ended.stacks} == {"A": pw[0].points, "B": room.seats[1].points}
 
 
 # ════════ ④.3 局中坐出 → 延到本手结束才转 SITTING_OUT ════════

@@ -52,6 +52,7 @@ from app.wire.server import (  # core 投影直接产 wire DTO(models.md);Broadc
     PlayerBoughtIn,
     PlayerView,
     RoomConfigChanged,
+    SeatStack,
     SeatView,
     ShowdownReveal,
     StateSnapshot,
@@ -513,12 +514,15 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     assert room is not None
     participants: list[ParticipantWrite] = []
     settled_status: list[tuple[str, int, UserStatus, bool]] = []  # 手尾状态转移(带 new_here),逐个广播(见下)
+    stacks: list[SeatStack] = []  # 结算后的座位筹码,随 HandEnded 上 wire(BUG-20):与 final_points 同循环同源
     for p in hand.players:
         s = room.seats[p.seat_position]
         assert s is not None
         initial = s.in_game_points  # 开局锁入快照
         s.points += p.points  # p.points 已含赢得 / 退还
         s.in_game_points = 0
+        # 含本手离桌者(与 participants 同集合):他们的 UserLeft 在同批随后到达并释放座位,顺序无害
+        stacks.append(SeatStack(seat_position=p.seat_position, nickname=p.nickname, points=s.points))
         # 手牌记录含全部参与者(离桌者也参与了本手)
         participants.append(
             ParticipantWrite(uid=work.users[p.nickname].uid, initial_points=initial, final_points=s.points)
@@ -545,6 +549,7 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
     ended = HandEnded(
         winnings=tuple(NickAmount(nickname=n, amount=a) for n, a in payout.winnings.items()),
         refunds=tuple(NickAmount(nickname=n, amount=a) for n, a in payout.refunds.items()),
+        stacks=tuple(stacks),
     )
 
     hand.status = HandStatus.ENDING

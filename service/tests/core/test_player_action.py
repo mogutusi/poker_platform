@@ -206,6 +206,12 @@ def test_showdown_single_pot_high_hand_wins():
     assert len(showdown.board) == 5 and {r.nickname for r in showdown.reveals} == {"A", "B", "C"}
     ended = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandEnded))
     assert {w.nickname: w.amount for w in ended.winnings} == {"B": 300}
+    # stacks 是结算后的座位筹码上 wire(BUG-20):断言的是与 commit 后座位的派生关系,不是字面量。
+    # len 单独钉一遍:上面的 dict 比较会把重复条目折叠掉,「每个参与者恰好一条」得另说一句。
+    assert {(x.seat_position, x.nickname): x.points for x in ended.stacks} == {
+        (i, s.nickname): s.points for i, s in enumerate(room.seats) if s is not None
+    }
+    assert len(ended.stacks) == 3
     assert isinstance(events[-1], ClearAction)
     # 隐私:仅 HandShowDown 带底牌;PlayerActed / HandEnded 不含
     assert not hasattr(next(e.msg for e in events if isinstance(e.msg, PlayerActed)), "hole_cards")
@@ -231,6 +237,32 @@ def test_hand_record_persisted():
     assert len(finals) == 3
     assert all(init == 150 for init, _ in finals.values())  # 各锁入 150
     assert sum(fin for _, fin in finals.values()) == 450  # 还回总额守恒
+
+
+def test_stacks_exclude_bystander_seat():
+    # stacks 的集合契约是**本手参与者**,不是「有人的座位」:D 占着座但没被发牌(SITTING_OUT)。
+    # _finalize_hand 若按占座遍历,现有各测里两个集合恰好重合(离桌者的座位在结算时也还占着),
+    # 这里放一个旁观占座者把两者分开——D 不该上 wire,他的座位筹码也不是「结算产物」。
+    from app.core.domain import UserState
+
+    world = hand_world(
+        [
+            player("A", 50, seat=0, has_acted=True, hole=TRIP_ACES),
+            player("B", 50, seat=1, has_acted=False, hole=TRIP_KINGS),
+        ],
+        button=0, status=HandStatus.RIVER, last_bet=0, acting_position=1,
+        contributed={"A": 100, "B": 100}, flop=FLOP, turn=TURN, river=RIVER,
+    )
+    room = _room(world)
+    room.seats[4] = seat("D", 77, new_here=False)
+    room.users_in_room["D"] = UserStatus.SITTING_OUT
+    world.users["D"] = UserState(uid=9, nickname="D", points=0, room="r1")
+
+    world, events, err = run(world, PlayerAction(origin="B", action=CHECK))
+    assert err is None
+    ended = next(e.msg for e in events if isinstance(e, Broadcast) and isinstance(e.msg, HandEnded))
+    assert {x.nickname for x in ended.stacks} == {"A", "B"}  # 旁观占座者不在
+    assert _room(world).seats[4].points == 77  # D 的座位筹码分毫未动
 
 
 def test_side_pot_all_in_split():
@@ -298,6 +330,10 @@ def test_uncalled_bet_refunded_no_showdown():
     # A:开局锁入 110(60+40+10),结算 110-50+60=120;B:锁入 110,剩 100
     assert room.seats[0].points == 120 and room.seats[1].points == 100
     assert sum(s.points for s in room.seats if s is not None) == 220  # 守恒
+    # 无摊牌收尾也带 stacks(BUG-20):字段跟 HandEnded 走,不跟 HandShowDown 走
+    assert {x.nickname: x.points for x in ended.stacks} == {
+        s.nickname: s.points for s in room.seats if s is not None
+    }
 
 
 def test_hand_end_broadcasts_status_back_to_sitting_in():

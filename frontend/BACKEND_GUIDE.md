@@ -156,7 +156,7 @@ REST:  enc_key = KDF_sm3(token‖0x03, 16)    mac_key = KDF_sm3(token‖0x04, 32
 start_hand 后你会收到:
   hand_started(谁在玩、庄位、盲注)→ hole_cards(私发,你的两张牌)
   → hand_status_changed(街推进,翻公共牌)⇄ player_acted(每次有人动)
-  → hand_show_down(摊牌,揭示未弃牌者的牌)→ hand_ended(结算)
+  → hand_show_down(摊牌,揭示未弃牌者的牌)→ hand_ended(结算;`stacks` 带各参与者结算后的座位筹码)
 ```
 
 **几个最容易理解错的语义**:
@@ -165,6 +165,7 @@ start_hand 后你会收到:
 - `player_action` 的 `bet_amount` 是**本街目标总额,不是增量**:跟注 = 把它设成当前 `last_bet`;加注 = 设成更大的数;all-in = 设成自己的全部。
 - 你**永远收不到别人的底牌**(广播消息里结构上就没有这个字段),只有三处例外:私发给你的 `hole_cards`、摊牌的 `hand_show_down.reveals`、快照里的 `your_hole_cards`(只有你自己的)。渲染上:**摊牌之前对手的牌在界面上不画**(不是画牌背——协议上那个字段结构性缺位,前端也就没东西可画;要给局中的对手画牌背是一件还没做的界面功能,见 TODO 0105·A);`hand_show_down` 之后按 `reveals` 翻成正面,并**留到下一手开始**(结算展示期,见 [frontend/docs/state.md](docs/state.md))。
 - **开局的底池不是 0**:`hand_started.pot` 就是已下的盲注之和;紧跟着的 `hand_status_changed{status:"pre_flop"}` 带的也是**盲注已在桌上**的下注态(`last_bet` = 大盲、`players[].bet_amount` 是各家的盲)。**别自己推「换街了所以清零」**——那条推断在开局这条上是错的,照着推会让整轮 preflop 的"跟注"发成 `bet_amount: 0` 而被 `ILLEGAL_ACTION` 拒(0087 实测)。每条 `hand_status_changed` 都自带本街的 `last_bet` 与 `players[]`,照抄即可。
+- **座位筹码别自己记账。** 手内的实时筹码逐街来自 `hand_status_changed.players[]`,每次行动由 `player_acted.points`(只有行动者本人的)更新,座位卡片显示按「在手取 `players[].points`,不在手取 `seats[].points`」合并——这正是服务器快照 `seats[].points` 自己的口径。手尾的结算值由 `hand_ended.stacks` 直接给(各参与者结算后的座位筹码,含本手离桌者——他的 `user_left` 随后就到),**别拿 winnings/refunds 去加**:那是在复算结算的记账,而且相对开局前的座位值根本不成立(差了投进池子的部分)。0106 之前 `hand_ended` 不带这个数,座位数字从入座起一动不动(BUG-20)。
 - **加注下限用 `min_raise_to`,别自己算。** 规则是 `last_bet + max(last_raise_size, BB)`,但 `last_raise_size` 不上 wire——服务器直接把**下限本身**告诉你(`hand_started` / `hand_status_changed` / `player_acted` / `state_snapshot` 都带)。它和服务端校验用的是同一个数。**all-in 例外**:筹码不够时把 `bet_amount` 设成自己的全部,低于下限也合法。
 - **`state_snapshot.free_entry_vote`**:进行中的免盲投票公开态(候选 / 合格投票人 / 已同意),没有投票时为 `null`。重连和顶替**只发快照、不重发投票事件**,所以面板要从这里恢复。另外投票人集合会变(有人离场、有人重连后重新 Ready),每次变都会补一条 `free_entry_vote_updated`——**照收**,别拿开票那一刻的名单一直用。
 - `user_status_changed` 带一个 `new_here`:该座位下一手**是否仍需付一个大盲才能入局**(防躲盲,新人和错过上一手的人都算),未就座时为 `null`。**别自己推**——它在一手开始时由服务器重标(被发牌的人清掉,没被发牌的人重新标上),重标时服务器会补发这条消息给你,值真的变了才发,所以稳态牌桌上一手一条都不会来。免盲投票的候选就是当前 `new_here` 的座位。

@@ -266,7 +266,7 @@ describe('隐私', () => {
         },
       ],
     })
-    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [] })
+    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [], stacks: [] })
     expect(getRoomState().reveals).toHaveLength(1) // 结算展示期:牌还留着
 
     applyServerMessage({
@@ -312,6 +312,7 @@ describe('手牌结束', () => {
       type: 'hand_ended',
       winnings: [{ nickname: 'alice', amount: 70 }],
       refunds: [],
+      stacks: [],
     })
     const s = getRoomState()
     expect(s.handStatus).toBeNull()
@@ -416,12 +417,50 @@ describe('UserStatusChanged 的三种情形', () => {
 
 describe('结算面板的生命周期', () => {
   // 结算结果 store 一直收着,但 0081 之前没接到界面上——打完一手用户看不到赢了多少。
+  it('hand_ended 的 stacks 写进座位筹码:按昵称匹配、非参与者不动、打光就是 0', () => {
+    // BUG-20:此前这条消息不带筹码,seats[].points 只有快照和买入会更新——座位上的数字
+    // 从入座起一动不动,结算面板却在旁边说「你赢了 4」。现在结算值由服务器随 hand_ended 给。
+    applyServerMessage(
+      snapshot({
+        seats: [
+          { seat_position: 3, nickname: 'alice', status: 'playing', points: 500, new_here: false },
+          { seat_position: 5, nickname: 'bob', status: 'playing', points: 700, new_here: false },
+          // carol 局中入座、没被发牌:她不是参与者,不会出现在 stacks 里
+          { seat_position: 7, nickname: 'carol', status: 'sitting_in', points: 800, new_here: true },
+        ],
+        watchers: [],
+      }),
+    )
+    applyServerMessage({
+      type: 'hand_ended',
+      winnings: [{ nickname: 'bob', amount: 60 }],
+      refunds: [],
+      stacks: [
+        // alice 打光了。seat_position 故意填错:SeatStack 的注释写明它是信息性的、客户端按
+        // **昵称**更新(座位号跨手会易主,0105)——按座位号实现的话这条会丢,测试就红。
+        { seat_position: 999, nickname: 'alice', points: 0 },
+        { seat_position: 5, nickname: 'bob', points: 670 },
+        // 本手离桌者也在 stacks 里(服务端按参与者给),但他已不在 seats——必须安静跳过,不是崩
+        { seat_position: 7, nickname: 'ghost', points: 123 },
+      ],
+    })
+    const s = getRoomState()
+    expect(s.seats.find((x) => x.nickname === 'alice')?.points).toBe(0)
+    expect(s.seats.find((x) => x.nickname === 'bob')?.points).toBe(670)
+    // 不在 stacks 里的座位**分毫不动**——「查不到就清零/覆盖」是另一种会把旁观者钱抹掉的实现
+    expect(s.seats.find((x) => x.nickname === 'carol')?.points).toBe(800)
+    expect(s.seats).toHaveLength(3) // ghost 没有被凭空造出一个座位
+    // 打光的人 mySeat().points === 0:这正是买入输入框与 Ready 禁用两道门读的数(BUG-20 的推论后果)
+    expect(mySeat(s)?.points).toBe(0)
+  })
+
   it('hand_ended 记下赢取与退还,两者分开', () => {
     applyServerMessage(snapshot())
     applyServerMessage({
       type: 'hand_ended',
       winnings: [{ nickname: 'alice', amount: 120 }],
       refunds: [{ nickname: 'bob', amount: 40 }],
+      stacks: [],
     })
     const s = getRoomState()
     expect(s.lastResult?.winnings).toEqual([{ nickname: 'alice', amount: 120 }])
@@ -431,7 +470,7 @@ describe('结算面板的生命周期', () => {
 
   it('新一手开始要清掉上一手的结算,否则面板会挂在新牌局上', () => {
     applyServerMessage(snapshot())
-    applyServerMessage({ type: 'hand_ended', winnings: [{ nickname: 'alice', amount: 10 }], refunds: [] })
+    applyServerMessage({ type: 'hand_ended', winnings: [{ nickname: 'alice', amount: 10 }], refunds: [], stacks: [] })
     expect(getRoomState().lastResult).not.toBeNull()
 
     applyServerMessage({
@@ -468,7 +507,7 @@ describe('结算面板的生命周期', () => {
 
   it('用户手动关掉后不再显示', () => {
     applyServerMessage(snapshot())
-    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [] })
+    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [], stacks: [] })
     clearResult()
     expect(getRoomState().lastResult).toBeNull()
   })

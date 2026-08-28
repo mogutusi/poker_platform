@@ -36,6 +36,7 @@ from app.wire.server import (
     FreeEntryVoteView,
     NickAmount,
     PlayerView,
+    SeatStack,
     SeatView,
     ServerMessage,
     ShowdownReveal,
@@ -57,7 +58,7 @@ _ENUM_ORDER: list[type[enum.Enum]] = [
     RoomStatus,
     ErrorCode,
 ]
-_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount, SeatView, FreeEntryVoteView]
+_VALUE_OBJECT_ORDER: list[type] = [Card, PlayerView, ShowdownReveal, NickAmount, SeatStack, SeatView, FreeEntryVoteView]
 
 _HEADER = """\
 // ⚠️ GENERATED — DO NOT EDIT BY HAND.

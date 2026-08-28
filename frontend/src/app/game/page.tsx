@@ -88,13 +88,19 @@ function GameView() {
 
   /** 把服务器的座位/玩家投影成这一页 JSX 期望的形状。空座渲染成「可入座」。 */
   const seats = useMemo(() => {
+    // 在手玩家的实时筹码(player_acted / hand_status_changed 逐街更新)。座位显示的合并口径照抄
+    // 服务器自己的快照投影(reduce.py `_state_snapshot`):**在手取 Player.points,不在手取 Seat.points**。
+    // 此前这里只读 seats[].points(「筹码后手」),于是整手牌里下注、跟注、赢池座位数字全程不动(BUG-20)。
+    // 判据是 gameStarted:结算展示期(0105)里手已结束,该显示 hand_ended.stacks 写进 seats 的结算值,
+    // 而不是 players[] 里结算前的残值。
+    const inHand = new Map(gameStarted ? state.players.map((p) => [p.nickname, p.points]) : [])
     return Array.from({ length: state.maxSeats }, (_, i) => {
       const seatView = state.seats.find((s) => s.seat_position === i)
       const player = seatView
         ? {
             id: seatView.nickname === state.me ? "current" : seatView.nickname,
             name: seatView.nickname,
-            points: seatView.points,
+            points: inHand.get(seatView.nickname) ?? seatView.points,
             isReady: seatView.status === "ready_to_play" || seatView.status === "playing",
           }
         : undefined
@@ -103,7 +109,7 @@ function GameView() {
       const owesEntry = seatView?.new_here === true
       return { number: i + 1, player, isButton: i === state.buttonPosition, owesEntry }
     })
-  }, [state.maxSeats, state.seats, state.me, state.buttonPosition])
+  }, [state.maxSeats, state.seats, state.me, state.buttonPosition, state.players, gameStarted])
 
   // 欠入局盲的人(= 免盲投票的候选)。纯展示派生,值来自服务器的 new_here,不复算资格。
   const entryOwers = useMemo(

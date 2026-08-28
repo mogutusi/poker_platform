@@ -266,14 +266,21 @@ export function applyServerMessage(msg: ServerMessage): void {
       set({ handStatus: 'showdown', board: msg.board, reveals: msg.reveals, actingPosition: null })
       break
 
-    case 'hand_ended':
+    case 'hand_ended': {
+      // 结算后的座位筹码照服务器给的写(BUG-20)。此前这条消息不带筹码,seats[].points 只有快照和
+      // 买入会更新,于是座位卡片上的数字从入座起就再也不动。按**昵称**匹配,不按座位号(0105 的
+      // 教训:座位号跨手会易主;stacks 里本手离桌者的条目会被同批随后的 user_left 连座位一起移除)。
+      // 不在 stacks 里的座位(局中入座、没被发牌的人)分毫不动——stacks 的集合是本手参与者,不是全桌。
+      const settled = new Map(msg.stacks.map((x) => [x.nickname, x.points]))
       set({
         handStatus: null,
         roomStatus: 'pending_start',
         actingPosition: null,
+        seats: state.seats.map((s) => (settled.has(s.nickname) ? { ...s, points: settled.get(s.nickname)! } : s)),
         lastResult: { winnings: msg.winnings, refunds: msg.refunds },
       })
       break
+    }
 
     case 'user_joined':
       set({ watchers: state.watchers.includes(msg.nickname) ? state.watchers : [...state.watchers, msg.nickname] })

@@ -49,6 +49,12 @@ class NickAmount(_Frozen):
     amount: int  # 金额(赢得 / 退还)
 
 
+class SeatStack(_Frozen):
+    seat_position: int  # 座位号(信息性;客户端更新以 nickname 为键,座位号跨手会易主,见 0105)
+    nickname: str  # 占座者
+    points: int  # 结算后的座位筹码(Player.points 还回 Seat 之后的值,与手牌记录 final_points 同源)
+
+
 class FreeEntryVoteView(_Frozen):
     # 进行中免盲投票的公开态(与 FreeEntryVoteUpdated 三字段同义同源,由同一个 core 投影算出)。
     # 存在的理由:重连/顶替只发 StateSnapshot,不重发 FreeEntryVoteUpdated,面板会凭空消失(BUG-9)。
@@ -122,6 +128,10 @@ class HandEnded(ServerMessage):
     type: Literal["hand_ended"] = "hand_ended"
     winnings: tuple[NickAmount, ...]  # 各赢家从子池赢得
     refunds: tuple[NickAmount, ...]  # 未叫注退还(及退化无主池退回)
+    # 本手全部参与者结算后的座位筹码(含本手离桌者——他们的 UserLeft 在同批随后到达并释放座位)。
+    # 没有它,结算后的座位筹码在 wire 上无承载,客户端要么显示入座时的旧值、要么自己拿
+    # winnings/refunds 去加——后者是复算结算的记账(前端不变量 1 禁止,BUG-20)。
+    stacks: tuple[SeatStack, ...]
 
 
 class UserStatusChanged(ServerMessage):

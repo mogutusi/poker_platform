@@ -126,7 +126,7 @@
 | `hand_status_changed` | `status`(街)、`board`(已发公共牌)、`last_bet`、`min_raise_to`、`players[]` | 翻 flop/turn/river。**本街下注态照抄,别自己推「换街了所以清零」**:开局那条 `status:"pre_flop"` 紧跟 `hand_started`,盲注**已经在桌上**(0087)|
 | `player_acted` | `nickname`/`action`/`bet_amount`/`points`/`status`、`pot`、`last_bet`、`min_raise_to`、`acting_position` | 某人动作 + 推进后底池/下一行动位/加注下限 |
 | `hand_show_down` | `board`(完整 5 张)、`reveals[]`(未弃牌者底牌) | 摊牌亮牌 |
-| `hand_ended` | `winnings[]`、`refunds[]` | 结算发筹码 |
+| `hand_ended` | `winnings[]`、`refunds[]`、`stacks[]` | 结算发筹码;`stacks[]` 是**各参与者结算后的座位筹码**(seat_position/nickname/points,含本手离桌者——其 `user_left` 同批随后到达),客户端照抄、不拿 winnings 去加(0106 / BUG-20)|
 | `user_status_changed` | `nickname`/`status`/`seat_position`/`new_here` | 谁就座/ready/坐出/离线/起身/重连;`new_here`=该座位下一手是否仍需付入局费(未就座为 `null`),**开局末尾重标时也会补发**(0084)|
 | `user_joined` | `nickname` | 谁进房(观战);加进房间名册 |
 | `user_left` | `nickname`/`seat_position` | 谁离桌(释放座位) |
@@ -176,7 +176,7 @@
   每次有人动                            ← player_acted{nickname, action, bet_amount, points, status, pot, last_bet, acting_position}
 本街关闭(自动)                        ← hand_status_changed{status:"flop", board:[3张], last_bet:0, players:[本街投入已归零]}  → turn[4] → river[5]
 摊牌                                    ← hand_show_down{board:[5张], reveals:[未弃牌者底牌]}
-                                       ← hand_ended{winnings:[{nickname,amount}], refunds:[...]}
+                                       ← hand_ended{winnings:[{nickname,amount}], refunds:[...], stacks:[{seat_position,nickname,points}]}
 非法操作(如非你回合 / 钱不够)         ← error{code:"NOT_YOUR_TURN", detail:"..."}
 ```
 

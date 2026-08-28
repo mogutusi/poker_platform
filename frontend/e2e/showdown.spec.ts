@@ -9,8 +9,31 @@
 //
 // 前置:后端在跑(见 docs/dev.md)。
 
-import { expect, test } from '@playwright/test'
-import { FACE_UP_CARD, advanceHand, joinTable } from './helpers'
+import { expect, test, type Page } from '@playwright/test'
+import { FACE_UP_CARD, advanceHand, joinTable, seatPoints } from './helpers'
+
+/**
+ * 从结算面板上读「谁分到了多少」(赢取 + 退还都算,都是回到座位的钱)。
+ * 面板的行是「名字 span + `+N` span」一对;标题行(本手结算 ×)不是两个 span,自然被滤掉。
+ * 定位按「标着本手结算的那个 role=status」——页面上还有别的 role=status(连接横幅、投票结果),
+ * 只按 role 取第一个是在赌它们恰好不在场。
+ */
+async function settlementByNick(page: Page): Promise<Record<string, number>> {
+  return page.evaluate(() => {
+    const panel = Array.from(document.querySelectorAll('[role="status"]')).find((el) =>
+      (el.textContent || '').includes('本手结算'),
+    )
+    const out: Record<string, number> = {}
+    if (!panel) return out
+    for (const row of panel.querySelectorAll('div.flex.items-center.justify-between')) {
+      const spans = row.querySelectorAll(':scope > span')
+      if (spans.length !== 2) continue
+      const name = (spans[0].textContent || '').replace('(你)', '').trim()
+      out[name] = (out[name] ?? 0) + Number((spans[1].textContent || '').replace('+', ''))
+    }
+    return out
+  })
+}
 
 /** 走到河牌时这一页上正面朝上的牌数:自己的底牌 2 + 公共牌 5(别人的底牌摊牌前结构性缺位)。 */
 const FACE_UP_AT_RIVER = 7
@@ -40,6 +63,9 @@ test.describe('打到摊牌', () => {
       await joinTable(a, 'alice', room, 1)
       await joinTable(b, 'bob', room, 2)
 
+      // 开局前的座位筹码(= 刚买入的额度,服务器给的),下面两组断言都以它为基准
+      const buyInPoints = { 1: await seatPoints(a, 1), 2: await seatPoints(a, 2) }
+
       const start = a.getByRole('button', { name: /Start Game/i })
       await expect(start).toBeVisible({ timeout: 10_000 })
       await start.click()
@@ -55,6 +81,13 @@ test.describe('打到摊牌', () => {
       )
       expect(reachedRiver, '一路 check/call 应当能打到河牌(自己 2 张 + 公共 5 张)').toBe(true)
 
+      // 在手投影(BUG-20 在手那半):盲注早已扣走,座位上的数字必须已经动过——修复前它整手牌
+      // 纹丝不动地停在买入额上。此刻读数是稳定的:河牌圈还没人下注,而后面只剩 check(等额时
+      // checkOrCall 永远先 Check 成功),不会再有筹码移动。
+      const riverPoints = { 1: await seatPoints(a, 1), 2: await seatPoints(a, 2) }
+      expect(riverPoints[1], '打到河牌后 1 号座的筹码应当已被盲注/跟注扣过').toBeLessThan(buyInPoints[1])
+      expect(riverPoints[2], '打到河牌后 2 号座的筹码应当已被盲注/跟注扣过').toBeLessThan(buyInPoints[2])
+
       // 河牌之后再走完最后一轮 → 手牌结束,结算面板弹出(0081·A 接的)
       const ended = await advanceHand([a, b], async () =>
         !(await a.locator('text=/In game/i').isVisible().catch(() => false)),
@@ -62,6 +95,16 @@ test.describe('打到摊牌', () => {
       expect(ended, '最后一轮走完后手牌应当结束').toBe(true)
       await expect(a.locator('text=/本手结算/')).toBeVisible({ timeout: 10_000 })
       await expect(a.getByRole('button', { name: /Start Game|^Ready$/ })).toBeVisible({ timeout: 10_000 })
+
+      // 结算那半(BUG-20):结算后的座位筹码 = 河牌时的座位筹码 + 该玩家从面板上分到的数。
+      // 三个数全是服务器给的(座位值经 hand_ended.stacks / 在手投影,分得数经结算面板),
+      // 测试做加法不是前端复算——这正是「赢家座位 +winnings」那句登记的**修正版**:相对开局
+      // 前的座位值它不成立(差了投进池子的部分),相对下注扣完后的值才成立。检牌到底的手没有
+      // 退还,但 settlementByNick 连退还一起数,和牌(chop)时每人分回自己那份,断言同样成立。
+      const shares = await settlementByNick(a)
+      const settled = { 1: await seatPoints(a, 1), 2: await seatPoints(a, 2) }
+      expect(settled[1], '结算后 1 号座 = 河牌值 + alice 分得').toBe(riverPoints[1] + (shares['alice'] ?? 0))
+      expect(settled[2], '结算后 2 号座 = 河牌值 + bob 分得').toBe(riverPoints[2] + (shares['bob'] ?? 0))
 
       // 摊牌留在桌上(0105)。两边都要断言:亮牌是广播,不是只发给赢家。
       await expect(a.locator(FACE_UP_CARD)).toHaveCount(FACE_UP_AT_SHOWDOWN, { timeout: 10_000 })
