@@ -35,7 +35,23 @@ export async function joinTable(page: Page, user: string, room: string, seat: nu
   await expect(page.locator('text=/观战中/')).toBeHidden({ timeout: 10_000 })
   await page.getByRole('button', { name: '买入' }).click()
   const ready = page.getByRole('button', { name: /^Ready$/ })
-  await expect(ready).toBeEnabled({ timeout: 10_000 })
+  try {
+    await expect(ready).toBeEnabled({ timeout: 10_000 })
+  } catch (e) {
+    // Ready 一直不可点的头号原因不是界面坏了,是**买入被服务器拒了**——dev 账号的全局积分被
+    // 之前的测试轮次输光到买入额以下(BUG-21:积分只出不进,输家单调下滑)。裸抛 expect 超时
+    // 的话,失败读起来像入座/买入的界面回归,0106 就为这个查了一圈界面。先看服务器怎么说。
+    const err = page.getByTestId('action-error')
+    if (await err.isVisible().catch(() => false)) {
+      const detail = await err.getAttribute('title')
+      throw new Error(
+        `joinTable(${user}) 买入被服务器拒绝:${detail}\n` +
+          `多半是这个 dev 账号的全局积分低于买入额(BUG-21,见 service/docs/refactor/BUGS.md)。\n` +
+          `恢复法:把 dev sqlite 里 user 表的 points 拉回 DEV_START_POINTS(该账号不在房时改 DB 即可,下次进房会重新载入)。`,
+      )
+    }
+    throw e
+  }
   await ready.click()
 }
 
