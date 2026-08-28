@@ -52,6 +52,14 @@ poetry install
 .venv/bin/uvicorn app.shell.lifespan:app --host 127.0.0.1 --port 8000   # 先手动起一次验活,再转 systemd(§5)
 ```
 
+装完顺手跑一遍测试,**验的是环境装对了,不是 pg**:
+
+```bash
+.venv/bin/pytest -q      # 期望全绿(约 7 秒)
+```
+
+> **别把这一步当成 pg 验收**:DB 类测试的夹具写死了内存 sqlite(`sqlite+aiosqlite://`),不读 `DATABASE_URL`——在 pg 机器上跑它依然全程打 sqlite。今天对 pg 的真实验收只有两样:迁移链验收([db-migrations.md](db-migrations.md) **§0.5**)+ 对真服务跑冒烟(§6.1)。「DB 层测试可指真 pg」是一项待做的测试基建([refactor/changes/0110](refactor/changes/0110-the-unfinished-ledger-and-a-deploy-manual.md) A4)。
+
 ### 3.1 生产 `poker.env`(游戏与运维参数)
 
 `service/app/poker.env.example` 是**提交在 git 里的加载基线**(dev 真值),生产覆盖写进 `service/app/poker.env`(gitignored,只写要改的键)。每个键的含义在 example 文件里逐行注释,这里只点**部署必改**的:
@@ -277,6 +285,7 @@ psql -d poker -c "\copy \"user\" FROM '/tmp/user.csv' CSV HEADER"
 ## §8 边界与已知事项(部署视角)
 
 - **单进程无高可用**;进程死 = 服务死,systemd `Restart=on-failure` 是唯一兜底。重启丢进行中手牌、全体重登。
+- **登录会同步占住事件循环 ≈150ms,改密码 ≈300ms**(密码验证是 100k 轮 SM3 同步哈希;改密要验旧 + 算新,两倍)。这期间**所有房间所有玩家**的一切消息都停顿——几个人同时登录,牌桌上就是一连串可感知的卡顿。这是**已知且有意暂不改**的特性(用户定案,见 [refactor/changes/0110](refactor/changes/0110-the-unfinished-ledger-and-a-deploy-manual.md) A3;已验证的修法与数字也记在那),**不是缺陷,别顺手修**。运营上的姿势:避免组织「大家同时上号」的时刻,或接受开局前几秒的卡顿。
 - **无 TLS**(内网设计);要出内网先在反代层加 TLS,并重新评估威胁模型(auth.md 的模型不防公网)。
 - **dev 种子关不掉**(§3.2),生产靠换强密钥缓解;真开关在未竟清单上。
 - **仓库无 CI**:提交规约靠人执行([dev.md](dev.md)),部署前手跑 `pytest` + 前端套件是唯一守门。
