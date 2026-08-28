@@ -65,6 +65,46 @@ test.describe('私聊(两人真收发)', () => {
   })
 })
 
+test.describe('私聊(离线补收)', () => {
+  test('收件人整个人不在线时发的私信,他登录后被补收进来', async ({ browser }) => {
+    // 这条走的是 0040 的**另一条臂**:收件人不在线 → 落库(未读)→ 登录时 deliver_dm_catch_up
+    // 读 DB 补发。上面那条实时用例覆盖不到它——那里 frank 一直在线,消息走的是在线路由。
+    // 账号换 carol/dave,不复用 eve/frank:同一对账号的私信库存跨用例累积,未读计数会互相污染。
+    // 两人在本用例全程不进房(0089 的占座纪律只约束进房用例)。
+    const ctxSender = await browser.newContext()
+    const carol = await ctxSender.newPage()
+
+    try {
+      await login(carol, 'carol')
+      const text = `while-you-were-out-${Date.now()}`
+
+      // dave 此刻没有任何上下文——不是「没开抽屉」,是整个人不在线。
+      await openDrawer(carol)
+      await startConversation(carol, 'dave')
+      await carol.getByLabel('私聊输入').fill(text)
+      await carol.getByLabel('私聊输入').press('Enter')
+      await expect(carol.getByText(text).first()).toBeVisible() // 发送成立(本地回显)
+
+      // 现在 dave 才上线。没有人重发任何东西——接下来出现的一切都只能来自登录补收。
+      const ctxLate = await browser.newContext()
+      const dave = await ctxLate.newPage()
+      try {
+        await login(dave, 'dave')
+        // 未读徽标:补收链把落库的那条推了过来(aria-label 随未读数变)。
+        await expect(dave.getByRole('button', { name: /^打开私聊,\d+ 条未读/ })).toBeVisible({ timeout: 10_000 })
+        await openDrawer(dave)
+        await dave.getByRole('button', { name: /carol/ }).first().click()
+        // 断言那条**准确的文本**:补收要是丢内容、错会话,靠徽标是看不出来的。
+        await expect(dave.getByText(text).first()).toBeVisible()
+      } finally {
+        await ctxLate.close()
+      }
+    } finally {
+      await ctxSender.close()
+    }
+  })
+})
+
 test.describe('历史页(有真实记录时)', () => {
   test('列表渲染出真实的手牌行,而不是只验空态', async ({ page }) => {
     // /hands 是全局的:冒烟脚本与既有浏览器用例已经打过很多手,所以这里应当有真实记录。
