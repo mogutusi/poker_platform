@@ -91,3 +91,29 @@ test.describe('大厅枢纽', () => {
     expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+test.describe('完整排行页(0104)', () => {
+  test('大厅入口不再是占位,点进去能看到带名次的全量榜', async ({ page }, testInfo) => {
+    await login(page, pickUser(testInfo.title))
+
+    // 0081 起这里一直是 disabled 的「待建」占位(有意不造假链接);0104 兑现它。
+    const entry = page.getByTestId('leaderboard-more')  // 摘要每行用的是 leaderboard-entry,别撞
+    await expect(entry).toBeEnabled()
+    await entry.click()
+
+    await expect(page.getByText('完整排行')).toBeVisible()
+    const rows = page.getByTestId('leaderboard-row')
+    await expect(rows.first()).toBeVisible({ timeout: 10_000 })
+
+    // 名次由后端给,前端不重排:第一行必须是 #1
+    await expect(rows.first()).toContainText('#1')
+    // 详情页必须和大厅摘要用同一套口径,否则两处说法不一
+    await expect(page.getByText(/不含桌上筹码/)).toBeVisible()
+
+    // 详情页要比大厅摘要长(摘要只给 5 条),否则「点进去看全量」这条规则没兑现
+    expect(await rows.count()).toBeGreaterThan(1)
+
+    await page.getByRole('button', { name: /返回大厅/ }).click()
+    await expect(page.getByTestId('leaderboard-more')).toBeVisible()
+  })
+})

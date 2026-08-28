@@ -585,15 +585,15 @@ export default function LobbyPage() {
             <p className="mt-4 text-[11px] text-muted-foreground">
               榜上是结算后的全局积分,<span className="text-primary">不含桌上筹码</span>。
             </p>
-            {/* 排行榜详情页本轮不做,所以这里是禁用占位,不指向一个不存在的路由。 */}
+            {/* 详情页已落地(0104):这里从禁用占位换成真入口。大厅只给摘要,全量在 /leaderboard。 */}
             <Button
               variant="outline"
               size="sm"
-              disabled
-              title="完整排行页尚未实现"
-              className="mt-2 w-full border-primary/30 bg-card/60 text-xs"
+              data-testid="leaderboard-more"
+              className="mt-2 w-full border-primary/30 bg-card/60 text-xs hover:bg-primary/10"
+              onClick={() => router.push("/leaderboard")}
             >
-              查看完整排行(待建)
+              查看完整排行
             </Button>
           </Card>
 
