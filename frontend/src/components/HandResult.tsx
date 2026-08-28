@@ -33,7 +33,16 @@ export default function HandResult({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div
       role="status"
-      className="absolute left-1/2 top-1/2 z-40 w-80 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-primary/50 bg-black/90 p-4 shadow-2xl backdrop-blur-sm"
+      // 位置是照着牌桌背景图**量出来**的,不是随手居中(0105):
+      //   · 挂点在牌桌容器里(不是页面根),这样两者至少同源于一个宽度基准;
+      //   · 横向 21%:公共牌那一排在 63%,左缘到它之间是这张桌子上唯一放得下 288px 的空档;
+      //   · 纵向 45%:左列两个座位在 30% 与 60%,45% 正好落在它们中间。
+      // 原本是页面正中,而 0105 把摊牌留在桌上之后,正中恰好压住那五张公共牌——「看得见摊牌」
+      // 就退化成「先把面板关掉才看得见」。
+      // **注意这不是一个能自动成立的布局**:面板是定宽 288px,公共牌那排随容器缩放,所以窄到某个
+      // 宽度以下必然重新相撞。实测 1280×720 只剩约 10px 余量,1440×900 宽裕。按 16/9 固定底图手调,
+      // 没有任何自动守门(测试只数 DOM 里有几张牌,看不见遮挡)。改这一页的布局要肉眼复验。
+      className="absolute left-[21%] top-[45%] z-40 w-72 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-primary/50 bg-black/90 p-4 shadow-2xl backdrop-blur-sm"
     >
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm uppercase tracking-[0.2em] text-muted-foreground">本手结算</p>

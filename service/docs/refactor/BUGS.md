@@ -119,6 +119,31 @@
 - **为什么本批不修**:0085 是验证批,它的职责是把这条路走通并留下证据;改协议要动 4 条消息 + codegen + 前端,值得单独一篇变更记录。**已有回归护栏**:`smoke:raise` 会一直钉住服务端这一侧的下限语义。
 - **0087 先补了 `last_bet` 那一半**:同一批消息里——`HandStatusChanged` 现在带 `last_bet` + 本街 `players[]`,`HandStarted` 带 `pot`(修的是另一个缺陷:前端自己推「换街即清零」,把开局盲注也清了,整轮 preflop 的跟注因此发成 `bet(0)` 被拒)。**本条剩下的是 `last_raise_size`(加注下限)那一半**:`HandStarted` / `PlayerActed` / `StateSnapshot` 仍不带它,前端那两个自编式子(`min={callAmount*2}`、回退 `lastBet+bigBlind`)也还在。
 
+### BUG-20 · 座位上显示的筹码从入座那一刻起就不再变
+
+- **来源**:[0105](changes/0105-the-showdown-you-can-actually-see.md) 的对抗复审(**浏览器实测**,不是推断)· **状态:确认为真,本批不修**
+- **定级说明**:它不符合本篇 medium「特定交错或边界下才触发」那句——它是**无条件的**,每一手都错。定 medium 的理由是后果:纯展示失真,不丢数据、不影响服务端结算,且重连/重进房就会被快照修正。下面那条「打光筹码的人买不回来」如果被复现,应当重新定级。
+- **症状**:牌桌上每个座位卡片上的筹码数,在整手牌里和结算之后都**一动不动**。下注、跟注、加注、赢下底池,那个数字全程不变;只有重连(拿到新 `StateSnapshot`)或买入才会刷新。
+- **实测证据**(`e2e` 探针,alice/bob 打完一手到摊牌):`data-seat-points` 在开局前、河牌时、结算后三次采样全是 `100 / 100`,而同一时刻结算面板写着「你赢了 4」。
+- **机理**:分两半,后一半更硬。
+  - **在手那半(前端可修)**:`store/room.ts` 里只有 `state_snapshot` 与 `player_bought_in` 会**更新** `seats[].points`(`user_status_changed` 给新座位写一次 `0` 就再也不动);`player_acted` 带的 `points` 被写进了 `state.players`,而 `game/page.tsx` 的座位投影读的是 `seatView.points`。服务器自己的 `SeatView` 投影用的是「在手取 `Player.points`,不在手取 `Seat.points`」(`reduce.py` `_state_snapshot`),前端照这个口径取一次即可,**不需要动协议**。
+  - **结算那半(要动协议)**:`_finalize_hand` 把 `Player.points` 还回 `Seat.points` 之后,广播出去的只有 `UserStatusChanged`,而它**不带筹码**(`nickname/status/seat_position/new_here`)。结算后的座位筹码在 wire 上**没有任何承载**,前端够不着;自己算等于复算结算,前端不变量 1 禁止。
+- **推论出的更硬后果(尚未复现,如实标注)**:`game/page.tsx` 用 `me.points === 0` 同时把守两个控件——买入输入框只在它为 0 时出现,Ready 按钮只在它为 0 时禁用。所以**打光筹码的人**读到的仍是过时的非零值:唯一能让他重新买入的入口不出现,而 Ready 却是可点的。这条是从代码读出来的,没有在浏览器里造出「真的输光」的局面,**所以只作推论登记,别当已证实**。
+- **修法**:在手那半照服务器口径改投影;结算那半要么给 `UserStatusChanged` 加筹码字段、要么手尾补一条带座位筹码的事件——**动协议就要走 codegen + BACKEND_GUIDE + wire-protocol-guide 同步**,值得单独一批。
+- **为什么本批不修**:0105 是「摊牌看得见」那一件事,混进一个要动协议的改动会让它的变异验证与复审都失焦。**两者不互相依赖**:0105 只碰牌面渲染,一行没碰筹码显示。
+- **要补的测试**:一手牌前后 `data-seat-points` 必须按结算结果变化(断言的是**派生关系**「赢家的座位增加了他赢到的数」,不是字面量);以及打光筹码之后买入入口要出现。
+
+### BUG-21 · dev 账号积分只出不进,浏览器套件迟早会红,而症状指向界面
+
+- **来源**:[0105](changes/0105-the-showdown-you-can-actually-see.md) 收工复跑时**真撞上了**(不是推断)· **状态:确认为真,本批只恢复了数据,没修机制**
+- **症状**:`npm run test:e2e` 里某条用例开始必红,报的是 `expect(ready).toBeEnabled() failed —— Received: disabled`,指向 `helpers.joinTable` 里的 Ready 按钮。**看起来像界面坏了,其实是那个 dev 账号的全局积分不够买入了。**
+- **实测**:本批收工复跑时 `e2e/reconnect.spec.ts` 的顶替用例红。查库:`dave` 只剩 **96** 分,而 `DEV_BUY_IN=100` ⇒ `buy_in` 被拒 ⇒ 座位筹码停在 0 ⇒ Ready 一直禁用。**在 HEAD(d700fb3)上 stash 掉全部改动复跑,同样红**,所以与本批无关。当时全表:alice 518 / bob 141 / carol 726 / dave 96 / eve 1194 / frank 862 / smoke1 906 / smoke2 934 / smoke3 1160 / gina 1000 —— bob 也只差一次买入就要轮到它。
+- **机理**:`seed_dev_users` 是**只 INSERT 的幂等种子**(`user is None` 才建),已存在的行**永不回填 points**,这本身是对的(不能覆盖 OrmPersister 落库的真实积分)。但浏览器套件每跑一轮就把筹码在账号之间搬一次,输家单调下滑;没有任何机制把它们拉回 `DEV_START_POINTS`。于是套件的绿依赖于一个会随时间耗尽的资源。
+- **更坏的一点是症状会骗人**:失败点在 `joinTable` 的 Ready 按钮上,读起来像「入座/买入的界面回归」,而真正的原因在 DB 的一列数字里。本批为此花掉的时间,下一个人会原样再花一遍。
+- **本批做了什么**:把十个 dev 账号的 `points` 一律恢复到 `DEV_START_POINTS=1000`(改的是本机 dev sqlite 的种子数据,不是产品代码),然后按房规重启 uvicorn(杀 pid → 确认端口释放 → 起 → grep 日志无 `address already in use`)。恢复前的值已记在上面,没有丢。
+- **修法(未做,择一)**:① 给套件一个前置钩子,跑前把 dev 账号拉回种子值;② 用例结束时归还筹码(现在「结束时还停在手牌里」的那几条本来就还不掉);③ 至少把失败信息改成能自解释的——`joinTable` 在 Ready 迟迟不可点时,顺手报一句「多半是这个账号积分不足以买入」。**③ 最便宜,且直接消掉「症状骗人」那一半。**
+- **要补的测试**:没有——这是测试基建自身的问题,补测试等于自证。判据是「在一个积分被人为调到低于买入的账号上,`joinTable` 给出的报错要能指向积分」。
+
 ---
 
 ## low(择机,可并入任意批次)

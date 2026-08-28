@@ -5,6 +5,7 @@
 // 等于两台机器。前置:后端在跑(见 docs/dev.md)。
 
 import { expect, test, type Page } from '@playwright/test'
+import { FACE_UP_CARD } from './helpers'
 
 const K_USER = '00112233445566778899aabbccddeeff'
 const PASSWORD = 'devpass123'
@@ -93,6 +94,12 @@ test.describe('两人同桌', () => {
       // 能关掉
       await a.getByRole('button', { name: '关闭结算' }).click()
       await expect(a.locator('text=/本手结算/')).toBeHidden()
+
+      // 有人弃牌收尾的手牌**没有**结算展示期:没摊牌就没有别人的牌可亮,桌面该清空(0105)。
+      // 展示期的判据是 reveals 非空,而这一手根本没产生 HandShowDown——把判据换成「board 非空」
+      // 或「永远显示」的话,这条会红。
+      await expect(a.locator(FACE_UP_CARD)).toHaveCount(0)
+      await expect(a.getByTestId('showdown-recap')).toBeHidden()
 
       expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
     } finally {

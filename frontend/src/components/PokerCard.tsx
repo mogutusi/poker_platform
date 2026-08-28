@@ -25,9 +25,10 @@ const CARDS_BASE = '/cards'
 
 interface PokerCardProps {
   card: Card
+  /** 是否扣着:true 渲染 back.png。别人的牌只有摊牌被亮出来时才为 false(见 game/page.tsx)。 */
   isHidden?: boolean
+  /** 牌面尺寸档位。 */
   size?: 'sm' | 'md' | 'lg'
-  cornerLabel?: boolean
   className?: string
 }
 

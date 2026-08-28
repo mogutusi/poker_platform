@@ -35,22 +35,6 @@ import {
   startHand,
 } from "@/store/actions"
 
-interface SeatPlayer {
-  id: string
-  name: string
-  avatar?: string
-  points?: number
-  isReady?: boolean
-}
-
-interface Seat {
-  number: number
-  player?: SeatPlayer
-  isButton?: boolean
-}
-
-// useSearchParams 让这棵子树只能在客户端渲染,Next 15 要求它落在 Suspense 边界内,
-// 否则整页预渲染报错。故拆成「内层用 searchParams + 外层给边界」两段。
 // useSearchParams 让这棵子树只能在客户端渲染,Next 15 要求它落在 Suspense 边界内,
 // 否则整页预渲染报错。故拆成「内层用 searchParams + 外层给边界」两段。
 function GameView() {
@@ -62,7 +46,6 @@ function GameView() {
   const state = useRoom()
   const [buyInAmount, setBuyInAmount] = useState<number>(0)
   const [raiseAmount, setRaiseAmount] = useState<number>(0)
-  const [seatChoice, setSeatChoice] = useState<number | null>(null)
 
   useEffect(() => {
     if (!getSession()) {
@@ -85,6 +68,23 @@ function GameView() {
   const myTurn = isMyTurn(state)
   const acting = actingPlayer(state)
   const gameStarted = state.handStatus !== null
+  /**
+   * 结算展示期:手牌已经结束,但摊牌结果还留在桌上,直到下一手开始。
+   *
+   * `hand_show_down` 与 `hand_ended` 是**同一批事件**(服务端 `_settle_and_end` 一次产出),
+   * 所以只按 `gameStarted` 渲染的话,亮出来的牌在 6 毫秒后就随整桌一起卸载(0105 实测)。
+   *
+   * 判据用 `reveals` 而不是另立一个状态:它只由 `hand_show_down` 写入,而清空它的只有 `hand_started`、
+   * `state_snapshot` 与 `resetRoom`(离房/失去鉴权,见 store/room.ts)——全都意味着「没有上一手可看了」。
+   * 所以「非空」精确等于「这一手摊过牌且新一手还没开始」。
+   * 清点仍在 `HandStarted`——那是 docs/state.md 事件表钉住的位置,不搬到 `HandEnded` 来。
+   */
+  const showingShowdown = !gameStarted && state.reveals.length > 0
+  /**
+   * 桌上「有一手牌可谈」没有:进行中的手牌,或结算展示期。
+   * 管的不止牌面——公共牌、底牌、以及「Folded」标和那层变暗都跟它走(那两个描述的也是某一手里的事)。
+   */
+  const tableCardsVisible = gameStarted || showingShowdown
 
   /** 把服务器的座位/玩家投影成这一页 JSX 期望的形状。空座渲染成「可入座」。 */
   const seats = useMemo(() => {
@@ -117,31 +117,33 @@ function GameView() {
 
   const communityCards = useMemo(() => toUiCards(state.board), [state.board])
 
+  /** 自己的底牌(`your_hole_cards` 私发给本人)。别人的牌只可能来自摊牌,见 `revealedHands`。 */
+  const myHand = useMemo(
+    () => (mine && state.yourHoleCards ? toUiCards(state.yourHoleCards) : null),
+    [mine, state.yourHoleCards],
+  )
+
   /**
-   * 手牌只发给自己(your_hole_cards),别人的牌在摊牌前结构上就不存在。
-   * 摊牌时 HandShowDown 会带 reveals,那是唯一会出现别人底牌的地方。
+   * 摊牌亮出来的底牌,**按昵称索引**。`HandShowDown.reveals` 是唯一会出现别人底牌的地方。
+   *
+   * 为什么不按座位号:结算展示期跨越了两手之间,而**那段时间里座位会易主**——亮过牌的人离桌,
+   * 观战者补进同一个座位。按座位号索引就会把上一手某人的底牌挂到新占座那个人名下:牌本身是
+   * 公开的(摊牌对全房公开),但张冠李戴。昵称是 `world` 的键、全局唯一,且房内不可改名。
    */
-  const playerHands = useMemo(() => {
-    const hands: Record<number, UiCard[]> = {}
-    if (mine && state.yourHoleCards) hands[mine.seat_position + 1] = toUiCards(state.yourHoleCards)
-    for (const r of state.reveals) hands[r.seat_position + 1] = toUiCards(r.hole_cards)
-    return hands
-  }, [mine, state.yourHoleCards, state.reveals])
+  const revealedHands = useMemo(() => {
+    const byNick = new Map<string, UiCard[]>()
+    for (const r of state.reveals) byNick.set(r.nickname, toUiCards(r.hole_cards))
+    return byNick
+  }, [state.reveals])
 
   const pot = state.pot
-  const phase = state.handStatus ?? "preflop"
   /** 本街还要补多少才跟上。服务器给的 last_bet 是本街目标额,减掉自己已投入的。 */
   const callAmount = Math.max(0, state.lastBet - (mine?.bet_amount ?? 0))
-  const foldedSeats = useMemo(
-    () => new Set(state.players.filter((p) => p.status === "folded").map((p) => p.seat_position + 1)),
-    [state.players],
-  )
   const currentPlayerFolded = mine?.status === "folded"
 
   // 座位号在界面上是 1 起,协议里是 0 起,交界处统一在这里换算。
   const handleSeatClick = (seatNumber: number) => {
     if (me || state.seats.some((s) => s.seat_position === seatNumber - 1)) return
-    setSeatChoice(seatNumber)
     sitDown(seatNumber - 1, false)
   }
 
@@ -361,7 +363,7 @@ function GameView() {
             <div className="absolute inset-0 bg-black/20"></div>
 
             {/* Community cards: 5 fixed slots – flop = slots 0–2 (never move), turn/river append in 3–4 */}
-            {gameStarted && (
+            {tableCardsVisible && (
               <div
                 className="absolute left-[63%] top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2"
                 style={{ transform: "translate(-50%, -50%)" }}
@@ -387,6 +389,21 @@ function GameView() {
                 style={{ transform: "translate(-50%, calc(-50% + 4.5rem))" }}
               >
                 底池 <span data-testid="pot-amount">{formatChips(pot)}</span>
+              </div>
+            )}
+
+            {/*
+              结算展示期的标签,占底池腾出来的那个位置。
+              没有它,留在桌上的牌与「正在打的一手」在视觉上分不开——牌还在、行动栏没了,
+              用户只会以为界面卡住了。底池不留:钱已经付出去了,赢了多少由结算面板说。
+            */}
+            {showingShowdown && (
+              <div
+                className="absolute left-[63%] top-1/2 z-10 -translate-x-1/2 rounded-full border border-emerald-500/40 bg-black/70 px-3 py-1 text-xs font-semibold text-emerald-200"
+                style={{ transform: "translate(-50%, calc(-50% + 4.5rem))" }}
+                data-testid="showdown-recap"
+              >
+                上一手摊牌
               </div>
             )}
 
@@ -429,11 +446,16 @@ function GameView() {
                 )
               }
 
-              // 只有自己的座位(以及摊牌后被亮牌的人)在 playerHands 里有条目,别人一律没有——
-              // 这正是隐私边界。所以必须兜 []:原 mock 给所有座位都发了牌,直接读 .length 不会崩,
-              // 换成真实数据后其余座位是 undefined,页面会整个白屏(0080 由浏览器测试发现)。
-              const hand = (gameStarted ? playerHands[seat.number] : []) ?? []
+              // 只有自己的座位(以及摊牌后被亮牌的人)取得到牌,别人一律取不到——这正是隐私边界。
+              // 所以必须兜 []:原 mock 给所有座位都发了牌,直接读 .length 不会崩,换成真实数据后
+              // 其余座位是 undefined,页面会整个白屏(0080 由浏览器测试发现)。
               const isCurrent = seat.player.id === "current"
+              // 这个座位上的人被摊牌亮过牌没有。只用在**别人**的座位上:自己的牌本来就朝上,
+              // 该不该扣着由「我弃没弃牌」决定,与摊牌无关(自己也在 reveals 里,但那不是判据)。
+              const revealed = revealedHands.get(seat.player.name)
+              const isRevealed = revealed !== undefined
+              // 自己的座位取自己的底牌,别人的座位只可能取到摊牌亮出来的那份。
+              const hand = (tableCardsVisible ? (isCurrent ? myHand : revealed) : null) ?? []
 
               return (
                 <div
@@ -467,7 +489,7 @@ function GameView() {
                   {isCurrent ? (
                     <>
                       {/* Current player: cards on top, half covered by info bar; face-down if folded */}
-                      {gameStarted && hand.length === 2 && (
+                      {tableCardsVisible && hand.length === 2 && (
                         <div className="relative z-0 flex justify-center -mb-10">
                           <div className="flex items-end min-h-[32px]">
                             {currentPlayerFolded ? (
@@ -490,13 +512,11 @@ function GameView() {
                                 <PokerCard
                                   card={hand[0]}
                                   size="lg"
-                                  cornerLabel
                                   className="origin-bottom -mr-6 -rotate-[10deg]"
                                 />
                                 <PokerCard
                                   card={hand[1]}
                                   size="lg"
-                                  cornerLabel
                                   className="origin-bottom -ml-6 rotate-[10deg]"
                                 />
                               </>
@@ -505,7 +525,10 @@ function GameView() {
                         </div>
                       )}
                       <div className="relative z-10">
-                        {currentPlayerFolded && (
+                        {/* 「Folded」只在有牌可谈的时候才成立:进行中的手牌,或结算展示期。
+                            state.players 不随 hand_ended 清空,所以不加闸门的话,弃过牌的人会在
+                            两手之间一直挂着这个标(以及下面那层变暗),而那时他并不在任何一手里。 */}
+                        {tableCardsVisible && currentPlayerFolded && (
                           <div className="absolute -top-1 left-1/2 z-20 -translate-x-1/2 rounded bg-slate-600 px-2 py-0.5 text-[10px] font-bold text-white">
                             Folded
                           </div>
@@ -514,7 +537,7 @@ function GameView() {
                           player={seat.player}
                           isButton={seat.isButton}
                           isCurrentPlayer={true}
-                          className={cn("scale-105", currentPlayerFolded && "opacity-75")}
+                          className={cn("scale-105", tableCardsVisible && currentPlayerFolded && "opacity-75")}
                         />
                       </div>
                     </>
@@ -526,10 +549,14 @@ function GameView() {
                         isCurrentPlayer={false}
                         className="scale-90"
                       />
-                      {gameStarted && hand.length === 2 && (
+                      {tableCardsVisible && hand.length === 2 && (
+                        // 摊牌亮出来的人才朝上。这里曾硬写 isHidden,所以亮牌事件收到了、也投影进来了,
+                        // 渲染出来还是牌背 —— 而 BACKEND_GUIDE §5 的口径是「摊牌才翻」。
+                        // `isHidden` 今天恒为 false(取不到牌就根本不渲染),写成条件式是因为判据在这里:
+                        // 朝上与否取决于**服务器发没发这张牌**。局中给对手画牌背还没做,见 TODO 0105·A。
                         <div className="flex origin-center -mr-2">
-                          <PokerCard card={hand[0]} isHidden size="lg" className="-mr-2" />
-                          <PokerCard card={hand[1]} isHidden size="lg" className="-ml-2" />
+                          <PokerCard card={hand[0]} isHidden={!isRevealed} size="lg" className="-mr-2" />
+                          <PokerCard card={hand[1]} isHidden={!isRevealed} size="lg" className="-ml-2" />
                         </div>
                       )}
                     </>
@@ -537,6 +564,9 @@ function GameView() {
                 </div>
               )
             })}
+
+            {/* 结算面板挂在牌桌容器里(不是页面根):它要和公共牌左右分居,两者得用同一个宽度基准。 */}
+            <HandResult onDismiss={clearResult} />
           </div>
 
           {/* Game mode: compact action bar (hidden when current player folded) */}
@@ -612,7 +642,6 @@ function GameView() {
       */}
       <ConnectionBanner />
       <FreeEntryVote />
-      <HandResult onDismiss={clearResult} />
       <DmDrawer />
     </div>
   )

@@ -246,6 +246,63 @@ describe('隐私', () => {
     expect(s.reveals).toHaveLength(1)
     expect(s.actingPosition).toBeNull() // 摊牌后没人该行动
   })
+
+  it('新一手开始必须清掉上一手的亮牌,否则上一手对手的底牌会一直挂在新牌局上', () => {
+    // 这条从 0105 起是**隐私红线**,不再只是整洁性:在那之前 reveals 根本没渲染过任何东西,
+    // 漏清也看不出来;0105 让它上了屏并且跨过 hand_ended 继续显示(结算展示期),于是
+    // 「hand_started 清 reveals」成了唯一挡住「整局新牌里对手底牌朝上」的东西。
+    applyServerMessage(snapshot())
+    applyServerMessage({
+      type: 'hand_show_down',
+      board: [],
+      reveals: [
+        {
+          seat_position: 5,
+          nickname: 'bob',
+          hole_cards: [
+            { rank: 'Q', suit: 'c' },
+            { rank: 'J', suit: 'c' },
+          ],
+        },
+      ],
+    })
+    applyServerMessage({ type: 'hand_ended', winnings: [], refunds: [] })
+    expect(getRoomState().reveals).toHaveLength(1) // 结算展示期:牌还留着
+
+    applyServerMessage({
+      type: 'hand_started',
+      hand_seq: 4,
+      button_position: 0,
+      small_blind: 10,
+      big_blind: 20,
+      players: [],
+      acting_position: null,
+      pot: 30,
+      last_bet: 20,
+      min_raise_to: 40,
+    })
+    expect(getRoomState().reveals).toEqual([]) // 新一手:必须清干净
+  })
+
+  it('重连拿到的快照也清亮牌:服务器不保存已结束手牌的摊牌,前端不许自己留一份', () => {
+    applyServerMessage(snapshot())
+    applyServerMessage({
+      type: 'hand_show_down',
+      board: [],
+      reveals: [
+        {
+          seat_position: 5,
+          nickname: 'bob',
+          hole_cards: [
+            { rank: 'Q', suit: 'c' },
+            { rank: 'J', suit: 'c' },
+          ],
+        },
+      ],
+    })
+    applyServerMessage(snapshot())
+    expect(getRoomState().reveals).toEqual([])
+  })
 })
 
 describe('手牌结束', () => {
