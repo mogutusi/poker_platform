@@ -8,7 +8,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
+from app.db.models import DMMessage, DMReadCursor, HandActionLog, HandDetail, HandParticipant, HandParticipantDetail, HandRecord, User
 
 
 class LoginUser(NamedTuple):
@@ -190,6 +190,163 @@ async def list_hands(
         return [
             (hid, dk, as_utc(st), as_utc(et), pot, tuple(sorted(parts.get(hid, []))))
             for hid, dk, st, et, pot in hand_rows
+        ]
+
+
+class HandDetailRow(NamedTuple):
+    board: str  # 公共牌 treys 串连写
+    button_position: int | None
+    big_blind: int | None
+
+
+class ParticipantDetailRow(NamedTuple):
+    seat_position: int | None
+    hole_cards: str | None  # 隐私:调用方决定给不给看(rest/hands.py)
+    vpip: bool
+    showed: bool
+
+
+async def load_hand_details(
+    sessionmaker: async_sessionmaker[AsyncSession], hand_ids: list[int]
+) -> tuple[dict[int, HandDetailRow], dict[int, dict[str, ParticipantDetailRow]]]:
+    # 一批手牌的明细(0110):牌面/庄位/大盲 + 每人座位/底牌/VPIP/亮牌,按 hand_id、再按昵称索引。
+    # 0110 之前的手没有明细行 → 不在返回里(调用方按「无牌面」处理)。
+    if not hand_ids:
+        return {}, {}
+    async with sessionmaker() as session:
+        hands = {
+            hid: HandDetailRow(board, btn, bb)
+            for hid, board, btn, bb in (
+                await session.execute(
+                    select(HandDetail.hand_id, HandDetail.board, HandDetail.button_position, HandDetail.big_blind).where(
+                        HandDetail.hand_id.in_(hand_ids)
+                    )
+                )
+            ).all()
+        }
+        parts: dict[int, dict[str, ParticipantDetailRow]] = {}
+        stmt = (
+            select(
+                HandParticipantDetail.hand_id,
+                User.nickname,
+                HandParticipantDetail.seat_position,
+                HandParticipantDetail.hole_cards,
+                HandParticipantDetail.vpip,
+                HandParticipantDetail.showed,
+            )
+            .join(User, User.id == HandParticipantDetail.uid)
+            .where(HandParticipantDetail.hand_id.in_(hand_ids))
+        )
+        for hid, nick, seat, hole, vpip, showed in (await session.execute(stmt)).all():
+            parts.setdefault(hid, {})[nick] = ParticipantDetailRow(seat, hole, bool(vpip), bool(showed))
+        return hands, parts
+
+
+class StatsRow(NamedTuple):
+    hand_id: int
+    end_time: datetime  # UTC
+    big_blind: int | None  # None = 0110 之前的手(无明细)
+    nickname: str
+    points: int  # 账号当前全局积分(展示用)
+    net: int  # 本手盈亏
+    vpip: bool | None  # None = 无明细,不计入 VPIP 分母
+
+
+async def load_stats_rows(sessionmaker: async_sessionmaker[AsyncSession]) -> list[StatsRow]:
+    # 排行榜统计的原料(0110):每手每人一行。时间段过滤与汇总在 rest/leaderboard.py 里用 Python 做
+    # (sqlite 存的带时区时间读回来是 naive,放 SQL 里比较不可靠;规模也小)。
+    async with sessionmaker() as session:
+        stmt = (
+            select(
+                HandParticipant.hand_id,
+                HandRecord.end_time,
+                HandDetail.big_blind,
+                User.nickname,
+                User.points,
+                HandParticipant.initial_points,
+                HandParticipant.final_points,
+                HandParticipantDetail.vpip,
+            )
+            .join(HandRecord, HandRecord.id == HandParticipant.hand_id)
+            .join(User, User.id == HandParticipant.uid)
+            .outerjoin(HandDetail, HandDetail.hand_id == HandParticipant.hand_id)
+            .outerjoin(
+                HandParticipantDetail,
+                and_(
+                    HandParticipantDetail.hand_id == HandParticipant.hand_id,
+                    HandParticipantDetail.uid == HandParticipant.uid,
+                ),
+            )
+        )
+        return [
+            StatsRow(hid, as_utc(et), bb, nick, pts, fin - init, None if vpip is None else bool(vpip))
+            for hid, et, bb, nick, pts, init, fin, vpip in (await session.execute(stmt)).all()
+        ]
+
+
+class PlayerHandRow(NamedTuple):
+    # 一个玩家打过的一手(0111,统计页用):他自己的结果 + 这手的公开信息。只有他自己的底牌。
+    hand_id: int
+    end_time: datetime  # UTC
+    final_pot: int
+    net: int
+    big_blind: int | None
+    button_position: int | None
+    board: str
+    seat_position: int | None
+    hole_cards: str | None  # 本人的牌(统计页只给本人看)
+    vpip: bool | None
+    showed: bool | None
+    seats: tuple[int, ...]  # 这手全部发到牌的座位(推位置用)
+    actions: str | None  # 动作流水 JSON(0111 之前的手为 None)
+
+
+async def load_player_hands(sessionmaker: async_sessionmaker[AsyncSession], uid: int) -> list[PlayerHandRow]:
+    # 某个玩家参与过的全部手牌,旧→新。统计在 rest/stats.py 里用 Python 算(时间过滤同 load_stats_rows 的理由)。
+    async with sessionmaker() as session:
+        stmt = (
+            select(
+                HandRecord.id,
+                HandRecord.end_time,
+                HandRecord.final_pot,
+                HandParticipant.initial_points,
+                HandParticipant.final_points,
+                HandDetail.big_blind,
+                HandDetail.button_position,
+                HandDetail.board,
+                HandParticipantDetail.seat_position,
+                HandParticipantDetail.hole_cards,
+                HandParticipantDetail.vpip,
+                HandParticipantDetail.showed,
+                HandActionLog.actions,
+            )
+            .join(HandParticipant, HandParticipant.hand_id == HandRecord.id)
+            .outerjoin(HandDetail, HandDetail.hand_id == HandRecord.id)
+            .outerjoin(
+                HandParticipantDetail,
+                and_(HandParticipantDetail.hand_id == HandRecord.id, HandParticipantDetail.uid == uid),
+            )
+            .outerjoin(HandActionLog, HandActionLog.hand_id == HandRecord.id)
+            .where(HandParticipant.uid == uid)
+            .order_by(HandRecord.id)
+        )
+        rows = (await session.execute(stmt)).all()
+        ids = [r[0] for r in rows]
+        seats: dict[int, list[int]] = {}
+        if ids:
+            sstmt = select(HandParticipantDetail.hand_id, HandParticipantDetail.seat_position).where(
+                HandParticipantDetail.hand_id.in_(ids)
+            )
+            for hid, seat in (await session.execute(sstmt)).all():
+                if seat is not None:
+                    seats.setdefault(hid, []).append(seat)
+        return [
+            PlayerHandRow(
+                hid, as_utc(et), pot, fin - init, bb, btn, board or "", seat, hole,
+                None if vpip is None else bool(vpip), None if showed is None else bool(showed),
+                tuple(sorted(seats.get(hid, []))), actions,
+            )
+            for hid, et, pot, init, fin, bb, btn, board, seat, hole, vpip, showed, actions in rows
         ]
 
 

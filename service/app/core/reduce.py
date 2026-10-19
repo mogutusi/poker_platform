@@ -346,20 +346,39 @@ def _player_action(work: Work, cmd: PlayerAction) -> ReduceResult:
     actor = hand.players[pos]
 
     big_blind = blinds.BIG_BLIND_MULTIPLE * room.small_blind
+    preflop = hand.status is HandStatus.PRE_FLOP
+    prev_last_bet = hand.last_bet
     err = betting.apply_action(hand, actor, cmd.action, cmd.bet_amount, big_blind)
     if err is not None:
         return [], err  # 违规动作:丢工作副本、world 不动(失败安全)
-    return _acted_events(work, hand, actor, cmd.action, big_blind), None
+    if preflop and cmd.action is PlayerActionType.BET:
+        hand.vpip.add(actor.nickname)  # 自愿跟注/加注才算 VPIP;盲注是 post_blinds 下的,不走这里
+    return _acted_events(work, hand, actor, cmd.action, big_blind, prev_last_bet), None
 
 
 def _acted_events(
-    work: Work, hand: Hand, actor: Player, action: PlayerActionType, big_blind: int
+    work: Work, hand: Hand, actor: Player, action: PlayerActionType, big_blind: int, prev_last_bet: int | None = None
 ) -> list[Event]:
     # 行动者动作(自愿 PlayerAction / 超时默认 / 离桌 auto-fold)已落 hand 后的标准产出:
     # 先快照行动结果(街若关闭 settle_street 会清零 bet_amount),再推进,产 Broadcast(PlayerActed) + 推进事件。
     snapshot = (actor.bet_amount, actor.points, actor.status)
+    _log_action(hand, actor, action, prev_last_bet)  # 推进前记:推进可能换街
     follow = _advance(work, hand, big_blind)
     return [_acted_broadcast(work, hand, actor, action, snapshot, big_blind), *follow]
+
+
+def _log_action(hand: Hand, actor: Player, action: PlayerActionType, prev_last_bet: int | None) -> None:
+    # 统计用的动作流水(0111)。BET 按「这一下之前的 last_bet」分成 call / bet / raise(翻牌前开池也是 raise,
+    # 因为大盲已经是第一注)。只有自愿的 PlayerAction 会带 prev_last_bet;超时与离桌只会是 check/fold。
+    if action is PlayerActionType.FOLD:
+        kind = "fold"
+    elif action is PlayerActionType.CHECK:
+        kind = "check"
+    elif prev_last_bet is not None and actor.bet_amount > prev_last_bet:
+        kind = "raise" if prev_last_bet > 0 else "bet"
+    else:
+        kind = "call"
+    hand.log.append((hand.status.value, actor.nickname, kind, actor.bet_amount))
 
 
 def _acted_broadcast(
@@ -464,6 +483,7 @@ def _settle_and_end(work: Work, hand: Hand, *, reveal: bool) -> list[Event]:
                 ShowdownReveal(seat_position=p.seat_position, nickname=p.nickname, hole_cards=p.hole_cards)
             )
         hand.status = HandStatus.SHOWDOWN
+        hand.showed = {p.nickname for p in live}
         events.append(
             Broadcast(room=work.room_name, msg=HandShowDown(board=tuple(board), reveals=tuple(reveals)))
         )
@@ -525,7 +545,15 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
         stacks.append(SeatStack(seat_position=p.seat_position, nickname=p.nickname, points=s.points))
         # 手牌记录含全部参与者(离桌者也参与了本手)
         participants.append(
-            ParticipantWrite(uid=work.users[p.nickname].uid, initial_points=initial, final_points=s.points)
+            ParticipantWrite(
+                uid=work.users[p.nickname].uid,
+                initial_points=initial,
+                final_points=s.points,
+                seat_position=p.seat_position,
+                hole_cards="".join(c.to_treys() for c in p.hole_cards) if p.hole_cards else None,
+                vpip=p.nickname in hand.vpip,
+                showed=p.nickname in hand.showed,
+            )
         )
         # UserStatus 收尾:离桌者状态不动(随后 _evict 移除);局中请求坐出者转 SITTING_OUT;其余 PLAYING→SITTING_IN
         if p.nickname in room.leaving:
@@ -545,6 +573,14 @@ def _finalize_hand(work: Work, hand: Hand, payout: sidepot.Payout) -> list[Event
         start_time=hand.start_time,
         final_pot=sum(pot.amount for pot in payout.pots),
         participants=tuple(participants),
+        board="".join(c.to_treys() for c in _board(hand)),
+        button_position=room.button_position,
+        big_blind=blinds.BIG_BLIND_MULTIPLE * room.small_blind,
+        actions=tuple(
+            (street, work.users[nick].uid, kind, amount)
+            for street, nick, kind, amount in hand.log
+            if nick in work.users
+        ),
     )
     ended = HandEnded(
         winnings=tuple(NickAmount(nickname=n, amount=a) for n, a in payout.winnings.items()),

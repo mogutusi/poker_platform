@@ -315,7 +315,9 @@ def reduce(work, cmd):
 
 1. **筹码守恒**:任一时刻 `Σ Player.points + Σ Player.bet_amount + Σ contributed == 开局锁入的总筹码`。三者都要算,因为 `bet_amount` 是本街尚未并入 `contributed` 的投入。结算后 `Σ 还回 Seat.points == 同一总额`。每个分支后可 `assert`,测试期开启。
 2. **全局积分不在对局内流转**:下注、底池、结算只动 `Player`/`Seat`/`contributed`,不碰 `UserState`。全局积分只在 `BuyIn`/`LeaveRoom`/`Cleanup` 变动(见 [user.md](user.md))。
-3. **底牌/牌堆隐私**:除 `Personal(HoleCards)` 与摊牌的 `HandShowDown` 外,任何事件、日志、落库都不含 `hole_cards`/`deck`。
+3. **底牌/牌堆隐私**:除 `Personal(HoleCards)` 与摊牌的 `HandShowDown` 外,任何事件、日志都不含 `hole_cards`/`deck`。
+   **落库例外(0110)**:`HandRecordWrite` 带每人底牌(手牌历史要能看自己那手),`deck` 仍从不落库。读侧把关:
+   `POST /hands` 只把底牌给**本人**,或给**摊牌时亮过牌**的人(`showed`)——和牌桌上能看到的一样多,别人没亮的牌出不了服务器。
 4. **行动唯一**:每房间至多一个 `acting_position`;过期 `Timeout` 必被三元身份 `(room, hand_seq, epoch)` 的 staleness 校验挡掉。
 5. 先校验后改是习惯;正确性兜底是工作副本 discard。
 6. **一个用户只在一个房间**:`UserState.room` 记其所在房间。已在某房者 `JoinRoom` 到别房会被拒(`ALREADY_IN_ROOM`),要先 `LeaveRoom`。这保证全局积分的载入/驱逐无歧义(见 [user.md](user.md))。

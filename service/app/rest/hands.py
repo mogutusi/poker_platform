@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import gameconfig
 from app.auth.session import SessionStore
-from app.db.queries import list_hands, load_user_by_nick
+from app.db.queries import list_hands, load_hand_details, load_user_by_nick
 from app.rest.secure import SecureRequest, SecureResponse, open_request, seal_response
 
 
@@ -26,6 +26,10 @@ class HandParticipantView(BaseModel):
     initial_points: int  # 开局锁入本手的筹码
     final_points: int  # 结算后还回座位的筹码
     net: int  # 本手盈亏 = final_points - initial_points(便利派生)
+    # ↓ 0110 起的明细;更早的手没有,给 None / False
+    seat_position: int | None = None  # 本手座位(前端据此和 button_position 推 BTN/SB/BB…)
+    hole_cards: list[str] | None = None  # 底牌,如 ["As","Kd"];**只给本人,或摊牌亮过牌的人**,其余恒为 None
+    showed: bool = False  # 摊牌时亮了牌
 
 
 class HandRecordView(BaseModel):
@@ -35,6 +39,14 @@ class HandRecordView(BaseModel):
     end_time: datetime  # 手结束墙钟
     final_pot: int  # 各子池金额之和(不含退还的未叫注)
     participants: list[HandParticipantView]  # 全部参与者(按 nickname 升序)
+    board: list[str] = []  # 公共牌(0–5 张,如 ["Ah","7c","2d"]);0110 之前的手为空
+    button_position: int | None = None  # 庄位座位号
+    big_blind: int | None = None  # 本手大盲额
+
+
+def _split_cards(s: str | None) -> list[str]:
+    # "AsKd7c" → ["As","Kd","7c"](treys 串每张 2 字符)
+    return [s[i : i + 2] for i in range(0, len(s), 2)] if s else []
 
 
 def _opt_str(params: dict, key: str) -> str | None:
@@ -84,6 +96,22 @@ def make_hands_router(
         rows = await list_hands(
             sessionmaker, room=room, participant_uid=participant_uid, before_id=before, limit=limit
         )
+        details, part_details = await load_hand_details(sessionmaker, [r[0] for r in rows])
+
+        def participant(hid: int, n: str, i: int, f: int) -> HandParticipantView:
+            d = part_details.get(hid, {}).get(n)
+            # 隐私边界(core.md 不变量 3,0110 修订):底牌只给本人,或摊牌时亮过的人——和牌桌上看到的一样多。
+            visible = d is not None and d.hole_cards and (n == session.nickname or d.showed)
+            return HandParticipantView(
+                nickname=n,
+                initial_points=i,
+                final_points=f,
+                net=f - i,
+                seat_position=d.seat_position if d else None,
+                hole_cards=_split_cards(d.hole_cards) if visible else None,
+                showed=d.showed if d else False,
+            )
+
         views = [
             HandRecordView(
                 id=hid,
@@ -91,10 +119,10 @@ def make_hands_router(
                 start_time=st,
                 end_time=et,
                 final_pot=pot,
-                participants=[
-                    HandParticipantView(nickname=n, initial_points=i, final_points=f, net=f - i)
-                    for n, i, f in ps
-                ],
+                participants=[participant(hid, n, i, f) for n, i, f in ps],
+                board=_split_cards(details[hid].board) if hid in details else [],
+                button_position=details[hid].button_position if hid in details else None,
+                big_blind=details[hid].big_blind if hid in details else None,
             )
             for hid, dk, st, et, pot, ps in rows
         ]

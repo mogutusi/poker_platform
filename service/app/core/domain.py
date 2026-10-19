@@ -44,6 +44,10 @@ class Hand:
     turn: Card | None = None  # 第 4 张公共牌;None = 未发
     river: Card | None = None  # 第 5 张公共牌;None = 未发
     epoch: int = 0  # 每次行动推进/街切换自增;Timeout staleness 判据
+    vpip: set[str] = field(default_factory=set)  # 翻牌前**自愿**往池里放过钱的人(跟注/加注;盲注不算),供统计
+    showed: set[str] = field(default_factory=set)  # 摊牌时亮了底牌的人;手牌历史里别人能看到的只有这些人的牌
+    # 动作流水(0111,只为统计):(街, 昵称, fold/check/call/bet/raise, 本街目标额)。全是桌上公开的信息。
+    log: list[tuple[str, str, str, int]] = field(default_factory=list)
 
 
 @dataclass

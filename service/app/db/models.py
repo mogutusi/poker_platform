@@ -5,7 +5,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -45,6 +45,33 @@ class HandParticipant(SQLModel, table=True):
     uid: int = Field(foreign_key="user.id", primary_key=True)  # 参与者不可变账号主键(FK → user.id)
     initial_points: int  # 开局锁入本手的筹码(in_game_points 快照)
     final_points: int  # 结算后还回座位的筹码
+
+
+class HandDetail(SQLModel, table=True):
+    # 一手牌的牌面与盲注(0110;一手一行,和 HandRecord 同事务写)。单独成表而不是给 HandRecord 加列:
+    # 启动时 create_all 会自动建出缺的表,已有的 poker.db 不用先跑迁移就能用(加列则必须 alembic upgrade)。
+    hand_id: int = Field(foreign_key="handrecord.id", primary_key=True)
+    board: str = Field(default="", max_length=10)  # 公共牌 treys 串连写,0–5 张(如 "Ah7c2dTsKs");公开信息
+    button_position: Optional[int] = Field(default=None)  # 庄位座位号
+    big_blind: Optional[int] = Field(default=None)  # 本手大盲额(统计 bb/100)
+
+
+class HandParticipantDetail(SQLModel, table=True):
+    # 一手牌一个参与者的明细(0110):座位、底牌、是否自愿入池、是否摊牌亮牌。
+    # 隐私:底牌落库,但 REST 只把它给**本人**或**摊牌亮过的人**(rest/hands.py),和牌桌上看到的一致。
+    hand_id: int = Field(foreign_key="handrecord.id", primary_key=True)
+    uid: int = Field(foreign_key="user.id", primary_key=True)
+    seat_position: Optional[int] = Field(default=None)
+    hole_cards: Optional[str] = Field(default=None, max_length=4)  # treys 串,如 "AsKd"
+    vpip: bool = Field(default=False)  # 翻牌前自愿入池
+    showed: bool = Field(default=False)  # 摊牌时亮了牌
+
+
+class HandActionLog(SQLModel, table=True):
+    # 一手牌的动作流水(0111,统计 PFR / 3-bet / c-bet / AF 用)。JSON 数组 [[街, uid, 动作, 本街目标额], ...]。
+    # 全是桌上公开的信息(谁在哪条街做了什么),没有牌面。单独成表同 0110:启动时 create_all 自动建出。
+    hand_id: int = Field(foreign_key="handrecord.id", primary_key=True)
+    actions: str = Field(default="[]", sa_column=Column(Text, nullable=False))
 
 
 class DMMessage(SQLModel, table=True):

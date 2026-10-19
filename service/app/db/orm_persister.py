@@ -2,6 +2,7 @@
 # 落库语义见 db.md「两类写 / 事务分组」:状态写=定向列 UPDATE(只盖 Write 携带的列)、事件写=幂等 INSERT。
 # 不 import shell:靠结构化协议(duck typing)满足 shell/persist.py 的 Persister;只 import core.records + db.models + sqlalchemy。
 
+import json
 import logging
 from datetime import datetime
 
@@ -12,7 +13,7 @@ from app.core.events import PersistPayload
 from app.core.records import HandRecordWrite, PointsWrite
 from app.db.dm_records import DMReadCursorWrite, DMWrite
 from app.db.queries import as_utc
-from app.db.models import DMMessage, DMReadCursor, HandParticipant, HandRecord, User
+from app.db.models import DMMessage, DMReadCursor, HandActionLog, HandDetail, HandParticipant, HandParticipantDetail, HandRecord, User
 
 log = logging.getLogger(__name__)
 
@@ -141,3 +142,22 @@ class OrmPersister:
                     final_points=part.final_points,
                 )
             )
+            session.add(
+                HandParticipantDetail(
+                    hand_id=record.id,
+                    uid=part.uid,
+                    seat_position=part.seat_position,
+                    hole_cards=part.hole_cards,
+                    vpip=part.vpip,
+                    showed=part.showed,
+                )
+            )
+        session.add(
+            HandDetail(
+                hand_id=record.id,
+                board=payload.board,
+                button_position=payload.button_position,
+                big_blind=payload.big_blind,
+            )
+        )
+        session.add(HandActionLog(hand_id=record.id, actions=json.dumps([list(a) for a in payload.actions])))
