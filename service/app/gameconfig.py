@@ -96,6 +96,9 @@ class GameConfig(BaseSettings):
     # 生产走每用户带外 K_user + 各自密码(auth.md),此处明示放宽(dev 客户端要知 K_user 才能加密登录 blob)。
     DEV_PASSWORD: str = Field(min_length=1)  # 所有 dev 用户共享的登录口令
     DEV_KUSER: str = Field(pattern=r"^[0-9a-f]{32}$")  # 所有 dev 用户共享的 SM4 密钥(32 hex = 16B)
+    # 本地测试开关(0112,dev-only):POST /stats/me 允许带 user= 看**任何人**的统计(含其底牌热力图),
+    # 用来看 AI 对手打了几百手之后的 VPIP/3-Bet。上线前务必关掉(或删掉这一行,默认就是关)。
+    DEV_STATS_ANY_USER: bool = False
 
 
 # 启动期单例:import 即建 → 缺字段/越界当场 ValidationError(config.md「缺了启动即报错」)。

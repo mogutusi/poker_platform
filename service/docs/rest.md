@@ -59,6 +59,24 @@ POST /leaderboard  信封内 {limit?}  →  {entries: [{ rank, nickname, points 
 
 **DB 滞后**:刚买入/离桌的变更可能还没 flush,排行榜会短暂偏旧。可接受。
 
+### 统计榜 `POST /leaderboard/stats`(0110)
+
+- 内层参数 `{since?: epoch 秒, limit?}`;`since` 缺省 = 全部时间,前端「今日」传本地当天 0 点。响应 `{"entries": [StatsEntry...]}`。
+- 每行:`rank, nickname, points, hands, net, won_hands, win_rate, vpip, bb_per_100, most_won_from, most_lost_to`;按 `net` 降序,同额按手数多者在前、再按昵称。
+- `vpip` / `bb_per_100` 只统计有明细的手(0110 之后);全是老手时为 `null`。
+- 两人之间的输赢:一手里每个输家输的钱按赢家各自赢的比例分给赢家(无抽水,输赢相抵),累计后取对账净额。
+  `most_won_from` = 净额最大的正方对手,`most_lost_to` 反之。纯函数 `compute_stats` 在 `rest/leaderboard.py`。
+
+### 个人统计 `POST /stats/me`(0111)
+
+- 只看**自己**(会话里的昵称),因为热力图和最近手牌带底牌。内层参数 `{since?: epoch 秒}`。
+- 响应:`summary`(VPIP / PFR / 3-Bet / Fold to 3-Bet / C-Bet / 看翻牌 / WTSD / W$SD / WWSF / AF、摊牌与非摊牌盈亏)、
+  `positions`(按位置)、`combos`(13×13 起手牌格子:手数 / 盈亏 / 赢的手数 / 入池手数)、`graph`(累计盈亏曲线,最多 400 点)、
+  `recent`(最近 300 手:时间、自己的底牌、公共牌、盈亏、位置)。
+- 口径在 `app/rest/stats.py`。PFR、3-Bet、C-Bet、AF 要用动作流水(新表 `handactionlog`,迁移 `d4b2a9c1e311`),
+  0111 之前的手没有流水,不进这些比率的分母;每个比率都给 `made / chances / pct`,没机会时 `pct = null`。
+- 动作流水只有桌上公开的信息(谁在哪条街做了什么、下到多少),不含牌面。
+
 ## 手牌历史 hand history —— 已落地(0051 + room 过滤 0052)
 
 一句话:从 DB 查已结束的手,只有结果,永远没有底牌。
@@ -82,8 +100,10 @@ POST /hands  信封内 {room?, user?, before?, limit?}  →  {hands: [HandRecord
 
 **隐私**
 
-- 记录只存结果,`hole_cards` / `deck` 从不落库(见 [core.md](core.md) 不变量 3 / [log.md](log.md));所以历史看得到输赢,看不到底牌。
-- 两表结构上就没有牌面字段,查询天然不泄。
+- **0110 起**另记明细(新表 `handdetail` / `handparticipantdetail`,迁移 `c3a1f0e7d210`;启动时 `create_all` 也会建出来,老库不跑迁移也能用):
+  公共牌 `board`、庄位 `button_position`、大盲 `big_blind`,每人 `seat_position` / `hole_cards` / `vpip` / `showed`。`deck` 仍从不落库。
+- 响应里 `hole_cards` **只给请求者本人,或摊牌亮过牌的人**,其余恒为 `null`(见 [core.md](core.md) 不变量 3 的落库例外)。
+- 0110 之前的手没有明细:`board=[]`、`hole_cards=null`、`seat_position=null`。
 
 **分页用 `before`(游标),不用 OFFSET**
 

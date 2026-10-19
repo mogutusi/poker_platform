@@ -26,6 +26,7 @@ from app.db.orm_persister import OrmPersister
 from app.auth.session import Session, SessionStore
 from app.rest.hands import make_hands_router
 from app.rest.leaderboard import make_leaderboard_router
+from app.rest.stats import make_stats_router
 from app.rest.lobby import make_lobby_router
 from app.rest.login import make_login_router
 from app.rest.profile import make_nickname_router, make_profile_router
@@ -234,6 +235,8 @@ def create_app() -> FastAPI:
     app.include_router(make_lobby_router(lambda: shell.world, shell.session_store))
     # REST 排行榜(读 DB 结算积分,见 app/rest/leaderboard.py);sessionmaker 迟绑(setup() 前已在 __init__ 建好)。
     app.include_router(make_leaderboard_router(lambda: shell.sessionmaker, shell.session_store))
+    # 个人统计(0111):VPIP/PFR/3-Bet…、起手牌热力图、最近手牌;只看自己(见 app/rest/stats.py)。
+    app.include_router(make_stats_router(lambda: shell.sessionmaker, shell.session_store))
     # REST 手牌历史(读 DB,游标分页,见 app/rest/hands.py)。
     app.include_router(make_hands_router(lambda: shell.sessionmaker, shell.session_store))
     # 登录端点(P5:K_user 护密码、铸会话、K_user 加密下发 session,见 app/rest/login.py)。sessionmaker/session_store 迟绑。
