@@ -61,11 +61,16 @@ export async function seatPoints(page: Page, seat: number): Promise<number> {
   return Number(raw)
 }
 
-/** 现在轮到哪一页行动。按钮只在自己回合可用,所以「谁能点谁就是行动者」。 */
+/**
+ * 现在轮到哪一页行动。按钮只在自己回合可用,所以「谁能点谁就是行动者」。
+ * 0112 起没注可跟时 Fold 是灰的(只能 Check),有注要跟时 Check 是灰的,所以两个都看:任一可点即是行动者。
+ */
 export async function whoActs(pages: Page[]): Promise<Page | null> {
   for (const p of pages) {
-    const fold = p.getByRole('button', { name: /^Fold$/ })
-    if ((await fold.isVisible().catch(() => false)) && (await fold.isEnabled().catch(() => false))) return p
+    for (const name of [/^Fold$/, /^Check$/]) {
+      const btn = p.getByRole('button', { name })
+      if ((await btn.isVisible().catch(() => false)) && (await btn.isEnabled().catch(() => false))) return p
+    }
   }
   return null
 }
@@ -90,11 +95,13 @@ async function fingerprint(page: Page): Promise<string> {
   // 而手牌一结束整条行动栏和底池就从 DOM 上消失,于是它们不是「返回没有」而是**一直等到超时**,
   // 指纹永远算不出来,轮询只好判成 pending(0087 在这上面卡过一轮)。
   return page.evaluate(() => {
-    const fold = Array.from(document.querySelectorAll('button')).find(
-      (b) => (b.textContent || '').trim() === 'Fold',
-    ) as HTMLButtonElement | undefined
+    // 「轮到我」= Fold / Check / Call 里任一可点(0112 起没注可跟时 Fold 是灰的,有注要跟时 Check 是灰的,
+    // 只看 Fold 会把「我 check 了、行动权移走」当成没变化)
+    const acts = Array.from(document.querySelectorAll('button')).filter((b) =>
+      /^(Fold|Check|Call\b)/.test((b.textContent || '').trim()),
+    ) as HTMLButtonElement[]
     return JSON.stringify([
-      fold ? !fold.disabled : null,
+      acts.length ? acts.some((b) => !b.disabled) : null,
       document.querySelectorAll('img[src*="/cards/"]:not([src*="back.png"])').length,
       document.querySelector('[data-testid="pot-amount"]')?.textContent ?? null,
     ])
@@ -125,14 +132,15 @@ export async function actAndWait(page: Page, name: RegExp): Promise<'accepted' |
 }
 
 /**
- * 让 page 走一步「不加注地跟上」:先试 Check,服务器拒了再 Call。
+ * 让 page 走一步「不加注地跟上」:能 Check 就 Check,服务器拒了(或 Check 是灰的)再 Call。
  *
- * **不能只点 Check**:Check / Call 哪个合法是规则,前端按钮不预判(不变量 1),所以点错很正常,
- * 判据只能是服务器的回答。两个都被拒就直接抛——那说明用例的假设错了,应当红,不该继续空转。
+ * 0112 起行动面板会把显然不可用的按钮置灰(有注要跟时 Check 是灰的),灰按钮点不了,所以先看它是否可点。
+ * 合法与否最终仍以服务器的回答为准:两个都被拒就直接抛——那说明用例的假设错了,应当红,不该继续空转。
  */
 export async function checkOrCall(page: Page): Promise<void> {
   await dismissError(page)
-  if ((await actAndWait(page, /^Check$/)) === 'accepted') return
+  const check = page.getByRole('button', { name: /^Check$/ })
+  if ((await check.isEnabled().catch(() => false)) && (await actAndWait(page, /^Check$/)) === 'accepted') return
   await dismissError(page)
   if ((await actAndWait(page, /^Call/)) === 'rejected') {
     const detail = await page.getByTestId('action-error').getAttribute('title')

@@ -49,45 +49,28 @@ test.describe('大厅枢纽', () => {
     await expect(page.getByText('更换 K_user 密钥')).toBeVisible()
 
     // 只回大厅一个出口
-    await page.getByRole('button', { name: /返回大厅/ }).click()
+    await page.getByTestId('nav-lobby').click()
     await expect(page).toHaveURL(/\/lobby/, { timeout: 10_000 })
 
     expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('历史页能打开并给出可读的空态或列表', async ({ page }, testInfo) => {
+  test('数据页签能打开,给出可读的空态或统计(手牌历史已搬到这里)', async ({ page }, testInfo) => {
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(String(e)))
     await login(page, pickUser(testInfo.title))
 
-    await page.getByTestId('history-entry').click()
-    await expect(page).toHaveURL(/\/history/, { timeout: 10_000 })
+    // 大厅不再放手牌历史;顶部导航的「数据」页签是新入口
+    await expect(page.getByTestId('history-entry')).toHaveCount(0)
+    await page.getByTestId('nav-stats').click()
+    await expect(page).toHaveURL(/\/stats/, { timeout: 10_000 })
 
-    // 有记录就列出来,没有就给空态——两者都不能是白屏。
-    await expect(
-      page.locator('text=/还没有打过牌|底池|盈亏|加载中/').first(),
-    ).toBeVisible({ timeout: 15_000 })
+    // 有记录就出统计 + 热力图,没有就给空态——两者都不能是白屏。
+    await expect(page.locator('text=/还没有打过牌|起手牌热力图|加载中/').first()).toBeVisible({ timeout: 15_000 })
 
-    expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
-  })
-
-  test('私聊抽屉在大厅可开可关,且与房间聊天分开', async ({ page }, testInfo) => {
-    const errors: string[] = []
-    page.on('pageerror', (e) => errors.push(String(e)))
-    await login(page, pickUser(testInfo.title))
-
-    // 收起态是个克制的小浮标(用户明确担心抽屉太占地方)
-    // 用无障碍标签定位,比 testid 更稳:它同时是给读屏用户的说明,不会随视觉调整而改。
-    const toggle = page.getByRole('button', { name: /打开私聊/ })
-    await expect(toggle).toBeVisible({ timeout: 10_000 })
-    await toggle.click()
-
-    const drawer = page.getByRole('complementary', { name: '私聊' }).or(page.locator('[aria-label="私聊"]'))
-    await expect(drawer.first()).toBeVisible()
-
-    await page.getByRole('button', { name: '关闭私聊' }).click()
-    await expect(toggle).toBeVisible()
-
+    // 导航能回大厅(客户端跳转,会话不丢)
+    await page.getByTestId('nav-lobby').click()
+    await expect(page.getByTestId('profile-card')).toBeVisible({ timeout: 10_000 })
     expect(errors, `页面抛出未捕获错误:\n${errors.join('\n')}`).toEqual([])
   })
 })
@@ -102,6 +85,9 @@ test.describe('完整排行页(0104)', () => {
     await entry.click()
 
     await expect(page.getByText('完整排行')).toBeVisible()
+    // 默认是按净赢的「总榜」;积分排名(和大厅摘要同一口径)在「积分」页签
+    await expect(page.getByRole('tab', { name: '总榜' })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: '积分' }).click()
     const rows = page.getByTestId('leaderboard-row')
     await expect(rows.first()).toBeVisible({ timeout: 10_000 })
 
@@ -113,7 +99,7 @@ test.describe('完整排行页(0104)', () => {
     // 详情页要比大厅摘要长(摘要只给 5 条),否则「点进去看全量」这条规则没兑现
     expect(await rows.count()).toBeGreaterThan(1)
 
-    await page.getByRole('button', { name: /返回大厅/ }).click()
+    await page.getByTestId('nav-lobby').click()
     await expect(page.getByTestId('leaderboard-more')).toBeVisible()
   })
 })
