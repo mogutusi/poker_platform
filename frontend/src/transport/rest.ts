@@ -10,7 +10,14 @@ import { nextRestSeq, requireSession } from './session'
 
 // ── 读接口(同样走信封,需已登录)──
 
-/** 大厅房间列表。只有汇总信息,逐座位的详情要 join_room 之后由 StateSnapshot 带来。 */
+/** 大厅桌面预览的一个已占座位(公开信息:谁坐哪、桌上多少筹码)。 */
+export interface LobbySeat {
+  seat_position: number
+  nickname: string
+  points: number
+}
+
+/** 大厅房间列表:汇总信息 + 已占座位(预览用)。底牌、行动等牌局细节要 join_room 之后由 StateSnapshot 带来。 */
 export interface RoomMeta {
   id: string
   small_blind: number
@@ -20,6 +27,7 @@ export interface RoomMeta {
   seated: number
   watching: number
   status: RoomStatus  // 取 codegen 产物,不手抄字面量:抄一份就是第二处会漂的协议事实源(0099)
+  seats: LobbySeat[]
 }
 
 export interface LeaderboardEntry {
@@ -28,7 +36,10 @@ export interface LeaderboardEntry {
   points: number
 }
 
-/** 一手已结束牌局的历史条目(service/app/rest/hands.py `HandRecordView`)。只有结果,永远没有底牌。 */
+/**
+ * 一手已结束牌局的历史条目(service/app/rest/hands.py `HandRecordView`)。
+ * 底牌只给你自己的,和摊牌时亮出来的;别人没亮的牌服务器不会发(见 service/docs/rest.md)。
+ */
 export interface HandRecord {
   /** 自增主键,兼作下一页游标(下一页传 before=本页最后一条的 id)。 */
   id: number
@@ -41,6 +52,11 @@ export interface HandRecord {
   final_pot: number
   /** 该手全部参与者,按昵称升序;net = final_points - initial_points。 */
   participants: HandParticipant[]
+  /** 公共牌,如 ["Ah","7c","2d"];翻牌前结束为空。较早(没记明细)的手也为空。 */
+  board: string[]
+  /** 庄位座位号(0 起);较早的手为 null。 */
+  button_position: number | null
+  big_blind: number | null
 }
 
 export interface HandParticipant {
@@ -48,6 +64,34 @@ export interface HandParticipant {
   initial_points: number
   final_points: number
   net: number
+  /** 座位号(0 起);较早的手为 null。 */
+  seat_position: number | null
+  /** 底牌,如 ["As","Kd"]:只有自己的,或摊牌亮过的才有,其余为 null。 */
+  hole_cards: string[] | null
+  /** 摊牌时亮了牌。 */
+  showed: boolean
+}
+
+export interface Rival {
+  nickname: string
+  amount: number
+}
+
+/** POST /leaderboard/stats 的一行(service/app/rest/leaderboard.py `StatsEntry`)。 */
+export interface StatsEntry {
+  rank: number
+  nickname: string
+  points: number
+  hands: number
+  net: number
+  won_hands: number
+  /** 0..1 */
+  win_rate: number
+  /** 0..1;只有老手牌(没记明细)时为 null。 */
+  vpip: number | null
+  bb_per_100: number | null
+  most_won_from: Rival | null
+  most_lost_to: Rival | null
 }
 
 export interface HandsQuery {
@@ -74,6 +118,67 @@ export async function fetchRooms(): Promise<RoomMeta[]> {
 
 export async function fetchLeaderboard(limit?: number): Promise<LeaderboardEntry[]> {
   return (await postSealed<{ entries: LeaderboardEntry[] }>('/leaderboard', defined({ limit }))).entries
+}
+
+/** 统计榜,按净赢降序。`since` = epoch 秒(只算这之后结束的手);不传 = 全部时间。 */
+export async function fetchLeaderboardStats(q: { since?: number; limit?: number } = {}): Promise<StatsEntry[]> {
+  return (await postSealed<{ entries: StatsEntry[] }>('/leaderboard/stats', defined({ since: q.since, limit: q.limit })))
+    .entries
+}
+
+/** 一个比率:做了几次 / 有几次机会;没机会时 pct 为 null。 */
+export interface Ratio {
+  made: number
+  chances: number
+  pct: number | null
+}
+
+/** POST /stats/me(service/app/rest/stats.py `PlayerStats`)。只有自己的数据。 */
+export interface PlayerStats {
+  nickname: string
+  /** 后端本地测试开关 DEV_STATS_ANY_USER 开着时为 true:可以切换看别的玩家(含 AI)。 */
+  can_view_others: boolean
+  summary: {
+    hands: number
+    net: number
+    bb_per_100: number | null
+    won_hands: number
+    win_rate: number | null
+    vpip: Ratio
+    pfr: Ratio
+    three_bet: Ratio
+    fold_to_three_bet: Ratio
+    cbet: Ratio
+    saw_flop: Ratio
+    wtsd: Ratio
+    wsd: Ratio
+    wwsf: Ratio
+    af: number | null
+    showdown_net: number
+    non_showdown_net: number
+  }
+  positions: { position: string; hands: number; net: number; bb_per_100: number | null; vpip: number | null }[]
+  /** 打过的起手牌格子,如 "AKs" / "AKo" / "AA"。没打过的不在里面。 */
+  combos: { combo: string; hands: number; net: number; won: number; vpip: number }[]
+  /** 累计盈亏曲线:总 / 摊牌 / 非摊牌。 */
+  graph: { n: number; net: number; sd: number; nsd: number }[]
+  /** 最近的手,新→旧(最多 300)。 */
+  recent: {
+    id: number
+    end_time: string
+    hole_cards: string[] | null
+    board: string[]
+    net: number
+    pot: number
+    combo: string | null
+    position: string | null
+    showed: boolean
+  }[]
+}
+
+/** 默认看自己;`user` 只在后端开了本地测试开关时有效,否则 403。 */
+export async function fetchMyStats(q: { since?: number; user?: string } = {}): Promise<PlayerStats> {
+  return postSealed<PlayerStats>('/stats/me', defined({ since: q.since, user: q.user }))
 }
 
 /**

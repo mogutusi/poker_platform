@@ -4,23 +4,22 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import type { ErrorCode } from "@/types/wire.gen"
 import {
-  fetchHands,
   fetchLeaderboard,
   fetchProfile,
   fetchRooms,
   logout,
-  type HandRecord,
   type LeaderboardEntry as ApiLeaderboardEntry,
   type RoomMeta,
 } from "@/transport/rest"
 import { getSession, endSession } from "@/transport/session"
 import { connectLobby, endLocalState } from "@/store/actions"
 import { setMe } from "@/store/room"
-import { useRoom } from "@/store/useRoom"
 import TableSeat from "@/components/TableSeat"
+import Avatar from "@/components/Avatar"
+import { seatAngle } from "@/components/tableSeats"
 import ConnectionBanner from "@/components/ConnectionBanner"
+import AppNav from "@/components/AppNav"
 
 interface LeaderboardEntry {
   name: string
@@ -42,40 +41,16 @@ interface Seat {
 
 /** 大厅每个模块只给「摘要 + 入口」,详情留给详情页,所以这几个数字都刻意取得很小。 */
 const LEADERBOARD_PREVIEW = 5
-const HANDS_PREVIEW = 3
+/** 房间列表刷新间隔。大厅还没有实时推送(lobby.md:LobbyBroadcast 未做),靠轮询让桌面预览跟上入座变化。 */
+const ROOMS_POLL_MS = 4000
 
 const ROOM_STATUS_TEXT: Record<RoomMeta["status"], string> = {
   pending_start: "等待开局",
   hand_started: "牌局进行中",
 }
 
-/**
- * 大厅里能收到的服务器拒绝只有私聊那几种(见 service/docs/messaging.md 的防护序)。
- * 后端只回机器码,文案一律由前端映射;没列的 code 原样显示,不装作没发生。
- */
-const DM_ERROR_TEXT: Partial<Record<ErrorCode, string>> = {
-  INVALID_MESSAGE: "消息为空,或对方昵称不存在。",
-  MESSAGE_TOO_LONG: "这条太长了,发不出去。",
-  RATE_LIMITED: "发得太快了,缓一缓再发。",
-  CANNOT_DM_SELF: "不能给自己发私信。",
-}
-
-/**
- * 时间只显示「月-日 时:分」,且手动拼而不用 toLocaleString:
- * 后者的输出随浏览器时区/语言变,SSR 与首屏 hydrate 对不上会报 mismatch。
- */
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, "0")
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 export default function LobbyPage() {
   const router = useRouter()
-  // 大厅只用得上 room store 里的 lastError:私聊被服务器拒(超长/限速)只回一条 error,
-  // 大厅没有别处显示它,不接就是静默失败。
-  const roomState = useRoom()
   const [playerName, setPlayerName] = useState<string>("")
   const [points, setPoints] = useState<number | null>(null)
   const [isJoining, setIsJoining] = useState(false)
@@ -84,7 +59,6 @@ export default function LobbyPage() {
   // 排行榜来自 POST /leaderboard(走加密信封,需已登录 —— 0094 收编)。它排的是结算后的全局积分,不含桌上筹码。
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [rooms, setRooms] = useState<RoomMeta[]>([])
-  const [hands, setHands] = useState<HandRecord[]>([])
   const [roomName, setRoomName] = useState("dev")
   const [loadError, setLoadError] = useState<string | null>(null)
   /**
@@ -98,17 +72,18 @@ export default function LobbyPage() {
   const room = rooms[activeIndex] ?? null
 
   /**
-   * 大厅只能知道「占了几个座」(RoomMeta.seated),知道不了「谁坐哪」——逐座位的详情要
-   * join_room 之后由 StateSnapshot 带来(见 docs/state.md)。所以这里渲染的是匿名占位,
-   * 不编造玩家名。
+   * 桌面预览:房间列表带着已占座位(谁坐哪、桌上多少筹码,都是公开信息),所以这里画的是真实的人。
+   * 还没有房间时画一张 9 座的空桌。
    */
   const seats = useMemo<Seat[]>(() => {
     const total = room?.max_seats ?? 9
-    const taken = room?.seated ?? 0
-    return Array.from({ length: total }, (_, i) => ({
-      number: i + 1,
-      player: i < taken ? { id: `seat-${i + 1}`, name: "已入座" } : undefined,
-    }))
+    return Array.from({ length: total }, (_, i) => {
+      const taken = room?.seats?.find((s) => s.seat_position === i)
+      return {
+        number: i + 1,
+        player: taken ? { id: taken.nickname, name: taken.nickname, points: taken.points } : undefined,
+      }
+    })
   }, [room])
 
   const maxPoints = useMemo(
@@ -126,7 +101,7 @@ export default function LobbyPage() {
 
     let cancelled = false
 
-    // 大厅也要挂着 ws:私聊跨房间、不需要在房里,而离线期的补收只在(重)连时发生一次。
+    // 大厅也挂着 ws:账号在别处登录 / 会话失效时大厅也能及时退回登录页。
     // 不在离开大厅时断开——去牌桌那一跳要接着用这条连接(见 transport/ws.ts 的复用),
     // 真正的断开只发生在离开牌桌和登出。
     connectLobby((reason) => router.replace(`/?reason=${reason}`))
@@ -142,18 +117,22 @@ export default function LobbyPage() {
       .catch(() => {
         if (!cancelled) setLoadError("读取大厅数据失败,请确认后端已启动。")
       })
+    // 之后只轮询房间列表,让桌面预览上的人与筹码跟着变。失败就等下一轮,不覆盖上面的报错。
+    const poll = setInterval(() => {
+      fetchRooms()
+        .then((roomList) => {
+          if (!cancelled) setRooms(roomList)
+        })
+        .catch(() => undefined)
+    }, ROOMS_POLL_MS)
 
     fetchProfile()
       .then((profile) => {
         if (cancelled) return
         setPlayerName(profile.nickname)
         setPoints(profile.points)
-        // 私聊要判「这条是不是我自己发的」,牌桌要判「哪个座位是我的」,都读这一个 me。
+        // 牌桌要判「哪个座位是我的、哪句聊天是我说的」,都读这一个 me。
         setMe(profile.nickname)
-        // 手牌历史按昵称过滤,所以必须等昵称回来才能查,不能和上面并发。
-        return fetchHands({ user: profile.nickname, limit: HANDS_PREVIEW }).then((list) => {
-          if (!cancelled) setHands(list)
-        })
       })
       .catch(() => {
         /* 摘要缺失比整页报错好:这里静默,卡片各自显示占位文案。 */
@@ -161,6 +140,7 @@ export default function LobbyPage() {
 
     return () => {
       cancelled = true
+      clearInterval(poll)
     }
   }, [router])
 
@@ -169,11 +149,13 @@ export default function LobbyPage() {
     router.push(`/game?room=${encodeURIComponent(roomId)}`)
   }
 
+  /** 点空座 = 进房并直接坐到这个座位(牌桌页读 ?seat=);点有人的座位就只是进房观战。 */
   const handleSeatClick = (seatNumber: number) => {
     if (!room) return
     setIsJoining(true)
     setSelectedSeat(seatNumber)
-    handleEnterRoom(room.id)
+    const taken = room.seats?.some((s) => s.seat_position === seatNumber - 1)
+    router.push(`/game?room=${encodeURIComponent(room.id)}${taken ? "" : `&seat=${seatNumber}`}`)
   }
 
   const handleLogout = () => {
@@ -223,6 +205,8 @@ export default function LobbyPage() {
         </div>
       </div>
 
+      <AppNav className="relative z-20 mx-auto mb-5 max-w-6xl" />
+
       <div className="relative z-10 mx-auto flex max-w-6xl flex-col gap-6 md:flex-row">
         {/* Left column: user info + table */}
         <div className="flex flex-1 flex-col gap-4">
@@ -239,9 +223,11 @@ export default function LobbyPage() {
               className="flex flex-1 items-center gap-4 rounded-lg p-1 text-left transition-colors hover:bg-primary/5"
             >
               <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full border-2 border-primary/70 bg-accent/40 glow-pulse">
-                <div className="flex h-full w-full items-center justify-center text-2xl">
-                  {playerName.slice(0, 1).toUpperCase()}
-                </div>
+                {playerName ? (
+                  <Avatar name={playerName} size={56} className="h-full w-full" />
+                ) : (
+                  <div className="h-full w-full" />
+                )}
               </div>
               <div className="flex flex-1 flex-col">
                 <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
@@ -273,13 +259,6 @@ export default function LobbyPage() {
             </div>
           )}
 
-          {/* 大厅唯一会来的服务器拒绝就是私聊那几种(超长/限速)。文案由前端按 code 映射,
-              后端只回机器码;还没映射的直接把 code 显出来,总比什么都不显示强。 */}
-          {roomState.lastError && (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              私聊被拒:{DM_ERROR_TEXT[roomState.lastError.code] ?? roomState.lastError.code}
-            </div>
-          )}
 
           {/* Poker table area */}
           <Card className="relative flex flex-1 flex-col justify-between gap-6 overflow-hidden bg-card/95 border-2 border-primary/30 p-5 shadow-2xl">
@@ -420,35 +399,15 @@ export default function LobbyPage() {
 
                   {/* Seat positions arranged evenly around oval table */}
                   <div className="absolute inset-0 flex items-center justify-center">
-                    {seats.map((seat, index) => {
-                      // Custom angle adjustments for even visual spacing around oval
-                      // Balancing spacing: reduce gaps between 9-2 and 5-7, maintain spacing for 2-4 and 7-8
-                      // Seat mapping: 1=top, 2-4=right side, 5=bottom, 6-8=left side, 9=top-left
-                      const angleAdjustments = [
-                        0,   // Seat 1
-                        -7,  // Seat 2
-                        4,   // Seat 3
-                        14,  // Seat 4
-                        7,   // Seat 5
-                        -3,  // Seat 6
-                        -12, // Seat 7
-                        4,   // Seat 8
-                        8,   // Seat 9
-                      ]
-
-                      const baseAngle = index * 40 - 90 // Base angle starting from top
-                      const adjustment = angleAdjustments[index] || 0
-                      const angleDeg = baseAngle + adjustment
-                      const angle = (angleDeg * Math.PI) / 180 // Convert to radians
-
-                      // Oval table dimensions: width 100%, height 65%
-                      // Position seats at consistent distance from table edge
+                    {seats.map((seat) => {
+                      // 方向取自牌桌页的座位点位(components/tableSeats.ts):同一个人在大厅和牌桌上坐在
+                      // 桌子的同一侧。再把这个方向投到椭圆上。
+                      const theta = seatAngle(seat.number)
                       const normalizedRadius = 0.82 // 82% of table radius
-
-                      // Calculate position on ellipse
-                      // Oval: x = a*cos(θ), y = b*sin(θ) where a=50% (half width), b=32.5% (half height of 65%)
                       const radiusX = 50 * normalizedRadius // Horizontal radius: 41%
                       const radiusY = 32.5 * normalizedRadius // Vertical radius: ~26.65%
+                      // 椭圆上方向为 theta 的点:参数 t 满足 tan t = (rx/ry)·tan theta
+                      const angle = Math.atan2(radiusX * Math.sin(theta), radiusY * Math.cos(theta))
 
                       // Calculate position on ellipse - seat center position
                       const x = 50 + radiusX * Math.cos(angle) // Center at 50%
@@ -520,7 +479,7 @@ export default function LobbyPage() {
           </Card>
         </div>
 
-        {/* Right column: leaderboard + recent hands(都是摘要,详情在各自的详情页) */}
+        {/* Right column: leaderboard 摘要(详情在「排行榜」页签;手牌历史在「数据」页签) */}
         <div className="mt-2 flex w-full flex-col gap-4 md:mt-0 md:w-80 lg:w-96">
           <Card className="flex flex-col bg-card/95 border-2 border-primary/30 p-4 shadow-xl">
             <div className="mb-3 flex items-center justify-between">
@@ -596,64 +555,9 @@ export default function LobbyPage() {
             </Button>
           </Card>
 
-          <Card className="flex flex-col bg-card/95 border-2 border-primary/30 p-4 shadow-xl">
-            <div className="mb-3">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">
-                Recent Hands
-              </p>
-              <p className="text-lg font-semibold text-primary">我的最近手牌</p>
-            </div>
-
-            <div className="space-y-2">
-              {hands.length === 0 && (
-                <p className="text-xs text-muted-foreground">还没有打完的手牌。</p>
-              )}
-              {hands.map((h) => {
-                // 只显示「自己」那一行的盈亏:participants 里可能有好几个人,别人的与我无关。
-                const mine = h.participants.find((p) => p.nickname === playerName)
-                const net = mine?.net ?? 0
-                return (
-                  <div
-                    key={h.id}
-                    className="flex items-center justify-between rounded-lg bg-secondary/60 px-3 py-2 text-xs shadow-inner"
-                  >
-                    <div>
-                      <p className="text-card-foreground">{formatTime(h.end_time)}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        底池 {h.final_pot.toLocaleString()}
-                      </p>
-                    </div>
-                    <span
-                      className={
-                        net > 0
-                          ? "text-sm font-semibold text-primary"
-                          : net < 0
-                            ? "text-sm font-semibold text-destructive"
-                            : "text-sm font-semibold text-muted-foreground"
-                      }
-                    >
-                      {net > 0 ? "+" : ""}
-                      {net.toLocaleString()}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3 w-full border-primary/30 bg-card/60 text-xs hover:bg-primary/10"
-              data-testid="history-entry"
-              onClick={() => router.push("/history")}
-            >
-              查看全部手牌 ›
-            </Button>
-          </Card>
         </div>
       </div>
 
-      {/* 私聊浮标。大厅和牌桌挂同一个组件、同一个位置(右下角),换页不用重新找入口。 */}
       <ConnectionBanner />
     </div>
   )

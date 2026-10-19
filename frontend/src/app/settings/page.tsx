@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import AppNav from "@/components/AppNav"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { changeNickname, changePassword, fetchProfile, RestError, type Profile } from "@/transport/rest"
@@ -166,20 +167,12 @@ export default function SettingsPage() {
       </div>
 
       <div className="relative z-10 mx-auto flex max-w-3xl flex-col gap-5">
+        <AppNav />
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">Settings</p>
             <p className="text-2xl font-semibold text-primary">账号设置</p>
           </div>
-          {/* 本页只有这一个出口 */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-primary/40 bg-card/60 text-xs uppercase tracking-wide hover:bg-primary/10"
-            onClick={() => router.push("/lobby")}
-          >
-            返回大厅
-          </Button>
         </div>
 
         {loadError && (
