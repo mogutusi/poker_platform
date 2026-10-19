@@ -8,7 +8,7 @@
 // 用的是 dev 种子用户与 dev 共享密钥(见 service/app/poker.env.example),仅限本地。
 // 前置:`npm run smoke` 会先把 dist-smoke/crypto.js 打出来;单独跑别的脚本前需先跑过一次。
 
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const FRONTEND = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -18,7 +18,10 @@ const K_USER = '00112233445566778899aabbccddeeff'
 const PASSWORD = 'devpass123'
 
 const { sm4CbcEncrypt, sm4CbcDecrypt, hexToBytes, bytesToHex, utf8ToBytes, bytesToUtf8,
-        deriveWsKeys, deriveRestKeys, sealFrame, openFrame } = await import(`${FRONTEND}/dist-smoke/crypto.js`)
+        deriveWsKeys, deriveRestKeys, sealFrame, openFrame } = await import(
+  // file:// URL, not a bare path: on Windows `C:\...` is not a valid ESM specifier and import() throws.
+  pathToFileURL(resolve(FRONTEND, 'dist-smoke', 'crypto.js')).href
+)
 
 export { hexToBytes, bytesToHex, utf8ToBytes, bytesToUtf8 }
 
@@ -67,6 +70,7 @@ export class Client {
         this.seenSeq = opened.seq
         const msg = JSON.parse(bytesToUtf8(opened.plaintext))
         this.events.push(msg)
+        if (this.onEvent) this.onEvent(msg) // 长时间运行的客户端(scripts/bots.mjs)按事件驱动,不靠 wait()
         for (const w of this.waiters.slice()) {
           if (w.pred(msg)) { this.waiters.splice(this.waiters.indexOf(w), 1); w.resolve(msg) }
         }
