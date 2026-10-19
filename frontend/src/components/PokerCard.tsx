@@ -30,9 +30,11 @@ interface PokerCardProps {
   /** 牌面尺寸档位。 */
   size?: 'sm' | 'md' | 'lg'
   className?: string
+  /** Inline style, e.g. the --dx offset the flop slide animation starts from. */
+  style?: React.CSSProperties
 }
 
-export default function PokerCard({ card, isHidden = false, size = 'md', className }: PokerCardProps) {
+export default function PokerCard({ card, isHidden = false, size = 'md', className, style }: PokerCardProps) {
   const sizeClass = sizeClasses[size]
   const src = isHidden ? `${CARDS_BASE}/back.png` : `${CARDS_BASE}/${getCardFilename(card)}`
 
@@ -43,6 +45,7 @@ export default function PokerCard({ card, isHidden = false, size = 'md', classNa
         sizeClass,
         className
       )}
+      style={style}
     >
       <img
         src={src}

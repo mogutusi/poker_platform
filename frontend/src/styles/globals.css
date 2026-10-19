@@ -242,3 +242,76 @@
   animation: border-shine 2s ease-in-out infinite;
 }
 
+
+/* Browser autofill (picking a saved username from the history dropdown) paints its own light
+   background and dark text over the login inputs. Keep the field identical to manual entry:
+   white text, and delay the UA background change effectively forever. */
+.input-shine:-webkit-autofill,
+.input-shine:-webkit-autofill:hover,
+.input-shine:-webkit-autofill:focus,
+.input-shine:-webkit-autofill:active {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  transition: background-color 99999s ease-in-out 0s, border-color 0.15s;
+}
+.input-shine:autofill {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+}
+
+/* ── Table page chrome (top bar, action dock, table chat, hand result) ──
+   Named colours for those pieces, all mapped onto the casino palette above so they read as part
+   of the same room: brown panels, gold accents, plus the three action colours. */
+@theme inline {
+  --color-room: var(--background);
+  --color-room-deep: oklch(0.09 0.02 30);
+  --color-panel: var(--card);
+  --color-panel-raised: var(--secondary);
+  --color-line: var(--border);
+  --color-gold: var(--primary);
+  --color-ink: var(--foreground);
+  --color-muted-ink: var(--muted-foreground);
+  --color-fold: oklch(0.55 0.2 25);
+  --color-call: oklch(0.6 0.15 150);
+  --color-raise: oklch(0.72 0.16 65);
+  --font-condensed: var(--font-barlow-condensed), var(--font-sans), sans-serif;
+}
+
+.app-ui :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.panel {
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -24px rgba(0, 0, 0, 0.8);
+}
+
+/* Condensed tabular figures for stacks, bet sizes, blinds */
+.num {
+  font-family: var(--font-barlow-condensed), sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes deal-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+.deal-in {
+  animation: deal-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* Flop: the three cards land stacked on the first slot, then slide right into their own slots. */
+@keyframes flop-slide {
+  0% { opacity: 0; transform: translate(var(--dx, 0px), -14px) scale(0.94); }
+  30% { opacity: 1; transform: translate(var(--dx, 0px), 0) scale(1); }
+  100% { opacity: 1; transform: none; }
+}
+.flop-slide {
+  animation: flop-slide 0.75s cubic-bezier(0.25, 0.8, 0.25, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deal-in, .flop-slide { animation: none; }
+}

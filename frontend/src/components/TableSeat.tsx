@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils"
 import Image from "next/image"
 import chipsImg from "@/pics/casino-chips.png"
+import Avatar from "@/components/Avatar"
 
 interface SeatPlayer {
   id: string
@@ -76,7 +77,7 @@ export default function TableSeat({
                   className="h-full w-full rounded-full object-cover"
                 />
               ) : (
-                player.name.slice(0, 1).toUpperCase()
+                <Avatar name={player.name} size={64} className="h-full w-full rounded-full" />
               )}
             </div>
             {/*{isButton && (*/}

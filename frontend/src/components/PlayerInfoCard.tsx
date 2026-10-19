@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils"
 import Image from "next/image"
 import chipsImg from "@/pics/casino-chips.png"
+import Avatar from "@/components/Avatar"
 
 interface PlayerInfoCardProps {
   player: {
@@ -14,6 +15,10 @@ interface PlayerInfoCardProps {
   }
   isButton?: boolean
   isCurrentPlayer?: boolean
+  /** Folded this hand: the whole bar turns grey. */
+  folded?: boolean
+  /** Position this hand (BTN, SB, BB, UTG, …), shown as a badge on the corner. */
+  position?: string
   className?: string
 }
 
@@ -21,6 +26,8 @@ export default function PlayerInfoCard({
   player,
   isButton = false,
   isCurrentPlayer = false,
+  folded = false,
+  position,
   className,
 }: PlayerInfoCardProps) {
   return (
@@ -31,18 +38,30 @@ export default function PlayerInfoCard({
         isCurrentPlayer && "border-green-500",
         !isCurrentPlayer && isButton && "border-primary/70",
         !isCurrentPlayer && !isButton && "border-primary/50",
+        folded && "border-slate-500/60 grayscale opacity-60 ring-0",
         className
       )}
       style={{
-        boxShadow: isCurrentPlayer
+        boxShadow: isCurrentPlayer && !folded
           ? "0 0 20px rgba(34, 197, 94, 0.6), 0 4px 12px rgba(0, 0, 0, 0.8)"
           : "0 4px 12px rgba(0, 0, 0, 0.6)",
       }}
     >
-      {/* Ready indicator */}
-      {player.isReady && (
-        <div className="absolute -top-2 -right-2 bg-green-500 rounded-full w-6 h-6 flex items-center justify-center border-2 border-white shadow-lg z-10">
-          <span className="text-white text-xs font-bold">✓</span>
+      {/* Position this hand. The button gets the white dealer-disc look; the blinds are blue. */}
+      {position && (
+        <div
+          data-position={position}
+          className={cn(
+            "absolute -top-2.5 -left-2.5 z-10 flex h-6 min-w-6 items-center justify-center rounded-full border px-1.5 text-xs font-extrabold leading-none shadow-lg",
+            position.startsWith("BTN")
+              ? "border-amber-300 bg-gradient-to-b from-white to-slate-200 text-slate-900"
+              : position === "SB" || position === "BB"
+                ? "border-sky-300/70 bg-sky-700 text-white"
+                : "border-white/25 bg-slate-800 text-slate-100",
+          )}
+          style={{ fontFamily: "var(--font-barlow-condensed), sans-serif" }}
+        >
+          {position}
         </div>
       )}
 
@@ -63,9 +82,7 @@ export default function PlayerInfoCard({
               className="h-full w-full object-cover"
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center text-sm font-bold text-primary-foreground">
-              {player.name.slice(0, 1).toUpperCase()}
-            </div>
+            <Avatar name={player.name} size={40} className="h-full w-full" />
           )}
         </div>
 
