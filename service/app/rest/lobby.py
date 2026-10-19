@@ -20,6 +20,14 @@ from app.core.rules import blinds
 from app.rest.secure import SecureRequest, SecureResponse, open_request, seal_response
 
 
+class LobbySeat(BaseModel):
+    # 大厅桌面预览用的一个已占座位:谁坐哪、桌上多少筹码。都是桌上人人可见的公开信息(同 StateSnapshot.seats),
+    # 不含底牌/状态等游戏细节。筹码口径照抄 reduce `_state_snapshot`:在手取 Player.points,不在手取 Seat.points。
+    seat_position: int  # 0 起座位号
+    nickname: str  # 占座者
+    points: int  # 桌上筹码
+
+
 class RoomMeta(BaseModel):
     # 大厅房间条目:静态配置 + 实时头数/状态(lobby.md)。REST DTO ≠ core Room:完整游戏态(deck/hand/各人筹码)绝不上大厅。
     id: str  # 房间键(world.rooms 的 key);v1 无独立 name 字段 → 键即人读名
@@ -30,11 +38,18 @@ class RoomMeta(BaseModel):
     seated: int  # 在座人数(占用座位数,含 OFFLINE 保座)
     watching: int  # 观战人数(users_in_room 中 WATCHING 状态数)
     status: RoomStatus  # PENDING_START / HAND_STARTED
+    seats: list[LobbySeat] = []  # 已占座位(按座位号升序),供大厅桌面预览把人画到对应座位上
 
 
 def _room_meta(room_id: str, room: Room) -> RoomMeta:
     seated = sum(1 for s in room.seats if s is not None)
     watching = sum(1 for st in room.users_in_room.values() if st is UserStatus.WATCHING)
+    in_hand = {p.nickname: p.points for p in room.hand.players} if room.hand is not None else {}
+    seats = [
+        LobbySeat(seat_position=i, nickname=s.nickname, points=in_hand.get(s.nickname, s.points))
+        for i, s in enumerate(room.seats)
+        if s is not None
+    ]
     return RoomMeta(
         id=room_id,
         small_blind=room.small_blind,
@@ -44,6 +59,7 @@ def _room_meta(room_id: str, room: Room) -> RoomMeta:
         seated=seated,
         watching=watching,
         status=room.status,
+        seats=seats,
     )
 
 

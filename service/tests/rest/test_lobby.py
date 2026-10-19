@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from app.core.enums import RoomStatus, UserStatus
 from app.core.rules import blinds
 from app.auth.session import SessionStore
-from app.rest.lobby import RoomMeta, list_rooms, make_lobby_router
+from app.rest.lobby import LobbySeat, RoomMeta, list_rooms, make_lobby_router
 from tests.rest._sealed import T0, TTL, call, seal_req
 from app.shell.lifespan import create_app
 from tests.builders import hand_world, make_world, player, room_with, seat
@@ -52,7 +52,18 @@ def test_list_rooms_projection_fields():
         seated=2,
         watching=1,
         status=RoomStatus.PENDING_START,
+        seats=[
+            LobbySeat(seat_position=0, nickname="alice", points=100),
+            LobbySeat(seat_position=2, nickname="bob", points=100),
+        ],
     )
+
+
+def test_seats_use_in_hand_stack_during_a_hand():
+    # 手牌进行中:座位筹码取 Player.points(本手剩余),与 StateSnapshot 同一口径;否则大厅预览整手牌不动。
+    world = hand_world([player("a", 37, seat=0), player("b", 50, seat=1)])
+    (meta,) = list_rooms(world)
+    assert [(s.seat_position, s.nickname, s.points) for s in meta.seats] == [(0, "a", 37), (1, "b", 50)]
 
 
 def test_list_rooms_sorted_by_id():

@@ -95,6 +95,7 @@ POST /lobby/rooms 信封内 {} → {rooms: [RoomMeta]}   # app/rest/lobby.py:lis
 |---|---|---|
 | 静态配置 | `id`、`small_blind`、`big_blind`、`buy_in`、`max_seats` | v1 没有独立的 `name` 字段,`id` 就是 `world.rooms` 的键,同时就是人读的房名;`big_blind` 由 2×小盲派生 |
 | 实时 | `seated`、`watching`、`status` | `seated` = 占用座位数,即 `len([s for s in room.seats if s])`,包含 OFFLINE 保座;`watching` = `users_in_room` 中处于 `WATCHING` 状态的人数。在座与在线是两个正交维度 |
+| 座位 | `seats: [{seat_position, nickname, points}]` | 已占座位,按座位号升序,供大厅桌面预览把人画到对应座位上。只含桌上人人可见的公开信息;`points` 口径同 `StateSnapshot.seats`(在手取本手剩余,不在手取座位筹码) |
 
 其它约定:
 
