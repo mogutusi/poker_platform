@@ -6,7 +6,6 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import PlayerInfoCard from "@/components/PlayerInfoCard"
 import PokerCard from "@/components/PokerCard"
-import DmDrawer from "@/components/DmDrawer"
 import ConnectionBanner from "@/components/ConnectionBanner"
 import FreeEntryVote from "@/components/FreeEntryVote"
 import RoomConfig from "@/components/RoomConfig"
@@ -648,7 +647,6 @@ function GameView() {
       */}
       <ConnectionBanner />
       <FreeEntryVote />
-      <DmDrawer />
     </div>
   )
 }

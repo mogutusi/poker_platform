@@ -521,3 +521,38 @@ describe('连接状态', () => {
     expect(getRoomState().connection).toBe('open')
   })
 })
+
+describe('lastActions(座位旁的动作气泡)', () => {
+  it('按动作前的 last_bet 区分 跟注 / 加注,换街清空', () => {
+    resetRoom()
+    applyServerMessage({
+      type: 'hand_started', hand_seq: 1, button_position: 0, small_blind: 1, big_blind: 2,
+      players: [
+        { seat_position: 0, nickname: 'a', points: 99, bet_amount: 1, status: 'active' },
+        { seat_position: 1, nickname: 'b', points: 98, bet_amount: 2, status: 'active' },
+      ],
+      acting_position: 0, pot: 3, last_bet: 2, min_raise_to: 4,
+    })
+    applyServerMessage({
+      type: 'player_acted', seat_position: 0, nickname: 'a', action: 'bet', bet_amount: 2, points: 98,
+      status: 'active', last_bet: 2, min_raise_to: 4, pot: 4, acting_position: 1,
+    })
+    expect(getRoomState().lastActions.a).toEqual({ kind: 'call', amount: 2, level: 1 })
+    applyServerMessage({
+      type: 'player_acted', seat_position: 1, nickname: 'b', action: 'bet', bet_amount: 8, points: 92,
+      status: 'active', last_bet: 8, min_raise_to: 14, pot: 10, acting_position: 0,
+    })
+    expect(getRoomState().lastActions.b).toEqual({ kind: 'raise', amount: 8, level: 2 })
+    applyServerMessage({
+      type: 'player_acted', seat_position: 0, nickname: 'a', action: 'bet', bet_amount: 24, points: 76,
+      status: 'active', last_bet: 24, min_raise_to: 40, pot: 32, acting_position: 1,
+    })
+    expect(getRoomState().lastActions.a).toEqual({ kind: 'raise', amount: 24, level: 3 })
+    applyServerMessage({
+      type: 'hand_status_changed', status: 'flop', board: [], last_bet: 0, min_raise_to: 2,
+      players: getRoomState().players,
+    })
+    expect(getRoomState().lastActions).toEqual({})
+    expect(getRoomState().betLevel).toBe(0)
+  })
+})

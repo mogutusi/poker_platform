@@ -19,7 +19,16 @@ import type {
   ShowdownReveal,
 } from '@/types/wire.gen'
 import type { ConnectionState } from '@/transport/ws'
-import { applyDmMessage } from './dm'
+
+export interface LastAction {
+  kind: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin'
+  amount: number
+  /**
+   * 这一下之后本街是第几注:1 = 第一注(preflop 的大盲 / 翻后的 bet),2 = 加注,3 = 3-bet,4 = 4-bet…
+   * 只有主动加大的动作(bet / raise / 加大的 all-in)才有意义;跟注、过牌、弃牌带的是当时的值。纯展示。
+   */
+  level: number
+}
 
 export interface RoomState {
   /** 已进入的房间;null 表示还没 join_room 成功。 */
@@ -52,6 +61,13 @@ export interface RoomState {
   yourHoleCards: [Card, Card] | null
 
   reveals: ShowdownReveal[]
+  /**
+   * 本街每个人最近一次的动作,只为在座位旁边显示「Check / Call 4 / Raise to 12」这类气泡。
+   * 由 player_acted 推出的**展示文案**,不参与任何规则判断;换街、新一手、快照时清空。
+   */
+  lastActions: Record<string, LastAction>
+  /** 本街已经到了第几注(见 LastAction.level)。新一手 = 1(大盲算第一注),换街 = 0。纯展示。 */
+  betLevel: number
   lastResult: { winnings: NickAmount[]; refunds: NickAmount[] } | null
 
   chat: ChatMessage[]
@@ -85,6 +101,8 @@ const EMPTY: RoomState = {
   minRaiseTo: 0,
   yourHoleCards: null,
   reveals: [],
+  lastActions: {},
+  betLevel: 0,
   lastResult: null,
   chat: [],
   freeEntryVote: null,
@@ -204,6 +222,9 @@ export function applyServerMessage(msg: ServerMessage): void {
             }
           : null,
         reveals: [],
+        lastActions: {},
+        // 快照里没有本街的加注历史:有注就当作第一注,只影响气泡的颜色深浅
+        betLevel: msg.last_bet > 0 ? 1 : 0,
         lastResult: null,
       })
       break
@@ -225,6 +246,8 @@ export function applyServerMessage(msg: ServerMessage): void {
         minRaiseTo: msg.min_raise_to,
         yourHoleCards: null,
         reveals: [],
+        lastActions: {},
+        betLevel: 1,
         lastResult: null,
         lastVoteResult: null, // 新一手开始,上一次投票的结果不再相关
       })
@@ -240,6 +263,9 @@ export function applyServerMessage(msg: ServerMessage): void {
       // lastBet 就是 0,Call 按钮发出去的 bet(0) 全被 ILLEGAL_ACTION 拒(0087 在浏览器里抓到)。
       // 推规则本来就是前端不该做的事(见 docs/architecture.md 不变量 1)。
       set({
+        // 换街:上一街的动作气泡收起(同一条 status 重发时不清,免得 preflop 的盲注后气泡闪掉)
+        lastActions: msg.status === state.handStatus ? state.lastActions : {},
+        betLevel: msg.status === state.handStatus ? state.betLevel : msg.status === 'pre_flop' ? 1 : 0,
         handStatus: msg.status,
         board: msg.board,
         lastBet: msg.last_bet,
@@ -248,8 +274,25 @@ export function applyServerMessage(msg: ServerMessage): void {
       })
       break
 
-    case 'player_acted':
+    case 'player_acted': {
+      // 气泡文案:按「这一下之前」的 last_bet 区分跟注 / 下注 / 加注。纯展示,合法性早已由服务器裁定。
+      const kind: LastAction['kind'] =
+        msg.action === 'fold'
+          ? 'fold'
+          : msg.action === 'check'
+            ? 'check'
+            : msg.status === 'allin'
+              ? 'allin'
+              : msg.bet_amount <= state.lastBet
+                ? 'call'
+                : state.lastBet === 0
+                  ? 'bet'
+                  : 'raise'
+      // 把注加大了(含加大的 all-in)就升一级:bet → raise → 3-bet → 4-bet …
+      const level = msg.action !== 'fold' && msg.action !== 'check' && msg.bet_amount > state.lastBet ? state.betLevel + 1 : state.betLevel
       set({
+        lastActions: { ...state.lastActions, [msg.nickname]: { kind, amount: msg.bet_amount, level } },
+        betLevel: level,
         players: state.players.map((p) =>
           p.seat_position === msg.seat_position
             ? { ...p, bet_amount: msg.bet_amount, points: msg.points, status: msg.status }
@@ -261,6 +304,7 @@ export function applyServerMessage(msg: ServerMessage): void {
         actingPosition: msg.acting_position,
       })
       break
+    }
 
     case 'hand_show_down':
       set({ handStatus: 'showdown', board: msg.board, reveals: msg.reveals, actingPosition: null })
@@ -357,13 +401,6 @@ export function applyServerMessage(msg: ServerMessage): void {
 
     case 'error':
       set({ lastError: { code: msg.code, detail: msg.detail ?? null } })
-      break
-
-    case 'dm_delivered':
-    case 'dm_read':
-    case 'dm_undelivered':
-      // 私聊与牌桌无关(跨房间存在、有未读),状态在 dm.ts;这里只转发,不碰它的内部。
-      applyDmMessage(msg)
       break
 
     default:

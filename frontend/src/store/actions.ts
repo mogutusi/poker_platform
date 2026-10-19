@@ -5,7 +5,6 @@ import { fetchProfile } from '@/transport/rest'
 import { decideJoinMessage } from './joinFlow'
 import { connect, disconnect, send, type AuthLostReason, type ConnectionState } from '@/transport/ws'
 import { applyServerMessage, getRoomState, resetRoom, setConnection, setMe } from './room'
-import { resetDm } from './dm'
 
 /**
  * 连上 ws 并进入房间。
@@ -74,7 +73,6 @@ export async function enterRoom(
     },
     onAuthLost: (reason) => {
       resetRoom()
-      resetDm()
       onAuthLost(reason)
     },
   })
@@ -83,9 +81,8 @@ export async function enterRoom(
 /**
  * 只连 ws,不进任何房间。大厅用。
  *
- * 大厅**必须**有这条连接,否则私聊在大厅是死的:私聊走 shell 路由、跨房间存在,
- * 收发双方都不必在房里(见 service/docs/messaging.md);而离线期消息的「登录补收」
- * 只在(重)连时发生一次,没有连接就一条也补不回来。
+ * 私信界面已移除(只保留房聊),大厅这条连接现在的用处是:账号在别处登录 / 会话失效时
+ * 大厅也能及时被踢回登录页(onAuthLost),以及去牌桌时复用同一条连接(见 transport/ws.ts)。
  *
  * 「我是谁」不在这里取:大厅本来就要拉一次 /user/me 填头像卡,由它顺手 setMe 即可,
  * 没必要为同一个昵称多发一个信封请求。
@@ -93,13 +90,10 @@ export async function enterRoom(
 export function connectLobby(onAuthLost: (reason: AuthLostReason) => void): void {
   connect({
     onMessage: (msg) => {
-      // 大厅只认私聊和服务器的拒绝。房间事件此刻要么无意义,要么是上一次会话的残留
+      // 大厅只认服务器的拒绝(私信消息即使到达也忽略)。房间事件此刻要么无意义,要么是上一次会话的残留
       // (在座时断线的用户重连,服务器会先私发**旧房间**的快照),并进来会让已经离桌的
       // 大厅凭空多出一个房间;真要回那个房间,enterRoom 里的 recover 路径会处理。
       switch (msg.type) {
-        case 'dm_delivered':
-        case 'dm_read':
-        case 'dm_undelivered':
         case 'error':
           applyServerMessage(msg)
           break
@@ -110,7 +104,6 @@ export function connectLobby(onAuthLost: (reason: AuthLostReason) => void): void
     onStateChange: setConnection,
     onAuthLost: (reason) => {
       resetRoom()
-      resetDm()
       onAuthLost(reason)
     },
   })
@@ -126,18 +119,14 @@ export function closeRoom(): void {
 }
 
 /**
- * 清掉本地会话态:断连接 + 清房间 + 清私聊。
+ * 清掉本地会话态:断连接 + 清房间。
  *
  * **这不是「登出」**,只是登出的本地那一半:服务器上的会话要靠 `rest.logout()` 吊销,
  * 光清本地的话那把 token 一直有效到 SESSION_TTL 到期(0097 / BUG-8)。调用方两件都要做。
- *
- * 私聊只随**会话**结束清,不随离开房间清(closeRoom 就故意不碰它),
- * 否则换个账号登进来会看到上一个人的私信。
  */
 export function endLocalState(): void {
   disconnect()
   resetRoom()
-  resetDm()
 }
 
 /** 入座。wait_for_big_blind=true 是「等大盲免费」,false 是默认的「付盲即玩」。 */
